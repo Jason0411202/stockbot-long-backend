@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"main/kernals"
 	"main/logs"
 	"main/sqls"
 
@@ -20,7 +21,7 @@ func Init() {
 		log.Fatal("無法載入 .env 檔案")
 	}
 
-	db, err = sqls.InitDatabase(log) // 初始化資料庫
+	err = sqls.InitDatabase(log) // 初始化資料庫
 	if err != nil {
 		log.Fatal("初始化資料庫錯誤:", err)
 	}
@@ -28,5 +29,5 @@ func Init() {
 
 func main() {
 	Init()
-
+	kernals.DailyCheck(log)
 }
