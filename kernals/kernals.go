@@ -247,7 +247,7 @@ func DailyCheck(log *logrus.Logger) {
 
 	for {
 		now := time.Now().In(taiwanTimeZone)
-		if now.Hour() == 1 && now.Minute() == 1 {
+		if now.Hour() == 14 && now.Minute() == 0 {
 			log.Info("現在時間: ", now)
 			err = sqls.UpdataDatebase(log) // 先更新資料庫
 			if err != nil {
@@ -257,8 +257,8 @@ func DailyCheck(log *logrus.Logger) {
 				SellStock(log)
 			}
 		}
-		BuyStock(log)
-		SellStock(log)
+		//BuyStock(log)
+		//SellStock(log)
 
 		time.Sleep(60 * time.Second)
 	}

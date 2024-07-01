@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"main/echoframework"
 	"main/kernals"
 	"main/logs"
 	"main/sqls"
@@ -25,6 +26,8 @@ func Init() {
 	if err != nil {
 		log.Fatal("初始化資料庫錯誤:", err)
 	}
+
+	go echoframework.EchoInit(log)
 }
 
 func main() {

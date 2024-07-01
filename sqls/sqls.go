@@ -732,3 +732,54 @@ func UpdateNewestUnrealizedGainsLossesRecord(log *logrus.Logger, stockID string,
 
 	return nil
 }
+
+func GetAllUnrealizedGainsLosses(log *logrus.Logger) ([]map[string]interface{}, error) {
+	db, err := ConnectToMariadb(log) // 連接至 Mariadb Server
+	if err != nil {
+		log.Error("ConnectToMariadb 錯誤:")
+		return nil, err
+	}
+	defer db.Close()
+
+	err = ConnectToDatabase(db, log, "StockLongData") // 嘗試使用資料庫 "StockLongData"
+	if err != nil {
+		log.Error("ConnectToDatabase 錯誤:")
+		return nil, err
+	}
+
+	// 準備 SQL 指令
+	SQL_cmd := "SELECT transaction_date, stock_id, stock_name, transaction_price, investment_cost FROM UnrealizedGainsLosses ORDER BY transaction_date DESC LIMIT 1;"
+	log.Info("SQL_cmd: ", SQL_cmd)
+
+	// 執行查詢
+	rows, err := db.Query(SQL_cmd)
+	if err != nil {
+		log.Error("db.Query 錯誤:")
+		return nil, err
+	}
+	defer rows.Close()
+
+	returnValue := make([]map[string]interface{}, 0)
+	for rows.Next() {
+		transaction_date := ""
+		stock_id := ""
+		stock_name := ""
+		transaction_price := 0.0
+		investment_cost := 0.0
+		err := rows.Scan(&transaction_date, &stock_id, &stock_name, &transaction_price, &investment_cost)
+		if err != nil {
+			log.Error("rows.Scan 錯誤:")
+			return nil, err
+		}
+
+		returnValue = append(returnValue, map[string]interface{}{
+			"transaction_date":  transaction_date,
+			"stock_id":          stock_id,
+			"stock_name":        stock_name,
+			"transaction_price": transaction_price,
+			"investment_cost":   investment_cost,
+		})
+	}
+
+	return returnValue, nil
+}
