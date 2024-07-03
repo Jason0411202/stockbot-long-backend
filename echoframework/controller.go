@@ -23,16 +23,19 @@ func get_unrealized_gains_losses(c echo.Context) error {
 			return c.JSONPretty(http.StatusOK, []map[string]interface{}{}, "  ")
 		}
 
-		for _, value := range returnValue {
-			data := map[string]interface{}{
-				"transaction_date":  value["transaction_date"],
-				"stock_id":          value["stock_id"],
-				"stock_name":        value["stock_name"],
-				"transaction_price": value["transaction_price"],
-				"investment_cost":   value["investment_cost"],
-			}
+		return c.JSONPretty(http.StatusOK, returnValue, "  ")
+	} else {
+		return c.String(http.StatusMethodNotAllowed, "Method Not Allowed")
+	}
+}
 
-			returnValue = append(returnValue, data)
+func get_realized_gains_losses(c echo.Context) error {
+	if c.Request().Method == "GET" {
+		log.Info("GET /api/get_realized_gains_losses")
+		returnValue, err := sqls.GetAllRealizedGainsLosses(log)
+		if err != nil {
+			log.Error("GetAllRealizedGainsLosses 發生錯誤:", err)
+			return c.JSONPretty(http.StatusOK, []map[string]interface{}{}, "  ")
 		}
 
 		return c.JSONPretty(http.StatusOK, returnValue, "  ")

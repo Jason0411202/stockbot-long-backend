@@ -2,7 +2,6 @@ package kernals
 
 import (
 	"fmt"
-	"main/helper"
 	"main/sqls"
 	"os"
 	"strings"
@@ -141,47 +140,47 @@ func AveragingUpAndDown(log *logrus.Logger, stockID string, buyAmount float64, a
 }
 
 func CheckIfBuy(log *logrus.Logger, stockID string, trackStocks_market_array []string, trackStocks_highDividend_array []string) int {
-	// 確認過去一個月內是否有買過同類型的股票
-	if helper.ValueInStringArray(stockID, trackStocks_market_array) == 1 { // 如果是市值型股票
-		if CheckIfBuy_TimeChecking(log, stockID, trackStocks_market_array) != 1 { // 如果過去一個月內有買過同類型的股票
-			return 0
-		}
-	} else if helper.ValueInStringArray(stockID, trackStocks_highDividend_array) == 1 { // 如果是高股息型股票
-		if CheckIfBuy_TimeChecking(log, stockID, trackStocks_highDividend_array) != 1 { // 如果過去一個月內有買過同類型的股票
-			return 0
-		}
-	} else {
-		log.Error("stockID: ", stockID, " 不屬於市值型或高股息型股票")
-		return -1
-	}
+	// // 確認過去一個月內是否有買過同類型的股票
+	// if helper.ValueInStringArray(stockID, trackStocks_market_array) == 1 { // 如果是市值型股票
+	// 	if CheckIfBuy_TimeChecking(log, stockID, trackStocks_market_array) != 1 { // 如果過去一個月內有買過同類型的股票
+	// 		return 0
+	// 	}
+	// } else if helper.ValueInStringArray(stockID, trackStocks_highDividend_array) == 1 { // 如果是高股息型股票
+	// 	if CheckIfBuy_TimeChecking(log, stockID, trackStocks_highDividend_array) != 1 { // 如果過去一個月內有買過同類型的股票
+	// 		return 0
+	// 	}
+	// } else {
+	// 	log.Error("stockID: ", stockID, " 不屬於市值型或高股息型股票")
+	// 	return -1
+	// }
 
-	// 確認是否符合買點條件
-	if CheckIfBuy_BuyPointChecking(log, stockID) != 1 {
-		return 0
-	}
+	// // 確認是否符合買點條件
+	// if CheckIfBuy_BuyPointChecking(log, stockID) != 1 {
+	// 	return 0
+	// }
 
 	return 1
 }
 
 func CheckIfSell(log *logrus.Logger, stockID string, trackStocks_market_array []string, trackStocks_highDividend_array []string) int {
-	// 確認過去一個月內是否有賣過同類型的股票
-	if helper.ValueInStringArray(stockID, trackStocks_market_array) == 1 { // 如果是市值型股票
-		if CheckIfSell_TimeChecking(log, stockID, trackStocks_market_array) != 1 { // 如果過去一個月內有賣過同類型的股票
-			return 0
-		}
-	} else if helper.ValueInStringArray(stockID, trackStocks_highDividend_array) == 1 { // 如果是高股息型股票
-		if CheckIfSell_TimeChecking(log, stockID, trackStocks_highDividend_array) != 1 { // 如果過去一個月內有賣過同類型的股票
-			return 0
-		}
-	} else {
-		log.Error("stockID: ", stockID, " 不屬於市值型或高股息型股票")
-		return -1
-	}
+	// // 確認過去一個月內是否有賣過同類型的股票
+	// if helper.ValueInStringArray(stockID, trackStocks_market_array) == 1 { // 如果是市值型股票
+	// 	if CheckIfSell_TimeChecking(log, stockID, trackStocks_market_array) != 1 { // 如果過去一個月內有賣過同類型的股票
+	// 		return 0
+	// 	}
+	// } else if helper.ValueInStringArray(stockID, trackStocks_highDividend_array) == 1 { // 如果是高股息型股票
+	// 	if CheckIfSell_TimeChecking(log, stockID, trackStocks_highDividend_array) != 1 { // 如果過去一個月內有賣過同類型的股票
+	// 		return 0
+	// 	}
+	// } else {
+	// 	log.Error("stockID: ", stockID, " 不屬於市值型或高股息型股票")
+	// 	return -1
+	// }
 
-	// 確認是否符合賣點條件
-	if CheckIfSell_SellPointChecking(log, stockID) != 1 {
-		return 0
-	}
+	// // 確認是否符合賣點條件
+	// if CheckIfSell_SellPointChecking(log, stockID) != 1 {
+	// 	return 0
+	// }
 
 	return 1
 
@@ -258,7 +257,7 @@ func DailyCheck(log *logrus.Logger) {
 			}
 		}
 		//BuyStock(log)
-		//SellStock(log)
+		SellStock(log)
 
 		time.Sleep(60 * time.Second)
 	}

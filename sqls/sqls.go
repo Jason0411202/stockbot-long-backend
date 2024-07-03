@@ -530,8 +530,8 @@ func SQLSellStock(log *logrus.Logger, stockID string, sellAmount float64) error 
 				return err
 			}
 
-			profit_loss := revenue - record["investment_cost"].(float64)                       // 計算損益
-			profit_rate := float64(profit_loss) / float64(record["investment_cost"].(float64)) // 計算損益率
+			profit_loss := revenue - record["investment_cost"].(float64)                               // 計算損益
+			profit_rate := (float64(profit_loss) / float64(record["investment_cost"].(float64))) * 100 // 計算損益率
 			log.Info("profit_loss: ", profit_loss)
 			log.Info("profit_rate: ", profit_rate)
 
@@ -550,8 +550,8 @@ func SQLSellStock(log *logrus.Logger, stockID string, sellAmount float64) error 
 				log.Error("DeleteNewestUnrealizedGainsLossesRecord 錯誤:")
 				return err
 			}
-			profit_loss := revenue - record["investment_cost"].(float64)                       // 計算損益
-			profit_rate := float64(profit_loss) / float64(record["investment_cost"].(float64)) // 計算損益率
+			profit_loss := revenue - record["investment_cost"].(float64)                               // 計算損益
+			profit_rate := (float64(profit_loss) / float64(record["investment_cost"].(float64))) * 100 // 計算損益率
 			log.Info("profit_loss: ", profit_loss)
 			log.Info("profit_rate: ", profit_rate)
 
@@ -574,8 +574,8 @@ func SQLSellStock(log *logrus.Logger, stockID string, sellAmount float64) error 
 				return err
 			}
 
-			profit_loss := float64(sellAmount) - float64(really_investment_cost)  // 計算損益
-			profit_rate := float64(profit_loss) / float64(really_investment_cost) // 計算損益率
+			profit_loss := float64(sellAmount) - float64(really_investment_cost)                       // 計算損益
+			profit_rate := (float64(profit_loss) / float64(record["investment_cost"].(float64))) * 100 // 計算損益率
 			log.Info("profit_loss: ", profit_loss)
 			log.Info("profit_rate: ", profit_rate)
 
@@ -748,7 +748,7 @@ func GetAllUnrealizedGainsLosses(log *logrus.Logger) ([]map[string]interface{}, 
 	}
 
 	// 準備 SQL 指令
-	SQL_cmd := "SELECT transaction_date, stock_id, stock_name, transaction_price, investment_cost FROM UnrealizedGainsLosses ORDER BY transaction_date DESC LIMIT 1;"
+	SQL_cmd := "SELECT transaction_date, stock_id, stock_name, transaction_price, investment_cost FROM UnrealizedGainsLosses ORDER BY transaction_date DESC LIMIT 500;"
 	log.Info("SQL_cmd: ", SQL_cmd)
 
 	// 執行查詢
@@ -778,6 +778,67 @@ func GetAllUnrealizedGainsLosses(log *logrus.Logger) ([]map[string]interface{}, 
 			"stock_name":        stock_name,
 			"transaction_price": transaction_price,
 			"investment_cost":   investment_cost,
+		})
+	}
+
+	return returnValue, nil
+}
+
+func GetAllRealizedGainsLosses(log *logrus.Logger) ([]map[string]interface{}, error) {
+	db, err := ConnectToMariadb(log) // 連接至 Mariadb Server
+	if err != nil {
+		log.Error("ConnectToMariadb 錯誤:")
+		return nil, err
+	}
+	defer db.Close()
+
+	err = ConnectToDatabase(db, log, "StockLongData") // 嘗試使用資料庫 "StockLongData"
+	if err != nil {
+		log.Error("ConnectToDatabase 錯誤:")
+		return nil, err
+	}
+
+	// 準備 SQL 指令
+	SQL_cmd := "SELECT buy_date, sell_date, stock_id, stock_name, purchase_price, sell_price, investment_cost, revenue, profit_loss, profit_rate FROM RealizedGainsLosses ORDER BY sell_date DESC LIMIT 500;"
+	log.Info("SQL_cmd: ", SQL_cmd)
+
+	// 執行查詢
+	rows, err := db.Query(SQL_cmd)
+	if err != nil {
+		log.Error("db.Query 錯誤:")
+		return nil, err
+	}
+	defer rows.Close()
+
+	returnValue := make([]map[string]interface{}, 0)
+	for rows.Next() {
+		buy_date := ""
+		sell_date := ""
+		stock_id := ""
+		stock_name := ""
+		purchase_price := 0.0
+		sell_price := 0.0
+		investment_cost := 0.0
+		revenue := 0.0
+		profit_loss := 0.0
+		profit_rate := 0.0
+		err := rows.Scan(&buy_date, &sell_date, &stock_id, &stock_name, &purchase_price, &sell_price, &investment_cost, &revenue, &profit_loss, &profit_rate)
+		if err != nil {
+			log.Error("rows.Scan 錯誤:")
+			return nil, err
+		}
+
+		returnValue = append(returnValue, map[string]interface{}{
+			"buy_date":        buy_date,
+			"sell_date":       sell_date,
+			"stock_id":        stock_id,
+			"stock_name":      stock_name,
+			"purchase_price":  purchase_price,
+			"sell_price":      sell_price,
+			"investment_cost": investment_cost,
+			"revenue":         revenue,
+			"profit_loss":     profit_loss,
+			"profit_rate":     profit_rate,
 		})
 	}
 
