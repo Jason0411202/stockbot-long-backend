@@ -19,7 +19,7 @@ func Init() {
 	log = logs.InitLogger()      // 初始化 log
 	err := godotenv.Load(".env") // 環境變數 .env 檔案相對於程式的路徑
 	if err != nil {
-		log.Fatal("無法載入 .env 檔案")
+		log.Error("無法載入 .env 檔案")
 	}
 
 	err = sqls.InitDatabase(log) // 初始化資料庫

@@ -1,4 +1,36 @@
 # stockbot-long-backend
+## 執行
+1. 確保伺服器中有 mariadb
+  ```
+  sudo apt update
+  sudo apt upgrade
+  sudo apt install software-properties-common
+  sudo add-apt-repository 'deb [arch=amd64,arm64,ppc64el] http://mirrors.aliyun.com/mariadb/repo/10.5/ubuntu bionic main'
+  sudo apt update
+  sudo apt install mariadb-server
+  ```
+  並使用以下指令初始化資料庫設定
+  ```
+  sudo mysql_secure_installation
+  ```
+
+2. 配置 .env 檔案
+```
+MariadbUser=使用者名稱
+MariadbPassword=使用者密碼
+MariadbHost=資料庫所在的 host
+MariadbPort=資料庫所在的 port
+TrackStocks_Market=006208 (追蹤的市值型股票)
+TrackStocks_HighDividend=00929&0056 (追蹤的配息型股票)
+```
+1. 建立映像檔
+```
+sudo docker build -t "stockbot-long-backend" .
+```
+1. 執行容器
+```
+sudo docker run --env-file .env --restart=always -d --name stockbot-long-backend stockbot-long-backend
+```
 ## 長線
 * 主攻 ETF 交易
 * 市值型 (006208) 與配息型(0056, 00878, 00919, 00929) ETF 計數器分開計算
