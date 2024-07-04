@@ -59,6 +59,7 @@ MariadbHost=伺服器 ip (可以由 ip a 查看)
 MariadbPort=資料庫所在的 port (預設為 3306)
 TrackStocks_Market=006208 (追蹤的市值型股票)
 TrackStocks_HighDividend=00929&0056 (追蹤的配息型股票)
+HTTPS_PROXY_LOCATION= (https 憑證位置)
 ```
 1. 建立映像檔
 ```
