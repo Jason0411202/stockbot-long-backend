@@ -21,8 +21,13 @@
   ```
   sudo ufw allow in 3306
   ```
-  創建一組帳密供容器連接 (帳號: exampleuser, 密碼: examplepassword)
+  登入 maria db
   ```
+  sudo mysql -h localhost -u root -p
+  ```
+  並創建一組帳密供容器連接 (帳號: exampleuser, 密碼: examplepassword)
+  ```
+  sudo mysql -h localhost -u root -p
   CREATE USER 'exampleuser'@'%' IDENTIFIED BY 'examplepassword';
   GRANT ALL PRIVILEGES ON *.* TO 'externaluser'@'%';
   FLUSH PRIVILEGES;
@@ -50,7 +55,7 @@
       ssl_certificate /etc/letsencrypt/live/jason-server.eastus2.cloudapp.azure.com/cert.pem;
       ssl_certificate_key /etc/letsencrypt/live/jason-server.eastus2.cloudapp.azure.com/privkey.pem;
 
-      location /api/get_realized_gains_losses {
+      location / {
           proxy_pass https://localhost:8000;
           proxy_set_header Host $host;
           proxy_set_header X-Real-IP $remote_addr;
