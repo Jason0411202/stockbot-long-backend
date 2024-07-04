@@ -27,8 +27,31 @@
   GRANT ALL PRIVILEGES ON *.* TO 'externaluser'@'%';
   FLUSH PRIVILEGES;
   ```
+2. 安裝並配置 nginx
+  ```
+  sudo apt update (剛創虛擬機時一定要打，不然可能會裝到舊版)
+  sudo apt install nginx
+  ```
+  編輯 `sudo nano /etc/nginx/nginx.conf`
+  加入這段，server_name 換成你的網域
+  ```
+  server {
+            listen 80;
+            server_name ccucsieplus.eastus.cloudapp.azure.com;
 
-2. 配置 .env 檔案
+            location / {
+                proxy_pass http://localhost:8000;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+            }
+        }
+  ```
+  重啟 nginx
+  ```
+  sudo service nginx restart
+  ```
+
+3. 配置 .env 檔案
 ```
 MariadbUser=剛剛創建的帳號
 MariadbPassword=剛剛創建的密碼
@@ -37,16 +60,16 @@ MariadbPort=資料庫所在的 port (預設為 3306)
 TrackStocks_Market=006208 (追蹤的市值型股票)
 TrackStocks_HighDividend=00929&0056 (追蹤的配息型股票)
 ```
-3. 建立映像檔
+1. 建立映像檔
 ```
 sudo docker build -t "stockbot-long-backend" .
 ```
-4. 執行容器
+1. 執行容器
 ```
 sudo docker run -p 8000:8000 --env-file .env --restart=always -d --name stockbot-long-backend stockbot-long-backend
 ```
-## 長線
-* 主攻 ETF 交易
+## 交易邏輯
+* 主攻 ETF 長線交易
 * 市值型 (006208) 與配息型(0056, 00878, 00919, 00929) ETF 計數器分開計算
 * 基本買賣邏輯:
   * 當股價來到一個月內最低點時固定買入 5000，操作後一個月內不再進行任何關於該型的買賣操作
