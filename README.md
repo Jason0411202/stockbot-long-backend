@@ -1,6 +1,6 @@
 # stockbot-long-backend
 ## 執行
-1. 確保伺服器中有 mariadb
+1. 在伺服器中安裝 mariadb
   ```
   sudo apt update
   sudo apt upgrade
@@ -13,23 +13,37 @@
   ```
   sudo mysql_secure_installation
   ```
+  修改配置檔，使得容器能夠連接到資料庫
+  ```
+  /etc/mysql/mariadb.conf.d/50-server.cnf 中的 bind-address 改成 0.0.0.0
+  ```
+  修改防火牆設定
+  ```
+  sudo ufw allow in 3306
+  ```
+  創建一組帳密供容器連接 (帳號: exampleuser, 密碼: examplepassword)
+  ```
+  CREATE USER 'exampleuser'@'%' IDENTIFIED BY 'examplepassword';
+  GRANT ALL PRIVILEGES ON *.* TO 'externaluser'@'%';
+  FLUSH PRIVILEGES;
+  ```
 
 2. 配置 .env 檔案
 ```
-MariadbUser=使用者名稱
-MariadbPassword=使用者密碼
-MariadbHost=資料庫所在的 host
-MariadbPort=資料庫所在的 port
+MariadbUser=剛剛創建的帳號
+MariadbPassword=剛剛創建的密碼
+MariadbHost=伺服器 ip (可以由 ip a 查看)
+MariadbPort=資料庫所在的 port (預設為 3306)
 TrackStocks_Market=006208 (追蹤的市值型股票)
 TrackStocks_HighDividend=00929&0056 (追蹤的配息型股票)
 ```
-1. 建立映像檔
+3. 建立映像檔
 ```
 sudo docker build -t "stockbot-long-backend" .
 ```
-1. 執行容器
+4. 執行容器
 ```
-sudo docker run --env-file .env --restart=always -d --name stockbot-long-backend stockbot-long-backend
+sudo docker run -p 8000:8000 --env-file .env --restart=always -d --name stockbot-long-backend stockbot-long-backend
 ```
 ## 長線
 * 主攻 ETF 交易

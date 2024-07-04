@@ -14,7 +14,7 @@ RUN go mod download
 # 複製其他程式碼到容器內的工作目錄
 COPY . .
 
-# 設定這個容器對外開放 3000 port
+# 設定這個容器對外開放 8000 port
 EXPOSE 8000
 
 # 執行 go run main.go 指令

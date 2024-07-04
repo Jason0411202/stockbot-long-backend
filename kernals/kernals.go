@@ -257,7 +257,7 @@ func DailyCheck(log *logrus.Logger) {
 			}
 		}
 		//BuyStock(log)
-		SellStock(log)
+		//SellStock(log)
 
 		time.Sleep(60 * time.Second)
 	}
