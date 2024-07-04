@@ -27,38 +27,42 @@
   GRANT ALL PRIVILEGES ON *.* TO 'externaluser'@'%';
   FLUSH PRIVILEGES;
   ```
-2. 安裝並配置 nginx
+2. 獲取 https 憑證，並把憑證貼到專案根目錄下 (`jason-server.eastus2.cloudapp.azure.com` 是自己伺服器的 DNS 名稱，剛生成的憑證會存在 `/etc/letsencrypt/live/jason-server.eastus2.cloudapp.azure.com/` 中，這些指令在專案根目錄下執行)
+  ```
+  sudo apt-get update
+  sudo apt-get install certbot python3-certbot-nginx
+  sudo certbot --nginx -d jason-server.eastus2.cloudapp.azure.com
+  sudo cp /etc/letsencrypt/live/jason-server.eastus2.cloudapp.azure.com/cert.pem .
+  sudo cp /etc/letsencrypt/live/jason-server.eastus2.cloudapp.azure.com/privkey.pem .
+  ```
+1. 安裝並配置 nginx
   ```
   sudo apt update (剛創虛擬機時一定要打，不然可能會裝到舊版)
   sudo apt install nginx
   ```
   編輯 `sudo nano /etc/nginx/nginx.conf`
-  加入這段，server_name 換成你的網域
+  加入這段，jason-server.eastus2.cloudapp.azure.com 換成你的網域
   ```
   server {
-            listen 443;
-            server_name ccucsieplus.eastus.cloudapp.azure.com;
+      listen 443 ssl;
+      server_name jason-server.eastus2.cloudapp.azure.com;
 
-            location / {
-                proxy_pass http://localhost:8000;
-                proxy_set_header Host $host;
-                proxy_set_header X-Real-IP $remote_addr;
-            }
-        }
+      ssl_certificate /etc/letsencrypt/live/jason-server.eastus2.cloudapp.azure.com/cert.pem;
+      ssl_certificate_key /etc/letsencrypt/live/jason-server.eastus2.cloudapp.azure.com/privkey.pem;
+
+      location /api/get_realized_gains_losses {
+          proxy_pass https://localhost:8000;
+          proxy_set_header Host $host;
+          proxy_set_header X-Real-IP $remote_addr;
+          proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+          proxy_set_header X-Forwarded-Proto $scheme;
+      }
+  }
   ```
   重啟 nginx
   ```
   sudo service nginx restart
   ```
-3. 獲取 https 憑證 (在專案根目錄下執行)
-  ```
-  sudo apt-get update
-  sudo apt-get install certbot
-  sudo certbot --nginx -d jason-server.eastus2.cloudapp.azure.com
-  sudo cp /etc/letsencrypt/live/jason-server.eastus2.cloudapp.azure.com/cert.pem .
-  sudo cp /etc/letsencrypt/live/jason-server.eastus2.cloudapp.azure.com/privkey.pem .
-  ```
-  `jason-server.eastus2.cloudapp.azure.com` 是自己伺服器的 DNS 名稱，剛生成憑證會存在 `/etc/letsencrypt/live/jason-server.eastus2.cloudapp.azure.com/` 中
   
 1. 配置 .env 檔案
 ```
@@ -68,7 +72,6 @@ MariadbHost=10.0.0.4 (伺服器 ip，可以由 ip a 查看)
 MariadbPort=3306 (資料庫所在的 port，預設為 3306)
 TrackStocks_Market=006208 (追蹤的市值型股票)
 TrackStocks_HighDividend=00929&0056 (追蹤的配息型股票)
-HTTPS_PROXY_LOCATION=/etc/letsencrypt/live/yourdomain.com/ (https 憑證位置)
 ```
 1. 建立映像檔
 ```
