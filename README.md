@@ -86,6 +86,10 @@ sudo docker build -t "stockbot-long-backend" .
 ```
 sudo docker run -p 8000:8000 --env-file .env --restart=always -d --name stockbot-long-backend stockbot-long-backend
 ```
+
+## 關於前端伺服器的部署
+請參考 `https://github.com/Jason0411202/stockbot-long-frontend`
+
 ## 交易邏輯
 * 主攻 ETF 長線交易
 * 市值型 (006208) 與配息型(0056, 00878, 00919, 00929) ETF 計數器分開計算
