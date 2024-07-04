@@ -1,8 +1,6 @@
 package echoframework
 
 import (
-	"os"
-
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/sirupsen/logrus"
@@ -19,5 +17,5 @@ func EchoInit(log *logrus.Logger) {
 	EchoRouting(e) // 設定 routing 規則
 
 	// 啟動 https 伺服器
-	log.Fatal(e.StartTLS(":8000", os.Getenv("HTTPS_PROXY_LOCATION")+"cert.pem", os.Getenv("HTTPS_PROXY_LOCATION")+"key.pem"))
+	log.Fatal(e.StartTLS(":8000", "cert.pem", "privkey.pem"))
 }
