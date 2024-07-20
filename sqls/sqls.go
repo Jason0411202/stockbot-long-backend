@@ -372,6 +372,45 @@ func UpperPointDays(log *logrus.Logger, stockID string) int {
 
 }
 
+func GetStockName(log *logrus.Logger, stockID string) (string, error) {
+	db, err := ConnectToMariadb(log) // 連接至 Mariadb Server
+	if err != nil {
+		log.Error("ConnectToMariadb 錯誤:")
+		return "", err
+	}
+	defer db.Close()
+
+	err = ConnectToDatabase(db, log, "StockLongData") // 嘗試使用資料庫 "StockLongData"
+	if err != nil {
+		log.Error("ConnectToDatabase 錯誤:")
+		return "", err
+	}
+
+	// 準備 SQL 指令
+	SQL_cmd := "SELECT stock_name FROM StockHistory WHERE stock_id = ? ORDER BY date DESC LIMIT 1;"
+	log.Info("SQL_cmd: ", fmt.Sprintf(SQL_cmd, stockID))
+
+	// 執行查詢
+	rows, err := db.Query(SQL_cmd, stockID)
+	if err != nil {
+		log.Error("db.Query 錯誤:")
+		return "", err
+	}
+	defer rows.Close()
+
+	var stockName string
+	for rows.Next() {
+		err := rows.Scan(&stockName)
+		if err != nil {
+			log.Error("rows.Scan 錯誤:")
+			return "", err
+		}
+	}
+
+	return stockName, nil
+
+}
+
 func GetAverageStockPrice(log *logrus.Logger, stockID string, days int) (float64, error) {
 	db, err := ConnectToMariadb(log) // 連接至 Mariadb Server
 	if err != nil {
@@ -849,6 +888,52 @@ func GetAllRealizedGainsLosses(log *logrus.Logger) ([]map[string]interface{}, er
 			"revenue":         math.Round(revenue*100) / 100,
 			"profit_loss":     math.Round(profit_loss*100) / 100,
 			"profit_rate":     math.Round(profit_rate*100) / 100,
+		})
+	}
+
+	return returnValue, nil
+}
+
+func GetStockStatisticData(log *logrus.Logger) ([]map[string]interface{}, error) {
+	trackStocks_market_array := strings.Split(os.Getenv("TrackStocks_Market"), "&")
+	trackStocks_highDividend_array := strings.Split(os.Getenv("TrackStocks_HighDividend"), "&")
+	trackStocksArray := append(trackStocks_market_array, trackStocks_highDividend_array...)
+
+	returnValue := make([]map[string]interface{}, 0)
+	for _, stockID := range trackStocksArray {
+		stockName, err := GetStockName(log, stockID)
+		if err != nil {
+			log.Error("GetStockName 錯誤:")
+			return nil, err
+		}
+
+		// 取得當天收盤價
+		todayPrice, err := GetTodayStockPrice(log, stockID, "close_price")
+		if err != nil {
+			log.Error("GetTodayStockPrice 錯誤:")
+			return nil, err
+		}
+
+		// 取得當天價格是近 i 天的高點
+		upperPointDays := UpperPointDays(log, stockID)
+		if upperPointDays == -1 {
+			log.Error("UpperPointDays 錯誤:")
+			return nil, nil
+		}
+
+		// 取得當天價格是近 i 天的低點
+		lowerPointDays := LowerPointDays(log, stockID)
+		if lowerPointDays == -1 {
+			log.Error("LowerPointDays 錯誤:")
+			return nil, nil
+		}
+
+		returnValue = append(returnValue, map[string]interface{}{
+			"stock_id":         stockID,
+			"stock_name":       stockName,
+			"today_price":      todayPrice,
+			"lower_point_days": lowerPointDays,
+			"upper_point_days": upperPointDays,
 		})
 	}
 

@@ -43,3 +43,18 @@ func get_realized_gains_losses(c echo.Context) error {
 		return c.String(http.StatusMethodNotAllowed, "Method Not Allowed")
 	}
 }
+
+func get_stock_statistic_data(c echo.Context) error {
+	if c.Request().Method == "GET" {
+		log.Info("GET /api/get_stock_statistic_data")
+		returnValue, err := sqls.GetStockStatisticData(log)
+		if err != nil {
+			log.Error("GetStockStatisticData 發生錯誤:", err)
+			return c.JSONPretty(http.StatusOK, []map[string]interface{}{}, "  ")
+		}
+
+		return c.JSONPretty(http.StatusOK, returnValue, "  ")
+	} else {
+		return c.String(http.StatusMethodNotAllowed, "Method Not Allowed")
+	}
+}
