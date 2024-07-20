@@ -40,7 +40,7 @@
   sudo cp /etc/letsencrypt/live/jason-server.eastus2.cloudapp.azure.com/cert.pem .
   sudo cp /etc/letsencrypt/live/jason-server.eastus2.cloudapp.azure.com/privkey.pem .
   ```
-1. 安裝並配置 nginx
+3. 安裝並配置 nginx
   ```
   sudo apt update (剛創虛擬機時一定要打，不然可能會裝到舊版)
   sudo apt install nginx
@@ -69,7 +69,7 @@
   sudo service nginx restart
   ```
   
-1. 配置 .env 檔案
+4. 配置 .env 檔案
 ```
 MariadbUser=exampleuser (剛剛創建的帳號)
 MariadbPassword=examplepassword (剛剛創建的密碼)
@@ -78,11 +78,11 @@ MariadbPort=3306 (資料庫所在的 port，預設為 3306)
 TrackStocks_Market=006208 (追蹤的市值型股票)
 TrackStocks_HighDividend=00929&0056 (追蹤的配息型股票)
 ```
-1. 建立映像檔
+5. 建立映像檔
 ```
 sudo docker build -t "stockbot-long-backend" .
 ```
-1. 執行容器
+6. 執行容器
 ```
 sudo docker run -p 8000:8000 --env-file .env --restart=always -d --name stockbot-long-backend stockbot-long-backend
 ```
