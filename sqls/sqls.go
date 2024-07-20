@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"os"
 	"strconv"
@@ -761,23 +762,32 @@ func GetAllUnrealizedGainsLosses(log *logrus.Logger) ([]map[string]interface{}, 
 
 	returnValue := make([]map[string]interface{}, 0)
 	for rows.Next() {
-		transaction_date := ""
-		stock_id := ""
-		stock_name := ""
-		transaction_price := 0.0
-		investment_cost := 0.0
+		transaction_date := ""   // 交易日期
+		stock_id := ""           // 股票代號
+		stock_name := ""         // 股票名稱
+		transaction_price := 0.0 // 買入價格
+		investment_cost := 0.0   // 投資成本
 		err := rows.Scan(&transaction_date, &stock_id, &stock_name, &transaction_price, &investment_cost)
 		if err != nil {
 			log.Error("rows.Scan 錯誤:")
 			return nil, err
 		}
 
+		todayClosePrice, err := GetTodayStockPrice(log, stock_id, "close_price") // 現價
+		now_value := (todayClosePrice / transaction_price) * investment_cost     // 現值
+		predict_profit_loss := now_value - investment_cost                       // 預估損益
+		predict_profit_rate := (predict_profit_loss / investment_cost) * 100     // 預估損益率
+
 		returnValue = append(returnValue, map[string]interface{}{
-			"transaction_date":  transaction_date,
-			"stock_id":          stock_id,
-			"stock_name":        stock_name,
-			"transaction_price": transaction_price,
-			"investment_cost":   investment_cost,
+			"transaction_date":    transaction_date,
+			"stock_id":            stock_id,
+			"stock_name":          stock_name,
+			"transaction_price":   transaction_price,
+			"investment_cost":     investment_cost,
+			"todayClosePrice":     todayClosePrice,
+			"now_value":           math.Round(now_value*100) / 100,
+			"predict_profit_loss": math.Round(predict_profit_loss*100) / 100,
+			"predict_profit_rate": math.Round(predict_profit_rate*100) / 100,
 		})
 	}
 
@@ -812,16 +822,16 @@ func GetAllRealizedGainsLosses(log *logrus.Logger) ([]map[string]interface{}, er
 
 	returnValue := make([]map[string]interface{}, 0)
 	for rows.Next() {
-		buy_date := ""
-		sell_date := ""
-		stock_id := ""
-		stock_name := ""
-		purchase_price := 0.0
-		sell_price := 0.0
-		investment_cost := 0.0
-		revenue := 0.0
-		profit_loss := 0.0
-		profit_rate := 0.0
+		buy_date := ""         // 買入日期
+		sell_date := ""        // 賣出日期
+		stock_id := ""         // 股票代號
+		stock_name := ""       // 股票名稱
+		purchase_price := 0.0  // 買入價格
+		sell_price := 0.0      // 賣出價格
+		investment_cost := 0.0 // 投資成本
+		revenue := 0.0         // 總收益
+		profit_loss := 0.0     // 損益
+		profit_rate := 0.0     // 損益率
 		err := rows.Scan(&buy_date, &sell_date, &stock_id, &stock_name, &purchase_price, &sell_price, &investment_cost, &revenue, &profit_loss, &profit_rate)
 		if err != nil {
 			log.Error("rows.Scan 錯誤:")
@@ -836,9 +846,9 @@ func GetAllRealizedGainsLosses(log *logrus.Logger) ([]map[string]interface{}, er
 			"purchase_price":  purchase_price,
 			"sell_price":      sell_price,
 			"investment_cost": investment_cost,
-			"revenue":         revenue,
-			"profit_loss":     profit_loss,
-			"profit_rate":     profit_rate,
+			"revenue":         math.Round(revenue*100) / 100,
+			"profit_loss":     math.Round(profit_loss*100) / 100,
+			"profit_rate":     math.Round(profit_rate*100) / 100,
 		})
 	}
 
