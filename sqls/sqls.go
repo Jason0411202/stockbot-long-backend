@@ -290,8 +290,8 @@ func LowerPointDays(log *logrus.Logger, stockID string) int {
 	}
 
 	// 準備 SQL 指令
-	// 查詢 StockHistory table 中，stock_id 為 stockID 的"當天最低價"，並依照 date 由新到舊排序
-	SQL_cmd := "SELECT low_price FROM StockHistory WHERE stock_id = ? ORDER BY date DESC;"
+	// 查詢 StockHistory table 中，stock_id 為 stockID 的"當天收盤價"，並依照 date 由新到舊排序
+	SQL_cmd := "SELECT close_price FROM StockHistory WHERE stock_id = ? ORDER BY date DESC;"
 	log.Info("SQL_cmd: ", fmt.Sprintf(SQL_cmd, stockID))
 
 	// 執行查詢
@@ -338,8 +338,8 @@ func UpperPointDays(log *logrus.Logger, stockID string) int {
 	}
 
 	// 準備 SQL 指令
-	// 查詢 StockHistory table 中，stock_id 為 stockID 的"當天最高價"，並依照 date 由新到舊排序
-	SQL_cmd := "SELECT high_price FROM StockHistory WHERE stock_id = ? ORDER BY date DESC;"
+	// 查詢 StockHistory table 中，stock_id 為 stockID 的"當天收盤價"，並依照 date 由新到舊排序
+	SQL_cmd := "SELECT close_price FROM StockHistory WHERE stock_id = ? ORDER BY date DESC;"
 	log.Info("SQL_cmd: ", fmt.Sprintf(SQL_cmd, stockID))
 
 	// 執行查詢
@@ -361,6 +361,7 @@ func UpperPointDays(log *logrus.Logger, stockID string) int {
 		stockHistoryPriceRecords = append(stockHistoryPriceRecords, record)
 	}
 
+	fmt.Println(stockHistoryPriceRecords)
 	todayPrice := stockHistoryPriceRecords[0]        // 取得當天價格
 	for i, price := range stockHistoryPriceRecords { // 比較當天價格與過去價格
 		if price > todayPrice { // 如果過去價格比當天價格高
