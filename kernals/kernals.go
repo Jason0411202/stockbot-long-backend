@@ -196,14 +196,52 @@ func BuyStock(log *logrus.Logger) {
 
 	for _, stockID := range trackStocksArray { // 依序取出每一個股票 id
 		if CheckIfBuy(log, stockID, trackStocks_market_array, trackStocks_highDividend_array) == 1 {
-			buyAmount := 5000.0 // 基本買入金額
-			buyAmount, err := AveragingUpAndDown(log, stockID, buyAmount, "buy")
-			if err != nil {
-				log.Error("AveragingUpAndDown 錯誤:", err)
-				continue
+			buyAmount := 0.0
+			if os.Getenv("Scaling_Strategy") == "AverageLine" { // 採用均線策略
+				log.Info("stockID: ", stockID, " 採用均線策略")
+				buyAmount = 5000.0 // 基本買入金額
+				afterUpAndDown, err := AveragingUpAndDown(log, stockID, buyAmount, "buy")
+				if err != nil {
+					log.Error("AveragingUpAndDown 錯誤:", err)
+					continue
+				}
+
+				buyAmount = afterUpAndDown
+			} else if os.Getenv("Scaling_Strategy") == "Pyramid" { // 採用金字塔策略
+				log.Info("stockID: ", stockID, " 採用金字塔策略")
+				todayPrice, err := sqls.GetTodayStockPrice(log, stockID, "close_price")
+				if err != nil {
+					log.Error("GetTodayStockPrice 錯誤:", err)
+					continue
+				}
+
+				HighestPrice, err := sqls.GetTransactionPriceOfUnrealizedGainsLosses(log, stockID, "Highest")
+				percentages := 0.0
+				if err != nil {
+					log.Error("GetBuyPriceOfUnrealizedGainsLosses 錯誤:", err)
+					continue
+				}
+
+				if HighestPrice != -1 {
+					percentages = (todayPrice - HighestPrice) / HighestPrice
+				}
+				log.Info("stockID: ", stockID, " 今日股價: ", todayPrice, " 最高價: ", HighestPrice, " 與最高價之相對比例: ", percentages)
+
+				if percentages > -0.15 {
+					buyAmount = 3000.0
+				} else if percentages > -0.3 {
+					buyAmount = 4500.0
+				} else if percentages > -0.45 {
+					buyAmount = 6000.0
+				} else if percentages > -0.6 {
+					buyAmount = 7500.0
+				} else {
+					buyAmount = 9000.0
+				}
 			}
+
 			log.Info("stockID: ", stockID, " 買入金額: ", buyAmount)
-			err = sqls.SQLBuyStock(log, stockID, buyAmount)
+			err := sqls.SQLBuyStock(log, stockID, buyAmount)
 			if err != nil {
 				log.Error("SQLBuyStock 錯誤:", err)
 				continue
@@ -221,15 +259,53 @@ func SellStock(log *logrus.Logger) {
 	log.Info("TrackStocksArray: ", trackStocksArray)
 
 	for _, stockID := range trackStocksArray { // 依序取出每一個股票 id
-		if CheckIfSell(log, stockID, trackStocks_market_array, trackStocks_highDividend_array) == 1 {
-			sellAmount := 5000.0                                                    // 基本賣出金額
-			sellAmount, err := AveragingUpAndDown(log, stockID, sellAmount, "sell") // 調整賣出金額
-			if err != nil {
-				log.Error("AveragingUpAndDown 錯誤:", err)
-				continue
+		if CheckIfSell(log, stockID, trackStocks_market_array, trackStocks_highDividend_array) == 1 || 1 == 1 {
+			sellAmount := 0.0
+			if os.Getenv("Scaling_Strategy") == "AverageLine" { // 採用均線策略
+				log.Info("stockID: ", stockID, " 採用均線策略")
+				sellAmount = 5000.0                                                         // 基本賣出金額
+				afterUpAndDown, err := AveragingUpAndDown(log, stockID, sellAmount, "sell") // 調整賣出金額
+				if err != nil {
+					log.Error("AveragingUpAndDown 錯誤:", err)
+					continue
+				}
+
+				sellAmount = afterUpAndDown
+			} else if os.Getenv("Scaling_Strategy") == "Pyramid" { // 採用金字塔策略
+				log.Info("stockID: ", stockID, " 採用金字塔策略")
+				todayPrice, err := sqls.GetTodayStockPrice(log, stockID, "close_price")
+				if err != nil {
+					log.Error("GetTodayStockPrice 錯誤:", err)
+					continue
+				}
+
+				LowestPrice, err := sqls.GetTransactionPriceOfUnrealizedGainsLosses(log, stockID, "Lowest")
+				percentages := 0.0
+				if err != nil {
+					log.Error("GetBuyPriceOfUnrealizedGainsLosses 錯誤:", err)
+					continue
+				}
+
+				if LowestPrice != -1 {
+					percentages = (todayPrice - LowestPrice) / LowestPrice
+				}
+				log.Info("stockID: ", stockID, " 今日股價: ", todayPrice, " 最低價: ", LowestPrice, " 與最低價之相對比例: ", percentages)
+
+				if percentages < 0.15 {
+					sellAmount = 3000.0
+				} else if percentages < 0.3 {
+					sellAmount = 4500.0
+				} else if percentages < 0.45 {
+					sellAmount = 6000.0
+				} else if percentages < 0.6 {
+					sellAmount = 7500.0
+				} else {
+					sellAmount = 9000.0
+				}
 			}
+
 			log.Info("stockID: ", stockID, " 預計賣出金額: ", sellAmount)
-			err = sqls.SQLSellStock(log, stockID, sellAmount)
+			err := sqls.SQLSellStock(log, stockID, sellAmount)
 			if err != nil {
 				log.Error("SQLSellStock 錯誤:", err)
 				continue
@@ -258,7 +334,7 @@ func DailyCheck(log *logrus.Logger) {
 			}
 		}
 		//BuyStock(log)
-		//SellStock(log)
+		SellStock(log)
 
 		time.Sleep(60 * time.Second)
 	}

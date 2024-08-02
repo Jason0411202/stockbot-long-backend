@@ -940,3 +940,65 @@ func GetStockStatisticData(log *logrus.Logger) ([]map[string]interface{}, error)
 
 	return returnValue, nil
 }
+
+// 取得未實現損益中，某支股票的最高或最低交易價格，若無資料則回傳 -1
+func GetTransactionPriceOfUnrealizedGainsLosses(log *logrus.Logger, stockID string, types string) (float64, error) {
+	db, err := ConnectToMariadb(log) // 連接至 Mariadb Server
+	if err != nil {
+		log.Error("ConnectToMariadb 錯誤:")
+		return -1, err
+	}
+	defer db.Close()
+
+	err = ConnectToDatabase(db, log, "StockLongData") // 嘗試使用資料庫 "StockLongData"
+	if err != nil {
+		log.Error("ConnectToDatabase 錯誤:")
+		return -1, err
+	}
+
+	// 準備 SQL 指令
+	SQL_cmd := "SELECT transaction_price FROM UnrealizedGainsLosses WHERE stock_id = ?;"
+	log.Info("SQL_cmd: ", fmt.Sprintf(SQL_cmd, stockID))
+
+	// 執行查詢
+	rows, err := db.Query(SQL_cmd, stockID)
+	if err != nil {
+		log.Error("db.Query 錯誤:")
+		return -1, err
+	}
+	defer rows.Close()
+
+	UnrealizedGainsLosses := make([]map[string]interface{}, 0)
+	for rows.Next() {
+		transaction_price := 0.0
+		err := rows.Scan(&transaction_price)
+		if err != nil {
+			log.Error("rows.Scan 錯誤:")
+			return -1, err
+		}
+		UnrealizedGainsLosses = append(UnrealizedGainsLosses, map[string]interface{}{
+			"transaction_price": transaction_price,
+		})
+	}
+
+	returnValue := 0.0
+	if types == "Highest" {
+		returnValue = -1
+	} else if types == "Lowest" {
+		returnValue = 1000000000
+	}
+
+	for _, record := range UnrealizedGainsLosses {
+		if types == "Highest" {
+			returnValue = max(returnValue, record["transaction_price"].(float64))
+		} else if types == "Lowest" {
+			returnValue = min(returnValue, record["transaction_price"].(float64))
+		}
+	}
+
+	if returnValue == 1000000000 {
+		returnValue = -1
+	}
+
+	return returnValue, nil
+}
