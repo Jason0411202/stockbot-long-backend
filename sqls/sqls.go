@@ -615,8 +615,8 @@ func SQLSellStock(log *logrus.Logger, stockID string, sellAmount float64) error 
 				return err
 			}
 
-			profit_loss := float64(sellAmount) - float64(really_investment_cost)                       // 計算損益
-			profit_rate := (float64(profit_loss) / float64(record["investment_cost"].(float64))) * 100 // 計算損益率
+			profit_loss := float64(sellAmount) - float64(really_investment_cost)          // 計算損益
+			profit_rate := (float64(profit_loss) / float64(really_investment_cost)) * 100 // 計算損益率
 			log.Info("profit_loss: ", profit_loss)
 			log.Info("profit_rate: ", profit_rate)
 
