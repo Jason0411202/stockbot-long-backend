@@ -259,7 +259,7 @@ func SellStock(log *logrus.Logger) {
 	log.Info("TrackStocksArray: ", trackStocksArray)
 
 	for _, stockID := range trackStocksArray { // 依序取出每一個股票 id
-		if CheckIfSell(log, stockID, trackStocks_market_array, trackStocks_highDividend_array) == 1 || 1 == 1 {
+		if CheckIfSell(log, stockID, trackStocks_market_array, trackStocks_highDividend_array) == 1 {
 			sellAmount := 0.0
 			if os.Getenv("Scaling_Strategy") == "AverageLine" { // 採用均線策略
 				log.Info("stockID: ", stockID, " 採用均線策略")
@@ -334,7 +334,7 @@ func DailyCheck(log *logrus.Logger) {
 			}
 		}
 		//BuyStock(log)
-		SellStock(log)
+		//SellStock(log)
 
 		time.Sleep(60 * time.Second)
 	}
