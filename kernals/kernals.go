@@ -238,6 +238,8 @@ func BuyStock(log *logrus.Logger) {
 				} else {
 					buyAmount = 9000.0
 				}
+			} else {
+				log.Error("環境變數 Scaling_Strategy 設定錯誤")
 			}
 
 			log.Info("stockID: ", stockID, " 買入金額: ", buyAmount)
@@ -302,6 +304,8 @@ func SellStock(log *logrus.Logger) {
 				} else {
 					sellAmount = 9000.0
 				}
+			} else {
+				log.Error("環境變數 Scaling_Strategy 設定錯誤")
 			}
 
 			log.Info("stockID: ", stockID, " 預計賣出金額: ", sellAmount)
