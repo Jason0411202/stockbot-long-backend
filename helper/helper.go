@@ -43,8 +43,8 @@ func GenerateDates(log *logrus.Logger, days int) []string {
 	now := time.Now() //取得現在時間
 	Dates := make([]string, 0)
 	for i := 0; i < days; i++ {
-		date := now.AddDate(0, 0, -i)                  // 往前推 i 天
-		Dates = append(Dates, date.Format("20060102")) // 格式化為 YYYYMMDD
+		date := now.AddDate(0, 0, -i)                    // 往前推 i 天
+		Dates = append(Dates, date.Format("2006-01-02")) // 格式化為 YYYYMMDD
 	}
 	// 從早到晚排序
 	for i, j := 0, len(Dates)-1; i < j; i, j = i+1, j-1 {

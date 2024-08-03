@@ -14,6 +14,9 @@ CREATE TABLE StockHistory (
     transactions INT, -- 成交筆數
     PRIMARY KEY (stock_id, date)
 );
+
+drop table UnrealizedGainsLosses;
+drop table RealizedGainsLosses;
 CREATE TABLE UnrealizedGainsLosses (
     transaction_date VARCHAR(50) NOT NULL, -- 交易日期
     stock_id VARCHAR(10) NOT NULL, -- 股票代號
