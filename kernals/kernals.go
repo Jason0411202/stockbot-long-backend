@@ -5,6 +5,7 @@ import (
 	"main/helper"
 	"main/sqls"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -320,6 +321,29 @@ func SellStock(log *logrus.Logger) {
 
 func DailyCheck(log *logrus.Logger) {
 	log.Info("DailyCheck 開始執行")
+
+	BackTesting, err := strconv.Atoi(os.Getenv("BackTesting")) // 是否開啟回測模式
+	if err != nil {
+		log.Error("BackTesting 環墋變數設定錯誤:", err)
+		return
+	}
+
+	if BackTesting != -1 { // 開啟回測模式
+		log.Info("進入回測模式")
+		err := sqls.UpdataDatebase(log) // 先更新資料庫
+		if err != nil {
+			log.Error("回測模式出錯，UpdataDatebase 錯誤:", err)
+		} else {
+			dates := helper.GenerateDates(log, BackTesting) // 生成從現在開始，往前推 BackTesting 年，每次間隔一天的日期，格式類似 "20240501"，由小至大排序
+			for _, date := range dates {
+				log.Info("date: ", date)
+				BuyStock(log)
+				SellStock(log)
+			}
+		}
+
+	}
+
 	taiwanTimeZone, err := time.LoadLocation("Asia/Taipei")
 	if err != nil {
 		log.Fatal("取得 taiwanTimeZone 時發生錯誤", err)

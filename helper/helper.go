@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/sirupsen/logrus"
 )
 
 func ValueInStringArray(value string, array []string) int {
@@ -33,4 +36,21 @@ func ROCToAD(lastBuyTime string) (string, error) {
 	}
 	adDate := fmt.Sprintf("%04d-%02d-%02d", adYear, adMonth, adDay) // 將 "113/01/01" 轉換成 "2024-01-01"
 	return adDate, nil
+}
+
+// 生成從現在開始，往前推 1 年，每次間隔一天的日期，格式類似 "20240501"
+func GenerateDates(log *logrus.Logger, days int) []string {
+	now := time.Now() //取得現在時間
+	Dates := make([]string, 0)
+	for i := 0; i < days; i++ {
+		date := now.AddDate(0, 0, -i)                  // 往前推 i 天
+		Dates = append(Dates, date.Format("20060102")) // 格式化為 YYYYMMDD
+	}
+	// 從早到晚排序
+	for i, j := 0, len(Dates)-1; i < j; i, j = i+1, j-1 {
+		Dates[i], Dates[j] = Dates[j], Dates[i]
+	}
+	log.Info("Dates: ", Dates)
+
+	return Dates
 }
