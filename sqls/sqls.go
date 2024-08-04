@@ -564,9 +564,9 @@ func SQLSellStock(log *logrus.Logger, stockID string, today string, sellAmount f
 	// 若 revenue < sellAmount，則刪除該筆未實現損益紀錄
 	// 若 revenue > sellAmount，則更新該筆未實現損益紀錄的 investment_cost = investment_cost - sellAmount*transaction_price/todayPrice，並離開迴圈
 	for {
-		record, err := GetNewestUnrealizedGainsLossesRecord(log, stockID, today) // 取得關於該股票 transaction_date 最新的一筆未實現損益紀錄
+		record, err := GetLowestUnrealizedGainsLossesRecord(log, stockID, today) // 取得關於該股票 transaction_price 最低的一筆未實現損益紀錄
 		if err != nil {
-			log.Error("GetNewestUnrealizedGainsLossesRecord 錯誤:")
+			log.Error("GetLowestUnrealizedGainsLossesRecord 錯誤:")
 			return err
 		}
 		log.Info("record: ", record)
@@ -581,9 +581,9 @@ func SQLSellStock(log *logrus.Logger, stockID string, today string, sellAmount f
 
 		if revenue == float64(sellAmount) { // 如果 revenue 剛好等於要賣的金額
 			log.Info("revenue == sellAmount")
-			err := DeleteNewestUnrealizedGainsLossesRecord(log, stockID, today) // 刪除該筆未實現損益紀錄 (全賣掉)
+			err := DeleteLowestUnrealizedGainsLossesRecord(log, stockID, record["transaction_date"].(string)) // 刪除該筆未實現損益紀錄 (全賣掉)
 			if err != nil {
-				log.Error("DeleteNewestUnrealizedGainsLossesRecord 錯誤:")
+				log.Error("DeleteLowestUnrealizedGainsLossesRecord 錯誤:")
 				return err
 			}
 
@@ -602,9 +602,9 @@ func SQLSellStock(log *logrus.Logger, stockID string, today string, sellAmount f
 			break // 離開迴圈
 		} else if revenue < float64(sellAmount) { // 如果 revenue 小於要賣的金額
 			log.Info("revenue < sellAmount")
-			err := DeleteNewestUnrealizedGainsLossesRecord(log, stockID, today) // 刪除該筆未實現損益紀錄 (全賣掉)
+			err := DeleteLowestUnrealizedGainsLossesRecord(log, stockID, record["transaction_date"].(string)) // 刪除該筆未實現損益紀錄 (全賣掉)
 			if err != nil {
-				log.Error("DeleteNewestUnrealizedGainsLossesRecord 錯誤:")
+				log.Error("DeleteLowestUnrealizedGainsLossesRecord 錯誤:")
 				return err
 			}
 			profit_loss := revenue - record["investment_cost"].(float64)                               // 計算損益
@@ -624,10 +624,10 @@ func SQLSellStock(log *logrus.Logger, stockID string, today string, sellAmount f
 
 		} else if revenue > float64(sellAmount) { // 如果 revenue 大於要賣的金額
 			log.Info("revenue > sellAmount")
-			really_investment_cost := float64(float64(sellAmount) * record["transaction_price"].(float64) / todayClosePrice)                         // 計算 "其實只要投資多少，便能賣出 sellAmount 的價值"
-			err := UpdateNewestUnrealizedGainsLossesRecord(log, stockID, record["investment_cost"].(float64)-float64(really_investment_cost), today) // 更新該筆未實現損益紀錄的 investment_cost
+			really_investment_cost := float64(float64(sellAmount) * record["transaction_price"].(float64) / todayClosePrice)                                                       // 計算 "其實只要投資多少，便能賣出 sellAmount 的價值"
+			err := UpdateLowestUnrealizedGainsLossesRecord(log, stockID, record["investment_cost"].(float64)-float64(really_investment_cost), record["transaction_date"].(string)) // 更新該筆未實現損益紀錄的 investment_cost
 			if err != nil {
-				log.Error("UpdateNewestUnrealizedGainsLossesRecord 錯誤:")
+				log.Error("UpdateLowestUnrealizedGainsLossesRecord 錯誤:")
 				return err
 			}
 
@@ -679,7 +679,7 @@ func InsertToRealizedGainsLosses(log *logrus.Logger, buy_date string, sell_date 
 
 }
 
-func GetNewestUnrealizedGainsLossesRecord(log *logrus.Logger, stockID string, today string) (map[string]interface{}, error) {
+func GetLowestUnrealizedGainsLossesRecord(log *logrus.Logger, stockID string, today string) (map[string]interface{}, error) {
 	db, err := ConnectToMariadb(log) // 連接至 Mariadb Server
 	if err != nil {
 		log.Error("ConnectToMariadb 錯誤:")
@@ -694,11 +694,11 @@ func GetNewestUnrealizedGainsLossesRecord(log *logrus.Logger, stockID string, to
 	}
 
 	// 準備 SQL 指令
-	SQL_cmd := "SELECT transaction_date, stock_id, stock_name, transaction_price, investment_cost FROM UnrealizedGainsLosses WHERE stock_id = ? AND transaction_date = ( SELECT MAX(transaction_date) FROM UnrealizedGainsLosses WHERE stock_id = ? AND transaction_date <= ?);"
-	log.Info("SQL_cmd: ", fmt.Sprintf(SQL_cmd, stockID, stockID, today))
+	SQL_cmd := "SELECT transaction_date, stock_id, stock_name, transaction_price, investment_cost FROM UnrealizedGainsLosses WHERE stock_id = ? AND transaction_date <= ? AND transaction_price = ( SELECT MIN(transaction_price) FROM UnrealizedGainsLosses WHERE stock_id = ? AND transaction_date <= ?) ORDER BY transaction_date ASC LIMIT 1;"
+	log.Info("SQL_cmd: ", fmt.Sprintf(SQL_cmd, stockID, today, stockID, today))
 
 	// 執行查詢
-	rows, err := db.Query(SQL_cmd, stockID, stockID, today)
+	rows, err := db.Query(SQL_cmd, stockID, today, stockID, today)
 	if err != nil {
 		log.Error("db.Query 錯誤:")
 		return nil, err
@@ -719,7 +719,7 @@ func GetNewestUnrealizedGainsLossesRecord(log *logrus.Logger, stockID string, to
 	}
 
 	if transaction_date == "" {
-		log.Warn("GetNewestUnrealizedGainsLossesRecord Query 回傳結果為空")
+		log.Warn("GetLowestUnrealizedGainsLossesRecord Query 回傳結果為空")
 		return nil, fmt.Errorf("在未實現損益紀錄中找不到 stock_id: %s 的資料", stockID)
 	}
 
@@ -734,7 +734,7 @@ func GetNewestUnrealizedGainsLossesRecord(log *logrus.Logger, stockID string, to
 	return returnValue, nil
 }
 
-func DeleteNewestUnrealizedGainsLossesRecord(log *logrus.Logger, stockID string, today string) error {
+func DeleteLowestUnrealizedGainsLossesRecord(log *logrus.Logger, stockID string, transaction_date string) error {
 	db, err := ConnectToMariadb(log) // 連接至 Mariadb Server
 	if err != nil {
 		log.Error("ConnectToMariadb 錯誤:")
@@ -749,11 +749,11 @@ func DeleteNewestUnrealizedGainsLossesRecord(log *logrus.Logger, stockID string,
 	}
 
 	// 準備 SQL 指令
-	SQL_cmd := "DELETE FROM UnrealizedGainsLosses WHERE stock_id = ? AND transaction_date = ( SELECT MAX(transaction_date) FROM UnrealizedGainsLosses WHERE stock_id = ? AND transaction_date <= ?);"
-	log.Info("SQL_cmd: ", fmt.Sprintf(SQL_cmd, stockID, stockID, today))
+	SQL_cmd := "DELETE FROM UnrealizedGainsLosses WHERE stock_id = ? AND transaction_date = ?;"
+	log.Info("SQL_cmd: ", fmt.Sprintf(SQL_cmd, stockID, transaction_date))
 
 	// 執行 SQL 指令
-	_, err = db.Exec(SQL_cmd, stockID, stockID, today)
+	_, err = db.Exec(SQL_cmd, stockID, transaction_date)
 	if err != nil {
 		log.Error("db.Exec 錯誤:")
 		return err
@@ -762,7 +762,7 @@ func DeleteNewestUnrealizedGainsLossesRecord(log *logrus.Logger, stockID string,
 	return nil
 }
 
-func UpdateNewestUnrealizedGainsLossesRecord(log *logrus.Logger, stockID string, investment_cost float64, today string) error {
+func UpdateLowestUnrealizedGainsLossesRecord(log *logrus.Logger, stockID string, investment_cost float64, transaction_date string) error {
 	db, err := ConnectToMariadb(log) // 連接至 Mariadb Server
 	if err != nil {
 		log.Error("ConnectToMariadb 錯誤:")
@@ -777,11 +777,11 @@ func UpdateNewestUnrealizedGainsLossesRecord(log *logrus.Logger, stockID string,
 	}
 
 	// 準備 SQL 指令
-	SQL_cmd := "UPDATE UnrealizedGainsLosses SET investment_cost = ? WHERE stock_id = ? AND transaction_date = ( SELECT MAX(transaction_date) FROM UnrealizedGainsLosses WHERE stock_id = ? AND date <= ?);"
-	log.Info("SQL_cmd: ", fmt.Sprintf(SQL_cmd, investment_cost, stockID, stockID, today))
+	SQL_cmd := "UPDATE UnrealizedGainsLosses SET investment_cost = ? WHERE stock_id = ? AND transaction_date = ?;"
+	log.Info("SQL_cmd: ", fmt.Sprintf(SQL_cmd, investment_cost, stockID, transaction_date))
 
 	// 執行 SQL 指令
-	_, err = db.Exec(SQL_cmd, investment_cost, stockID, stockID, today)
+	_, err = db.Exec(SQL_cmd, investment_cost, stockID, transaction_date)
 	if err != nil {
 		log.Error("db.Exec 錯誤:")
 		return err
