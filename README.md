@@ -77,7 +77,8 @@ MariadbHost=10.0.0.4 (伺服器 ip，可以由 ip a 查看)
 MariadbPort=3306 (資料庫所在的 port，預設為 3306)
 TrackStocks_Market=006208 (追蹤的市值型股票)
 TrackStocks_HighDividend=00929&0056 (追蹤的配息型股票)
-Scaling_Strategy=Pyramid (加減碼策略, 可以為 AverageLine 或 Pyramid)
+Scaling_Strategy=Pyramid (加減碼策略，可以為 Pyramid)
+BackTesting=1800 (回測天數，-1 代表不回測)
 ```
 5. 建立映像檔
 ```
