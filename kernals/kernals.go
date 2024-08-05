@@ -95,13 +95,33 @@ func CheckIfSell_TimeChecking(log *logrus.Logger, stockID string, Stocks_array [
 }
 
 func CheckIfBuy_BuyPointChecking(log *logrus.Logger, stockID string, today string) int {
-	lowerPointDays := sqls.LowerPointDays(log, stockID, today)
-	log.Info("stockID: ", stockID, " 目前落於近 ", lowerPointDays, " 天的低點")
-	if lowerPointDays >= 30 { // 如果是近 30 天以上的低點
-		return 1
-	} else {
-		log.Info("stockID: ", stockID, " 非近 30 天內的低點")
+	// lowerPointDays := sqls.LowerPointDays(log, stockID, today)
+	// log.Info("stockID: ", stockID, " 目前落於近 ", lowerPointDays, " 天的低點")
+	// if lowerPointDays >= 30 { // 如果是近 30 天以上的低點
+	// 	return 1
+	// } else {
+	// 	log.Info("stockID: ", stockID, " 非近 30 天內的低點")
+	// 	return 0
+	// }
+
+	AverageStockPrice20, err := sqls.GetAverageStockPrice(log, stockID, today, 20) // 取得 20 日均價
+	if err != nil {
+		log.Error("GetAverageStockPrice 錯誤:", err)
+		return -1
+	}
+
+	todayPrice, err := sqls.GetTodayStockPrice(log, stockID, today, "close_price") // 取得今日股價
+	if err != nil {
+		log.Error("GetTodayStockPrice 錯誤:", err)
+		return -1
+	}
+
+	if todayPrice >= AverageStockPrice20 { // 如果今日股價高於 20 日均價，則不買
+		log.Info("stockID: ", stockID, " 目前股價高於 20 日均價")
 		return 0
+	} else { // 如果今日股價低於 20 日均價，則買
+		log.Info("stockID: ", stockID, " 目前股價低於 20 日均價")
+		return 1
 	}
 }
 
@@ -185,6 +205,10 @@ func CheckIfBuy(log *logrus.Logger, stockID string, trackStocks_market_array []s
 }
 
 func CheckIfSell(log *logrus.Logger, stockID string, trackStocks_market_array []string, trackStocks_highDividend_array []string, today string) int {
+	if os.Getenv("Scaling_Strategy") == "Pyramid" { // 如果採用金字塔策略，則忽略賣點判斷
+		return 1
+	}
+
 	// 確認過去一個月內是否有賣過同類型的股票
 	if helper.ValueInStringArray(stockID, trackStocks_market_array) == 1 { // 如果是市值型股票
 		if CheckIfSell_TimeChecking(log, stockID, trackStocks_market_array, today) != 1 { // 如果過去一個月內有賣過同類型的股票
@@ -199,10 +223,10 @@ func CheckIfSell(log *logrus.Logger, stockID string, trackStocks_market_array []
 		return -1
 	}
 
-	// 確認是否符合賣點條件
-	if CheckIfSell_SellPointChecking(log, stockID, today) != 1 {
-		return 0
-	}
+	// // 確認是否符合賣點條件
+	// if CheckIfSell_SellPointChecking(log, stockID, today) != 1 {
+	// 	return 0
+	// }
 
 	return 1
 
@@ -248,16 +272,16 @@ func BuyStock(log *logrus.Logger, today string) {
 				}
 				log.Info("stockID: ", stockID, " 今日股價: ", todayPrice, " 最高價: ", HighestPrice, " 與最高價之相對比例: ", percentages)
 
-				if percentages > -0.15 {
-					buyAmount = 3000.0
+				if percentages > -0.1 {
+					buyAmount = 1000.0
+				} else if percentages > -0.2 {
+					buyAmount = 1500.0
 				} else if percentages > -0.3 {
-					buyAmount = 4500.0
-				} else if percentages > -0.45 {
-					buyAmount = 6000.0
-				} else if percentages > -0.6 {
-					buyAmount = 7500.0
+					buyAmount = 2500.0
+				} else if percentages > -0.4 {
+					buyAmount = 4000.0
 				} else {
-					buyAmount = 9000.0
+					buyAmount = 6000.0
 				}
 			} else {
 				log.Error("環境變數 Scaling_Strategy 設定錯誤")
@@ -314,19 +338,24 @@ func SellStock(log *logrus.Logger, today string) {
 				}
 				log.Info("stockID: ", stockID, " 今日股價: ", todayPrice, " 最低價: ", LowestPrice, " 與最低價之相對比例: ", percentages)
 
-				if percentages < 0.15 {
-					sellAmount = 3000.0
+				if percentages < 0.1 {
+					sellAmount = 0.0
+				} else if percentages < 0.2 {
+					sellAmount = 0.0
 				} else if percentages < 0.3 {
-					sellAmount = 4500.0
-				} else if percentages < 0.45 {
-					sellAmount = 6000.0
-				} else if percentages < 0.6 {
-					sellAmount = 7500.0
+					sellAmount = 0.0
+				} else if percentages < 1 {
+					sellAmount = 0.0
 				} else {
-					sellAmount = 9000.0
+					sellAmount = 20000.0
 				}
 			} else {
 				log.Error("環境變數 Scaling_Strategy 設定錯誤")
+			}
+
+			if sellAmount == 0.0 {
+				log.Info("stockID: ", stockID, " 不符合賣出條件")
+				continue
 			}
 
 			log.Info("stockID: ", stockID, " 預計賣出金額: ", sellAmount)
