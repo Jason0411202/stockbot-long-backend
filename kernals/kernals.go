@@ -12,7 +12,7 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// 用來確認過去一個月內有沒有買過與 stockID 同型的股票
+// 用來確認過去兩個禮拜內有沒有買過與 stockID 同型的股票
 func CheckIfBuy_TimeChecking(log *logrus.Logger, stockID string, Stocks_array []string, today string) int {
 	for _, trackStocks := range Stocks_array { // 依序取出每一個同型股票 id
 		lastBuyTime, err := sqls.LastBuyTime(log, trackStocks, today) // 取得該股票的最後一次買入時間
@@ -45,9 +45,9 @@ func CheckIfBuy_TimeChecking(log *logrus.Logger, stockID string, Stocks_array []
 			}
 			log.Info("today: ", today)
 
-			// 如果一個月內有買過
-			if today.Sub(lastBuyTime).Hours() < 720 && today.Sub(lastBuyTime).Hours() >= 0 {
-				log.Info("過去一個月內有買過與 "+stockID+" 同型的股票: ", trackStocks, ", 買入時間: ", lastBuyTime)
+			// 如果兩個禮拜內有買過
+			if today.Sub(lastBuyTime).Hours() < 336 && today.Sub(lastBuyTime).Hours() >= 0 {
+				log.Info("過去兩個禮拜內有買過與 "+stockID+" 同型的股票: ", trackStocks, ", 買入時間: ", lastBuyTime)
 				return 0
 			}
 		}
@@ -56,6 +56,7 @@ func CheckIfBuy_TimeChecking(log *logrus.Logger, stockID string, Stocks_array []
 	return 1
 }
 
+// 用來確認過去兩個禮拜內有沒有賣過與 stockID 同型的股票
 func CheckIfSell_TimeChecking(log *logrus.Logger, stockID string, Stocks_array []string, today string) int {
 	for _, trackStocks := range Stocks_array { // 依序取出每一個同型股票 id
 		lastSellTime, err := sqls.LastSellTime(log, trackStocks, today) // 取得該股票的最後一次賣出時間
@@ -82,9 +83,9 @@ func CheckIfSell_TimeChecking(log *logrus.Logger, stockID string, Stocks_array [
 			}
 			log.Info("today: ", today)
 
-			// 如果一個月內有賣過
-			if today.Sub(lastSellTime).Hours() < 720 && today.Sub(lastSellTime).Hours() >= 0 {
-				log.Info("過去一個月內有賣過與 "+stockID+" 同型的股票: ", trackStocks, ", 賣出時間: ", lastSellTime)
+			// 如果兩個禮拜內有賣過
+			if today.Sub(lastSellTime).Hours() < 336 && today.Sub(lastSellTime).Hours() >= 0 {
+				log.Info("過去兩個禮拜內有賣過與 "+stockID+" 同型的股票: ", trackStocks, ", 賣出時間: ", lastSellTime)
 				return 0
 			}
 		}
@@ -273,15 +274,15 @@ func BuyStock(log *logrus.Logger, today string) {
 				log.Info("stockID: ", stockID, " 今日股價: ", todayPrice, " 最高價: ", HighestPrice, " 與最高價之相對比例: ", percentages)
 
 				if percentages > -0.1 {
-					buyAmount = 1000.0
+					buyAmount = 500.0
 				} else if percentages > -0.2 {
-					buyAmount = 1500.0
+					buyAmount = 750.0
 				} else if percentages > -0.3 {
-					buyAmount = 2500.0
+					buyAmount = 1300.0
 				} else if percentages > -0.4 {
-					buyAmount = 4000.0
+					buyAmount = 2000.0
 				} else {
-					buyAmount = 6000.0
+					buyAmount = 3000.0
 				}
 			} else {
 				log.Error("環境變數 Scaling_Strategy 設定錯誤")
@@ -347,7 +348,7 @@ func SellStock(log *logrus.Logger, today string) {
 				} else if percentages < 1 {
 					sellAmount = 0.0
 				} else {
-					sellAmount = 20000.0
+					sellAmount = 10000.0
 				}
 			} else {
 				log.Error("環境變數 Scaling_Strategy 設定錯誤")
