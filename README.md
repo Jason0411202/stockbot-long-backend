@@ -112,3 +112,9 @@ sudo docker run -p 8000:8000 --env-file .env --restart=always -d --name stockbot
 * 從 2024/08/05 回測過去五年的績效
   * 最大投入金額約為 70000
   * 總淨損益約為 84000 (已實現損益 71858.14, 未實現損益 7067.04)
+
+## ToDo
+* [ ] 把 mariadb 跟 nginx 的安裝過程 + 專案的執行寫成 docker-compose
+* [ ] 加入針對 RSI 指標的的加碼賣出邏輯，並回測效果
+* [ ] 加入 ELK 來管理 log
+* [ ] 加入 Kubernetes 來管理容器
