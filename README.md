@@ -29,7 +29,7 @@
   ```
   sudo mysql -h localhost -u root -p
   CREATE USER 'exampleuser'@'%' IDENTIFIED BY 'examplepassword';
-  GRANT ALL PRIVILEGES ON *.* TO 'externaluser'@'%';
+  GRANT ALL PRIVILEGES ON *.* TO 'exampleuser'@'%';
   FLUSH PRIVILEGES;
   ```
 2. 獲取 https 憑證，並把憑證貼到專案根目錄下 (`jason-server.eastus2.cloudapp.azure.com` 是自己伺服器的 DNS 名稱，剛生成的憑證會存在 `/etc/letsencrypt/live/jason-server.eastus2.cloudapp.azure.com/` 中，這些指令在專案根目錄下執行)
@@ -95,18 +95,18 @@ sudo docker run -p 8000:8000 --env-file .env --restart=always -d --name stockbot
 ## 買賣邏輯
 * 主攻市值型 ETF 長線 + 波段交易
 * 台股市值型 (00631L) 與美股市值型 (00830, 00662) ETF 計數器分開計算
-* 當股價來到時 20 MA 以下時執行買入操作，買入金額參考加減碼邏輯，操作後一個月內不再進行任何關於該型的購買操作
+* 當股價來到時 20 MA 以下時執行買入操作，買入金額參考加減碼邏輯，操作後半個月內不再進行任何關於該型的購買操作
 * 當某支追蹤的股票，其最低購買價的獲利超過 100% 時，固定進行賣出操作，賣出金額參考加減碼邏輯，本操作沒有冷卻
 
 ### 加減碼邏輯
 #### 金字塔策略 (Pyramid)
 * 買入金額按照當前股價相對於過去購買時的最高股價之價差比例，越低買越多
-  * -0% 共買 1000
-  * -10% 共買 1500
-  * -20% 共買 2000
-  * -30% 共買 4000
-  * -40% 共買 6000
-* 賣出金額固定為 20000
+  * -0% 共買 500
+  * -10% 共買 750
+  * -20% 共買 1300
+  * -30% 共買 2000
+  * -40% 共買 3000
+* 賣出金額固定為 10000
 
 ## 績效
 * 從 2024/08/05 回測過去五年的績效
@@ -118,3 +118,4 @@ sudo docker run -p 8000:8000 --env-file .env --restart=always -d --name stockbot
 * [ ] 加入針對 RSI 指標的的加碼賣出邏輯，並回測效果
 * [ ] 加入 ELK 來管理 log
 * [ ] 加入 Kubernetes 來管理容器
+* [ ] 暴搜找出最佳參數 (如買入賣出金額、間隔等等)
