@@ -1,6 +1,6 @@
-CREATE DATABASE StockLongData;
+CREATE DATABASE IF NOT EXISTS StockLongData;
 USE StockLongData;
-CREATE TABLE StockHistory (
+CREATE TABLE IF NOT EXISTS StockHistory (
     stock_id VARCHAR(10) NOT NULL, -- 股票代號
     stock_name VARCHAR(50), -- 股票名稱
     date VARCHAR(50), -- 日期
@@ -15,9 +15,7 @@ CREATE TABLE StockHistory (
     PRIMARY KEY (stock_id, date)
 );
 
-drop table UnrealizedGainsLosses;
-drop table RealizedGainsLosses;
-CREATE TABLE UnrealizedGainsLosses (
+CREATE TABLE IF NOT EXISTS UnrealizedGainsLosses (
     transaction_date VARCHAR(50) NOT NULL, -- 交易日期
     stock_id VARCHAR(10) NOT NULL, -- 股票代號
     stock_name VARCHAR(50) NOT NULL, -- 股票名稱
@@ -25,7 +23,7 @@ CREATE TABLE UnrealizedGainsLosses (
     investment_cost DECIMAL(10, 2) NOT NULL, -- 投資成本
     PRIMARY KEY (transaction_date, stock_id)
 );
-CREATE TABLE RealizedGainsLosses (
+CREATE TABLE IF NOT EXISTS RealizedGainsLosses (
     buy_date DATE NOT NULL, -- 買入日期
     sell_date DATE NOT NULL, -- 賣出日期
     stock_id VARCHAR(10) NOT NULL, -- 股票代號

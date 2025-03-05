@@ -182,31 +182,25 @@ func InitDatabase(log *logrus.Logger) error {
 		return err
 	}
 
-	err = ConnectToDatabase(db, log, "StockLongData") // 嘗試使用資料庫 "StockLongData"
+	// 執行同一目錄下的腳本 SQLcommend.sql，建立資料庫以及相關 table
+	sqlContent, err := os.ReadFile("./sqls/SQLcommend.sql")
 	if err != nil {
-		log.Warn("StockLongData 資料庫不存在:", err)
-		log.Info("重新建立資料庫與對應 table 中...")
-
-		// 若資料庫 "StockLongData" 不存在，則執行同一目錄下的腳本 SQLcommend.sql，建立資料庫以及相關 table
-		sqlContent, err := os.ReadFile("./sqls/SQLcommend.sql")
-		if err != nil {
-			log.Error("無法讀取 SQLcommend.sql 檔案:")
-			return err
-		}
-		_, err = db.Exec(string(sqlContent))
-		if err != nil {
-			log.Error("執行 SQLcommend.sql 檔案錯誤:")
-			return err
-		}
-
-		_, err = db.Exec("USE StockLongData")
-		if err != nil {
-			log.Error("建立 StockLongData 資料庫失敗:")
-			return err
-		}
-
-		log.Info("資料庫與對應 table 建立完成")
+		log.Error("無法讀取 SQLcommend.sql 檔案:")
+		return err
 	}
+	_, err = db.Exec(string(sqlContent))
+	if err != nil {
+		log.Error("執行 SQLcommend.sql 檔案錯誤:")
+		return err
+	}
+
+	_, err = db.Exec("USE StockLongData")
+	if err != nil {
+		log.Error("建立 StockLongData 資料庫失敗:")
+		return err
+	}
+
+	log.Info("資料庫與對應 table 建立完成")
 
 	err = UpdataDatebase(log)
 	if err != nil {
