@@ -951,6 +951,51 @@ func GetStockStatisticData(log *logrus.Logger) ([]map[string]interface{}, error)
 	return returnValue, nil
 }
 
+func GetStockHistoryData(log *logrus.Logger, stockId string) ([]map[string]interface{}, error) {
+	db, err := ConnectToMariadb(log) // 連接至 Mariadb Server
+	if err != nil {
+		log.Error("ConnectToMariadb 錯誤:")
+		return nil, err
+	}
+	defer db.Close()
+
+	err = ConnectToDatabase(db, log, "StockLongData") // 嘗試使用資料庫 "StockLongData"
+	if err != nil {
+		log.Error("ConnectToDatabase 錯誤:")
+		return nil, err
+	}
+
+	// 準備 SQL 指令
+	SQL_cmd := "SELECT date, close_price FROM StockHistory WHERE stock_id = ? ORDER BY date ASC;"
+	log.Info("SQL_cmd: ", fmt.Sprintf(SQL_cmd, stockId))
+
+	// 執行查詢
+	rows, err := db.Query(SQL_cmd, stockId)
+	if err != nil {
+		log.Error("db.Query 錯誤:")
+		return nil, err
+	}
+	defer rows.Close()
+
+	returnValue := make([]map[string]interface{}, 0)
+	for rows.Next() {
+		date := ""   // 日期
+		price := 0.0 // 收盤價
+		err := rows.Scan(&date, &price)
+		if err != nil {
+			log.Error("rows.Scan 錯誤:")
+			return nil, err
+		}
+
+		returnValue = append(returnValue, map[string]interface{}{
+			"date":  date,
+			"price": price,
+		})
+	}
+
+	return returnValue, nil
+}
+
 // 取得未實現損益中，某支股票的最高或最低交易價格，若無資料則回傳 -1
 func GetTransactionPriceOfUnrealizedGainsLosses(log *logrus.Logger, stockID string, today string, types string) (float64, error) {
 	db, err := ConnectToMariadb(log) // 連接至 Mariadb Server
