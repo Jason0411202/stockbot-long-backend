@@ -1,36 +1,32 @@
 package main
 
 import (
-	"database/sql"
+	"main/app_context"
 	"main/echoframework"
 	"main/kernals"
-	"main/logs"
 	"main/sqls"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/joho/godotenv"
-	"github.com/sirupsen/logrus"
 )
 
-var log *logrus.Logger
-var db *sql.DB
-
-func Init() {
-	log = logs.InitLogger()      // 初始化 log
+func Init(appCtx *app_context.AppContext) {
 	err := godotenv.Load(".env") // 環境變數 .env 檔案相對於程式的路徑
 	if err != nil {
-		log.Error("無法載入 .env 檔案")
+		appCtx.Log.Error("無法載入 .env 檔案")
 	}
 
-	err = sqls.InitDatabase(log) // 初始化資料庫
+	err = sqls.InitDatabase(appCtx) // 初始化資料庫
 	if err != nil {
-		log.Fatal("初始化資料庫錯誤:", err)
+		appCtx.Log.Fatal("初始化資料庫錯誤:", err)
 	}
 
-	go echoframework.EchoInit(log)
+	go echoframework.EchoInit(appCtx)
 }
 
 func main() {
-	Init()
-	kernals.DailyCheck(log)
+	appCtx := app_context.NewAppContext()
+
+	Init(appCtx)
+	kernals.DailyCheck(appCtx)
 }

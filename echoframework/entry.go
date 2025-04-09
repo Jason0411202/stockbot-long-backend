@@ -1,12 +1,13 @@
 package echoframework
 
 import (
+	"main/app_context"
+
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
-	"github.com/sirupsen/logrus"
 )
 
-func EchoInit(log *logrus.Logger) {
+func EchoInit(appCtx *app_context.AppContext) {
 	e := echo.New() //建立一個 Echo 物件
 
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{ // 設定 CORS
@@ -17,5 +18,5 @@ func EchoInit(log *logrus.Logger) {
 	EchoRouting(e) // 設定 routing 規則
 
 	// 啟動 https 伺服器
-	log.Fatal(e.StartTLS(":8000", "cert.pem", "privkey.pem"))
+	appCtx.Log.Fatal(e.StartTLS(":8000", "cert.pem", "privkey.pem"))
 }

@@ -2,11 +2,12 @@ package helper
 
 import (
 	"fmt"
+	"main/app_context"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/sirupsen/logrus"
+	"github.com/labstack/gommon/log"
 )
 
 func ValueInStringArray(value string, array []string) int {
@@ -39,7 +40,7 @@ func ROCToAD(lastBuyTime string) (string, error) {
 }
 
 // 生成從現在開始，往前推 1 年，每次間隔一天的日期，格式類似 "20240501"
-func GenerateDates(log *logrus.Logger, days int) []string {
+func GenerateDates(appCtx *app_context.AppContext, days int) []string {
 	now := time.Now() //取得現在時間
 	Dates := make([]string, 0)
 	for i := 0; i < days; i++ {
