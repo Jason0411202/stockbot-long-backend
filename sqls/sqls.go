@@ -86,13 +86,13 @@ func UpdataDatebase(log *logrus.Logger) error {
 	currentDate := now.Format("20060102") // 格式化為 YYYYMMDD
 	log.Info("currentDate: ", currentDate)
 
-	// 將 currentDate 每隔一個月回推，共回推 72 次 (六年)，存成 Dates 陣列，例如 [20240627 20240501 ... 20230701]
+	// 將 currentDate 每隔一個月回推，共回推 119 次 (十二年)，存成 Dates 陣列，例如 [20240627 20240501 ... 20230701]
 	currentYear, _ := strconv.Atoi(currentDate[:4])
 	currentMonth, _ := strconv.Atoi(currentDate[4:6])
 
 	Dates := make([]string, 0)
 	Dates = append(Dates, currentDate)
-	for i := 0; i < 71; i++ {
+	for i := 0; i < 119; i++ {
 		currentMonth--
 		if currentMonth == 0 {
 			currentMonth = 12
