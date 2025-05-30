@@ -5,9 +5,10 @@
   sudo apt update
   sudo apt upgrade
   sudo apt install software-properties-common
+  sudo apt-key adv --recv-keys --keyserver keyserver.ubuntu.com F1656F24C74CD1D8
   sudo add-apt-repository 'deb [arch=amd64,arm64,ppc64el] http://mirrors.aliyun.com/mariadb/repo/10.5/ubuntu bionic main'
   sudo apt update
-  sudo apt install mariadb-server
+  sudo apt install mariadb-server --fix-missing
   ```
   並使用以下指令初始化資料庫設定
   ```
@@ -16,6 +17,7 @@
   修改配置檔，使得容器能夠連接到資料庫
   ```
   /etc/mysql/mariadb.conf.d/50-server.cnf 中的 bind-address 改成 0.0.0.0
+  sudo systemctl restart mariadb
   ```
   修改防火牆設定
   ```
@@ -35,7 +37,7 @@
 2. 獲取 https 憑證，並把憑證貼到專案根目錄下 (`jason-server.eastus2.cloudapp.azure.com` 是自己伺服器的 DNS 名稱，剛生成的憑證會存在 `/etc/letsencrypt/live/jason-server.eastus2.cloudapp.azure.com/` 中，這些指令在專案根目錄下執行)
   ```
   sudo apt-get update
-  sudo apt-get install certbot python3-certbot-nginx
+  sudo apt-get install certbot python3-certbot-nginx --fix-missing
   sudo certbot --nginx -d jason-server.eastus2.cloudapp.azure.com
   sudo cp /etc/letsencrypt/live/jason-server.eastus2.cloudapp.azure.com/cert.pem .
   sudo cp /etc/letsencrypt/live/jason-server.eastus2.cloudapp.azure.com/privkey.pem .
@@ -68,8 +70,28 @@
   ```
   sudo service nginx restart
   ```
-  
-4. 配置 .env 檔案
+
+4. 切換當前工作目錄至 `backend` 資料夾，安裝 docker 跟 docker-compose
+    ```shell
+    # Add Docker's official GPG key:
+    sudo apt-get update
+    sudo apt-get install ca-certificates curl
+    sudo install -m 0755 -d /etc/apt/keyrings
+    sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+    sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+    # Add the repository to Apt sources:
+    echo \
+    "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+    $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" | \
+    sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+    sudo apt-get update
+
+    sudo apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+    sudo apt install docker-compose
+    ```
+
+5. 配置 .env 檔案
 ```
 MariadbUser=exampleuser (剛剛創建的帳號)
 MariadbPassword=examplepassword (剛剛創建的密碼)
@@ -80,11 +102,12 @@ TrackStocks_HighDividend=00929&0056 (追蹤的配息型股票)
 Scaling_Strategy=Pyramid (加減碼策略，可以為 Pyramid)
 BackTesting=1800 (回測天數，-1 代表不回測)
 ```
-5. 建立映像檔
+* 註: 若是使用 container 運行本專案，使用 `ip addr show docker0` 來獲取 `MariadbHost` 的值
+6. 建立映像檔
 ```
 sudo docker build -t "stockbot-long-backend" .
 ```
-6. 執行容器
+7. 執行容器
 ```
 sudo docker run -p 8000:8000 --env-file .env --restart=always -d --name stockbot-long-backend stockbot-long-backend
 ```
