@@ -3,6 +3,7 @@ package kernals
 import (
 	"fmt"
 	"main/app_context"
+	"main/discord"
 	"main/helper"
 	"main/sqls"
 	"os"
@@ -294,6 +295,10 @@ func BuyStock(appCtx *app_context.AppContext, today string) {
 				continue
 			}
 			appCtx.Log.Info("stockID: ", stockID, " 買入成功，買入金額: ", buyAmount)
+			err = discord.SendEmbedDiscordMessage(appCtx, "🔴 買入通知", fmt.Sprintf("stockID: %s, 買入金額: %.2f", stockID, buyAmount), 0xD50000) // 發送 Discord 訊息
+			if err != nil {
+				appCtx.Log.Error("發送 Discord 訊息失敗:", err)
+			}
 		}
 	}
 }
@@ -363,6 +368,10 @@ func SellStock(appCtx *app_context.AppContext, today string) {
 			if err != nil {
 				appCtx.Log.Error("SQLSellStock 錯誤:", err)
 				continue
+			}
+			err = discord.SendEmbedDiscordMessage(appCtx, "🟢 賣出通知", fmt.Sprintf("stockID: %s, 賣出金額: %.2f", stockID, sellAmount), 0x00C853) // 發送 Discord 訊息
+			if err != nil {
+				appCtx.Log.Error("發送 Discord 訊息失敗:", err)
 			}
 		}
 	}
