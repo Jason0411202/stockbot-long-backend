@@ -288,6 +288,16 @@ func BuyStock(appCtx *app_context.AppContext, today string) {
 				appCtx.Log.Error("環境變數 Scaling_Strategy 設定錯誤")
 			}
 
+			multiplier := os.Getenv("BuyAndSell_Multiplier") // 隨著本金增多，買賣金額也會透過自行設定的參數，成倍數增長
+			if multiplier != "" {
+				multiplier_float, err := strconv.ParseFloat(multiplier, 64)
+				if err != nil {
+					appCtx.Log.Error("解析 BuyAndSell_Multiplier 時發生錯誤:", err)
+					multiplier_float = 1.0
+				}
+				buyAmount *= multiplier_float
+			}
+
 			appCtx.Log.Info("stockID: ", stockID, " 買入金額: ", buyAmount)
 			err := sqls.SQLBuyStock(appCtx, stockID, today, buyAmount)
 			if err != nil {
@@ -363,13 +373,23 @@ func SellStock(appCtx *app_context.AppContext, today string) {
 				continue
 			}
 
+			multiplier := os.Getenv("BuyAndSell_Multiplier") // 隨著本金增多，買賣金額也會透過自行設定的參數，成倍數增長
+			if multiplier != "" {
+				multiplier_float, err := strconv.ParseFloat(multiplier, 64)
+				if err != nil {
+					appCtx.Log.Error("解析 BuyAndSell_Multiplier 時發生錯誤:", err)
+					multiplier_float = 1.0
+				}
+				sellAmount *= multiplier_float
+			}
+
 			appCtx.Log.Info("stockID: ", stockID, " 預計賣出金額: ", sellAmount)
 			err := sqls.SQLSellStock(appCtx, stockID, today, sellAmount)
 			if err != nil {
 				appCtx.Log.Error("SQLSellStock 錯誤:", err)
 				continue
 			}
-			err = discord.SendEmbedDiscordMessage(appCtx, "🟢 賣出通知", fmt.Sprintf("stockID: %s, 賣出金額: %.2f", stockID, sellAmount), 0x00C853) // 發送 Discord 訊息
+			err = discord.SendEmbedDiscordMessage(appCtx, "🟢 賣出通知", fmt.Sprintf("stockID: %s, 預計最多賣出金額: %.2f", stockID, sellAmount), 0x00C853) // 發送 Discord 訊息
 			if err != nil {
 				appCtx.Log.Error("發送 Discord 訊息失敗:", err)
 			}

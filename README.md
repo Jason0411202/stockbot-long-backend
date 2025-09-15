@@ -102,6 +102,7 @@ DISCORD_BOT_CHANNELID=185616854896156165 (你的 discord bot 頻道 id, 允許�
 TrackStocks_Market=006208 (追蹤的市值型股票)
 TrackStocks_HighDividend=00929&0056 (追蹤的配息型股票)
 Scaling_Strategy=Pyramid (加減碼策略，可以為 Pyramid)
+BuyAndSell_Multiplier=2.0 (隨著本金增多，買賣金額也會透過自行設定的參數，成倍數增長, 未指定時預設為 1.0)
 BackTesting=1800 (回測天數，-1 代表不回測)
 ```
 * 註: 若是使用 container 運行本專案，使用 `ip addr show docker0` 來獲取 `MariadbHost` 的值
