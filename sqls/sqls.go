@@ -154,8 +154,11 @@ func ConnectToMariadb(appCtx *app_context.AppContext) error {
 	}
 
 	// appCtx.Db 不可用，重連接至 Mariadb Server
-	db, err := sql.Open("mysql", fmt.Sprintf("%s:%s@tcp(%s:%s)/?multiStatements=true", os.Getenv("MariadbUser"),
-		os.Getenv("MariadbPassword"), os.Getenv("MariadbHost"), os.Getenv("MariadbPort")))
+	dsn := os.Getenv("DB_DSN")
+	if dsn == "" {
+		return fmt.Errorf("DB_DSN 環境變數未設定")
+	}
+	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		return err
 	}

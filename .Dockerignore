@@ -1,3 +1,7 @@
 .env
 cert.pem
 privkey.pem
+.git
+.github
+*.md
+tmp/

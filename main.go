@@ -14,7 +14,7 @@ import (
 func Init(appCtx *app_context.AppContext) {
 	err := godotenv.Load(".env") // 環境變數 .env 檔案相對於程式的路徑
 	if err != nil {
-		appCtx.Log.Error("無法載入 .env 檔案")
+		appCtx.Log.Warn("未找到 .env 檔案，使用系統環境變數")
 	}
 
 	err = sqls.InitDatabase(appCtx) // 初始化資料庫

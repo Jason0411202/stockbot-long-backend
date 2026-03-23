@@ -1,0 +1,72 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  # ─── Job 1：測試 ───
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - run: go mod download
+      - run: go vet ./...
+      - run: go test ./... -v
+
+  # ─── Job 2：Build & Push Image ───
+  build:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ github.sha }}
+            ${{ env.IMAGE }}:latest
+
+  # ─── Job 3：更新 Manifest Repo（觸發 ArgoCD）───
+  deploy:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: Jason0411202/stockbot-long-backend-k8s-manifests
+          token: ${{ secrets.MANIFEST_REPO_PAT }}
+          path: manifests
+
+      - name: Update image tag
+        run: |
+          cd manifests
+          sed -i "s|tag:.*|tag: \"${{ github.sha }}\"|" values.yaml
+
+      - name: Commit and push
+        run: |
+          cd manifests
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add values.yaml
+          git diff --staged --quiet || git commit -m "deploy: stockbot-long-backend@${{ github.sha }}"
+          git push
