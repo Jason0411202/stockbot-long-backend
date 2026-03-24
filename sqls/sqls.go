@@ -79,18 +79,29 @@ func UpdataDatebase(appCtx *app_context.AppContext) error {
 		return err
 	}
 
-	// 生成從現在開始，往前推 1 年，每次間隔一個月的日期，格式類似 "20240501"
+	// Generate dates from now, going back maxBackMonths months (default 1), format "20240501"
 	now := time.Now()                     //取得現在時間
 	currentDate := now.Format("20060102") // 格式化為 YYYYMMDD
 	appCtx.Log.Info("currentDate: ", currentDate)
 
-	// 將 currentDate 每隔一個月回推，共回推 119 次 (十二年)，存成 Dates 陣列，例如 [20240627 20240501 ... 20230701]
+	maxBackMonths := 1
+	maxBackMonthsEnv := strings.TrimSpace(os.Getenv("MaxBackMonths"))
+	if maxBackMonthsEnv != "" {
+		parsed, err := strconv.Atoi(maxBackMonthsEnv)
+		if err != nil || parsed < 0 {
+			appCtx.Log.Warn("MaxBackMonths env invalid, using default 1")
+		} else {
+			maxBackMonths = parsed
+		}
+	}
+
+	// Backfill from currentDate monthly for maxBackMonths, store in Dates, e.g. [20240627 20240501 ... 20230701]
 	currentYear, _ := strconv.Atoi(currentDate[:4])
 	currentMonth, _ := strconv.Atoi(currentDate[4:6])
 
 	Dates := make([]string, 0)
 	Dates = append(Dates, currentDate)
-	for i := 0; i < 119; i++ {
+	for i := 0; i < maxBackMonths; i++ {
 		currentMonth--
 		if currentMonth == 0 {
 			currentMonth = 12

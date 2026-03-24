@@ -66,8 +66,20 @@ TrackStocks_Market=00631L
 TrackStocks_HighDividend=00830&00662
 Scaling_Strategy=Pyramid
 BuyAndSell_Multiplier=2.0
+MaxBackMonths=1
 BackTesting=3600
 ```
+
+**Env Keys**
+1. `DB_DSN`: MariaDB connection string.
+2. `DISCORD_BOT_TOKEN`: Discord bot token.
+3. `DISCORD_BOT_CHANNELID`: Discord channel ID.
+4. `TrackStocks_Market`: Market watchlist, separated by `&`.
+5. `TrackStocks_HighDividend`: High-dividend watchlist, separated by `&`.
+6. `Scaling_Strategy`: Strategy name, e.g. `Pyramid` or `AverageLine`.
+7. `BuyAndSell_Multiplier`: Buy/sell amount multiplier.
+8. `MaxBackMonths`: Max monthly backfill count, default `1`.
+9. `BackTesting`: Backtest days, `-1` disables.
 
 > **DB_DSN 中的 host**：容器連接宿主機的 MariaDB，使用 `ip addr show docker0` 取得 Docker bridge IP（通常是 `172.17.0.1`）。
 
