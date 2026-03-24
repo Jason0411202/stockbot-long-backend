@@ -143,7 +143,7 @@ curl https://your-domain.com/health  # → 透過 Nginx 的 HTTPS
 
 ---
 
-## CI/CD + k8s 部署 (本地部署不需設定)
+## CI/CD + k8s 部署 (本地部署可跳過)
 ### 設定與 CD pipeline 串接的 GitHub Actions Secret
 需要在 GitHub repo Settings → Secrets → Actions 設定：
 
