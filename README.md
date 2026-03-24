@@ -131,15 +131,8 @@ curl https://your-domain.com/health  # → 透過 Nginx 的 HTTPS
 
 ---
 
-## CI/CD 流程
-
-```
-push to main → GitHub Actions
-  ├── go test + go vet
-  ├── docker build → push to GHCR
-  └── 更新 manifests repo image tag → ArgoCD 自動部署
-```
-
+## CI/CD + k8s 部署 (本地部署不需設定)
+### 設定與 CD pipeline 串接的 GitHub Actions Secret
 需要在 GitHub repo Settings → Secrets → Actions 設定：
 
 | Secret | 說明 |
@@ -148,7 +141,7 @@ push to main → GitHub Actions
 
 `GITHUB_TOKEN` 自動提供，不需手動設定。
 
-### 如何建立 MANIFEST_REPO_PAT
+#### 如何建立 MANIFEST_REPO_PAT
 
 1. 前往 GitHub → 右上角頭像 → **Settings** → 左側最下方 **Developer settings**
 2. 選擇 **Personal access tokens** → **Fine-grained tokens** → **Generate new token**
@@ -163,6 +156,32 @@ push to main → GitHub Actions
    - **Secret**：貼上剛才複製的 token
 
 ---
+
+### 匯入本 App 環境變數到 K8s
+App 本身所需的環境變數（.env）需要匯入為 K8s Secret，供 Pod 使用。
+
+#### 步驟
+
+1. 切換到目標 `.env` 的所在目錄
+2. 執行以下指令：
+
+```bash
+kubectl -n myapp create secret generic myapp-env \
+  --from-env-file=.env \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+#### 驗證
+
+```bash
+kubectl -n myapp get secret myapp-env -o yaml   # 確認 Secret 已建立
+kubectl -n myapp rollout restart deployment myapp  # 重啟 Pod 以套用新的環境變數
+```
+
+#### 更新
+
+修改 `.env` 後重新執行上面的 `kubectl create secret` 指令即可，`--dry-run=client -o yaml | kubectl apply -f -` 會自動覆蓋舊值。
+
 
 ## 前端
 
