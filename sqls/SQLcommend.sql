@@ -20,7 +20,8 @@ CREATE TABLE IF NOT EXISTS UnrealizedGainsLosses (
     stock_id VARCHAR(10) NOT NULL, -- 股票代號
     stock_name VARCHAR(50) NOT NULL, -- 股票名稱
     transaction_price DECIMAL(10, 2) NOT NULL, -- 交易價格
-    investment_cost DECIMAL(10, 2) NOT NULL, -- 投資成本
+    investment_cost DECIMAL(12, 2) NOT NULL, -- 投資成本
+    shares INT NOT NULL DEFAULT 0, -- 股數
     PRIMARY KEY (transaction_date, stock_id)
 );
 CREATE TABLE IF NOT EXISTS RealizedGainsLosses (
@@ -30,11 +31,14 @@ CREATE TABLE IF NOT EXISTS RealizedGainsLosses (
     stock_name VARCHAR(50) NOT NULL, -- 股票名稱
     purchase_price DECIMAL(10, 2) NOT NULL, -- 買入價格
     sell_price DECIMAL(10, 2) NOT NULL, -- 賣出價格
-    investment_cost DECIMAL(10, 2) NOT NULL, -- 投資成本
-    revenue DECIMAL(10, 2) NOT NULL, -- 總收益
-    profit_loss DECIMAL(10, 2) NOT NULL, -- 損益
-    profit_rate DECIMAL(5, 2) NOT NULL, -- 損益率
+    investment_cost DECIMAL(12, 2) NOT NULL, -- 投資成本
+    revenue DECIMAL(12, 2) NOT NULL, -- 總收益
+    profit_loss DECIMAL(12, 2) NOT NULL, -- 損益
+    profit_rate DECIMAL(10, 2) NOT NULL, -- 損益率
+    shares INT NOT NULL DEFAULT 0, -- 賣出股數
     PRIMARY KEY (stock_id, buy_date, sell_date)
 );
 
-
+-- 向後相容：若資料表已存在但缺少 shares 欄位，則補上 (MariaDB 10.0.2+ / MySQL 8.0.29+)
+ALTER TABLE UnrealizedGainsLosses ADD COLUMN IF NOT EXISTS shares INT NOT NULL DEFAULT 0;
+ALTER TABLE RealizedGainsLosses ADD COLUMN IF NOT EXISTS shares INT NOT NULL DEFAULT 0;
