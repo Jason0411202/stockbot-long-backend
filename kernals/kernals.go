@@ -120,6 +120,29 @@ func pyramidBuyAmount(appCtx *app_context.AppContext, percentages float64) float
 	return appCtx.Cfg.PyramidBuyFallbackAmount
 }
 
+// tfBuyAmount 為 Plan v1 的 Trend-Following 加碼分支金額(未乘以 buy_and_sell_multiplier)。
+// 僅在 cfg.UseTFBranch=true 且當日多頭判定為真時才會被呼叫。
+//   - "const"    : alpha * max(Pyramid tier + fallback)
+//   - "cashfrac" : beta * 當下現金
+func tfBuyAmount(appCtx *app_context.AppContext, cash float64) float64 {
+	cfg := appCtx.Cfg
+	switch cfg.TFAmountMode {
+	case "cashfrac":
+		if cash <= 0 {
+			return 0
+		}
+		return cfg.TFBeta * cash
+	default: // 包含 "const" 與 zero-value 情形
+		maxTier := cfg.PyramidBuyFallbackAmount
+		for _, t := range cfg.PyramidBuyTiers {
+			if t.Amount > maxTier {
+				maxTier = t.Amount
+			}
+		}
+		return cfg.TFAlpha * maxTier
+	}
+}
+
 // amountToShares 將金額轉為最接近的股數 (四捨五入)。若 price<=0 則回傳 0。
 func amountToShares(amount float64, price float64) int {
 	if price <= 0 || amount <= 0 {
