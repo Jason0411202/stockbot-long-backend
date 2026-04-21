@@ -31,7 +31,6 @@ type stockSeries struct {
 	dateIndex   map[string]int
 	closePrices []float64
 	ma20        []float64 // ma20[i] = 截至 dates[i] 的 20 日均價；不足 20 日以 NaN 表示
-	ma60        []float64 // ma60[i] = 截至 dates[i] 的 60 日均價；不足 60 日以 NaN 表示
 }
 
 // RunBacktest 以記憶體為主的方式，對所有追蹤股票做一次回測。
@@ -49,12 +48,6 @@ func RunBacktest(appCtx *app_context.AppContext, backTestDays int) (*BacktestRes
 		return nil, fmt.Errorf("無任何股票歷史資料可供回測")
 	}
 
-	return simulate(appCtx, series, backTestDays)
-}
-
-// simulate 是 RunBacktest 中不涉及 DB 的純邏輯段，已被抽出以便單元測試用合成序列直接驗證。
-// 給定已載入的 series，按日序模擬買賣，回傳 BacktestResult。
-func simulate(appCtx *app_context.AppContext, series map[string]*stockSeries, backTestDays int) (*BacktestResult, error) {
 	// 建立共用日期軸：取所有股票日期的聯集，再依據 backTestDays 限制起始日。
 	allDates := collectDateUnion(series)
 	if len(allDates) == 0 {
@@ -109,14 +102,6 @@ func simulate(appCtx *app_context.AppContext, series map[string]*stockSeries, ba
 						percentages = (todayPrice - highestPrice) / highestPrice
 					}
 					buyAmount := pyramidBuyAmount(appCtx, percentages) * mult
-					// --- Plan v1: Trend-Following branch (flag-gated). ---
-					// flag=off 時此 if 整段不進入,baseline 數值完全不變。
-					if appCtx.Cfg.UseTFBranch {
-						ma60 := s.ma60[idx]
-						if !math.IsNaN(ma60) && ma60 > 0 && ma20 > (1.0+appCtx.Cfg.TFTau)*ma60 {
-							buyAmount = tfBuyAmount(appCtx, cash) * mult
-						}
-					}
 					shares := amountToShares(buyAmount, todayPrice)
 					if shares > 0 {
 						cost := float64(shares) * todayPrice
@@ -269,28 +254,11 @@ func loadStockSeries(appCtx *app_context.AppContext) (map[string]*stockSeries, e
 			}
 		}
 
-		// Plan v1: 同樣方式計算 MA60,作為趨勢判定用。僅在 cfg.UseTFBranch=true 時才會被讀取。
-		ma60 := make([]float64, len(dates))
-		const window60 = 60
-		sum60 := 0.0
-		for i, p := range prices {
-			sum60 += p
-			if i >= window60 {
-				sum60 -= prices[i-window60]
-			}
-			if i >= window60-1 {
-				ma60[i] = sum60 / float64(window60)
-			} else {
-				ma60[i] = math.NaN()
-			}
-		}
-
 		series[stockID] = &stockSeries{
 			dates:       dates,
 			dateIndex:   idx,
 			closePrices: prices,
 			ma20:        ma20,
-			ma60:        ma60,
 		}
 	}
 

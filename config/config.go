@@ -29,14 +29,6 @@ type Config struct {
 	PyramidSellThreshold     float64          `yaml:"pyramid_sell_threshold"`
 	InitialCash              float64          `yaml:"initial_cash"`
 	InitDBBackMonths         int              `yaml:"init_db_back_months"`
-
-	// --- Plan v1: Trend-Following 加碼分支（預設關閉，開啟後才進入新路徑）---
-	// UseTFBranch=false 時，所有 TF 參數皆不會影響行為，baseline 數值保持不變。
-	UseTFBranch  bool    `yaml:"use_tf_branch"`
-	TFTau        float64 `yaml:"tf_tau"`         // 多頭判定閾值: MA20 > (1+tau)*MA60
-	TFAmountMode string  `yaml:"tf_amount_mode"` // "const" or "cashfrac"
-	TFAlpha      float64 `yaml:"tf_alpha"`       // const 模式：乘以最大 Pyramid tier 的倍率
-	TFBeta       float64 `yaml:"tf_beta"`        // cashfrac 模式：佔當下現金比例
 }
 
 // Load 讀取指定路徑的 yaml 設定檔。
