@@ -7,28 +7,28 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// PyramidBuyTier 金字塔策略中的單一加碼級距。
+// BaselineBuyTier baseline 策略中的單一加碼級距。
 // 當 (今日股價 - 持有最高買入價) / 持有最高買入價 > Above 時，便以此級距的金額買入，
-// 規則由淺至深檢查，遇到第一筆滿足的即採用；若沒有滿足者，則採用 PyramidBuyFallbackAmount。
-type PyramidBuyTier struct {
+// 規則由淺至深檢查，遇到第一筆滿足的即採用；若沒有滿足者，則採用 BaselineBuyFallbackAmount。
+type BaselineBuyTier struct {
 	Above  float64 `yaml:"above"`
 	Amount float64 `yaml:"amount"`
 }
 
 // Config 為不私密的超參數，由 config.yaml 讀入後供全 app 使用。
 type Config struct {
-	TrackStocks              []string         `yaml:"track_stocks"`
-	ScalingStrategy          string           `yaml:"scaling_strategy"`
-	BuyAndSellMultiplier     float64          `yaml:"buy_and_sell_multiplier"`
-	MaxBackMonths            int              `yaml:"max_back_months"`
-	BackTestingDays          int              `yaml:"back_testing_days"`
-	CooldownDays             int              `yaml:"cooldown_days"`
-	PyramidBuyTiers          []PyramidBuyTier `yaml:"pyramid_buy_tiers"`
-	PyramidBuyFallbackAmount float64          `yaml:"pyramid_buy_fallback_amount"`
-	PyramidSellAmount        float64          `yaml:"pyramid_sell_amount"`
-	PyramidSellThreshold     float64          `yaml:"pyramid_sell_threshold"`
-	InitialCash              float64          `yaml:"initial_cash"`
-	InitDBBackMonths         int              `yaml:"init_db_back_months"`
+	TrackStocks               []string          `yaml:"track_stocks"`
+	ScalingStrategy           string            `yaml:"scaling_strategy"`
+	BuyAndSellMultiplier      float64           `yaml:"buy_and_sell_multiplier"`
+	MaxBackMonths             int               `yaml:"max_back_months"`
+	BackTestingDays           int               `yaml:"back_testing_days"`
+	CooldownDays              int               `yaml:"cooldown_days"`
+	BaselineBuyTiers          []BaselineBuyTier `yaml:"baseline_buy_tiers"`
+	BaselineBuyFallbackAmount float64           `yaml:"baseline_buy_fallback_amount"`
+	BaselineSellAmount        float64           `yaml:"baseline_sell_amount"`
+	BaselineSellThreshold     float64           `yaml:"baseline_sell_threshold"`
+	InitialCash               float64           `yaml:"initial_cash"`
+	InitDBBackMonths          int               `yaml:"init_db_back_months"`
 }
 
 // Load 讀取指定路徑的 yaml 設定檔。
@@ -44,7 +44,7 @@ func Load(path string) (*Config, error) {
 	}
 
 	if c.ScalingStrategy == "" {
-		c.ScalingStrategy = "Pyramid"
+		c.ScalingStrategy = "Baseline"
 	}
 	if c.BuyAndSellMultiplier == 0 {
 		c.BuyAndSellMultiplier = 1.0

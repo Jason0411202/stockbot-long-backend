@@ -104,20 +104,20 @@ func CheckIfBuy(appCtx *app_context.AppContext, stockID string, today string) in
 	return 1
 }
 
-// CheckIfSell 金字塔策略下，只要有滿足獲利門檻即可賣出 (無需冷卻)。
+// CheckIfSell baseline 策略下，只要有滿足獲利門檻即可賣出 (無需冷卻)。
 func CheckIfSell(appCtx *app_context.AppContext, stockID string, today string) int {
-	// Pyramid 策略下，賣出由 SellStock 內部的獲利門檻決定，此處一律放行。
+	// Baseline 策略下，賣出由 SellStock 內部的獲利門檻決定，此處一律放行。
 	return 1
 }
 
-// pyramidBuyAmount 依照 config 中 tier 決定買入目標金額。
-func pyramidBuyAmount(appCtx *app_context.AppContext, percentages float64) float64 {
-	for _, tier := range appCtx.Cfg.PyramidBuyTiers {
+// baselineBuyAmount 依照 config 中 tier 決定買入目標金額。
+func baselineBuyAmount(appCtx *app_context.AppContext, percentages float64) float64 {
+	for _, tier := range appCtx.Cfg.BaselineBuyTiers {
 		if percentages > tier.Above {
 			return tier.Amount
 		}
 	}
-	return appCtx.Cfg.PyramidBuyFallbackAmount
+	return appCtx.Cfg.BaselineBuyFallbackAmount
 }
 
 // amountToShares 將金額轉為最接近的股數 (四捨五入)。若 price<=0 則回傳 0。
@@ -134,8 +134,8 @@ func BuyStock(appCtx *app_context.AppContext, today string) {
 		if CheckIfBuy(appCtx, stockID, today) != 1 {
 			continue
 		}
-		if appCtx.Cfg.ScalingStrategy != "Pyramid" {
-			appCtx.Log.Error("目前僅支援 Scaling_Strategy=Pyramid, got ", appCtx.Cfg.ScalingStrategy)
+		if appCtx.Cfg.ScalingStrategy != "Baseline" {
+			appCtx.Log.Error("目前僅支援 Scaling_Strategy=Baseline, got ", appCtx.Cfg.ScalingStrategy)
 			return
 		}
 
@@ -156,7 +156,7 @@ func BuyStock(appCtx *app_context.AppContext, today string) {
 		}
 		appCtx.Log.Info(stockID, " 今日股價: ", todayPrice, " 最高價: ", highestPrice, " 與最高價之相對比例: ", percentages)
 
-		buyAmount := pyramidBuyAmount(appCtx, percentages) * appCtx.Cfg.BuyAndSellMultiplier
+		buyAmount := baselineBuyAmount(appCtx, percentages) * appCtx.Cfg.BuyAndSellMultiplier
 		shares := amountToShares(buyAmount, todayPrice)
 		if shares <= 0 {
 			appCtx.Log.Info(stockID, " 計算出的買入股數為 0，略過")
@@ -181,8 +181,8 @@ func SellStock(appCtx *app_context.AppContext, today string) {
 		if CheckIfSell(appCtx, stockID, today) != 1 {
 			continue
 		}
-		if appCtx.Cfg.ScalingStrategy != "Pyramid" {
-			appCtx.Log.Error("目前僅支援 Scaling_Strategy=Pyramid, got ", appCtx.Cfg.ScalingStrategy)
+		if appCtx.Cfg.ScalingStrategy != "Baseline" {
+			appCtx.Log.Error("目前僅支援 Scaling_Strategy=Baseline, got ", appCtx.Cfg.ScalingStrategy)
 			return
 		}
 
@@ -201,11 +201,11 @@ func SellStock(appCtx *app_context.AppContext, today string) {
 			continue // 無持倉
 		}
 		gain := (todayPrice - lowestPrice) / lowestPrice
-		if gain < appCtx.Cfg.PyramidSellThreshold {
+		if gain < appCtx.Cfg.BaselineSellThreshold {
 			continue // 未達獲利門檻
 		}
 
-		sellAmount := appCtx.Cfg.PyramidSellAmount * appCtx.Cfg.BuyAndSellMultiplier
+		sellAmount := appCtx.Cfg.BaselineSellAmount * appCtx.Cfg.BuyAndSellMultiplier
 		targetShares := amountToShares(sellAmount, todayPrice)
 		if targetShares <= 0 {
 			continue

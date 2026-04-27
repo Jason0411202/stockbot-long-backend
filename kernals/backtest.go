@@ -3,6 +3,7 @@ package kernals
 import (
 	"fmt"
 	"main/app_context"
+	"main/config"
 	"math"
 	"sort"
 	"time"
@@ -16,6 +17,7 @@ type BacktestResult struct {
 	FinalTotal        float64
 	TotalBuys         int
 	TotalSells        int
+	SkippedBuys       int // 因現金不足而被跳過的買入次數 (防作弊夾取)
 }
 
 // lot 為記憶體中的單筆未實現持倉。
@@ -36,10 +38,9 @@ type stockSeries struct {
 // RunBacktest 以記憶體為主的方式，對所有追蹤股票做一次回測。
 // 回測邏輯與 BuyStock/SellStock 相同，但省略大量 DB 來回與 Discord 通知。
 func RunBacktest(appCtx *app_context.AppContext, backTestDays int) (*BacktestResult, error) {
-	if appCtx.Cfg.ScalingStrategy != "Pyramid" {
-		return nil, fmt.Errorf("回測目前僅支援 Scaling_Strategy=Pyramid")
+	if appCtx.Cfg.ScalingStrategy != "Baseline" {
+		return nil, fmt.Errorf("回測目前僅支援 Scaling_Strategy=Baseline")
 	}
-
 	series, err := loadStockSeries(appCtx)
 	if err != nil {
 		return nil, err
@@ -47,38 +48,44 @@ func RunBacktest(appCtx *app_context.AppContext, backTestDays int) (*BacktestRes
 	if len(series) == 0 {
 		return nil, fmt.Errorf("無任何股票歷史資料可供回測")
 	}
+	return runBacktestOnSeries(appCtx.Cfg, series, backTestDays)
+}
 
-	// 建立共用日期軸：取所有股票日期的聯集，再依據 backTestDays 限制起始日。
+// runBacktestOnSeries 為不依賴 DB 與 Discord 的純函式版本，方便做單元測試。
+// 唯一交易策略為 baseline method (原金字塔策略)，並實作「現金不得為負」的夾取。
+func runBacktestOnSeries(cfg *config.Config, series map[string]*stockSeries, backTestDays int) (*BacktestResult, error) {
+	if cfg.ScalingStrategy != "Baseline" {
+		return nil, fmt.Errorf("回測目前僅支援 Scaling_Strategy=Baseline")
+	}
+
 	allDates := collectDateUnion(series)
 	if len(allDates) == 0 {
 		return nil, fmt.Errorf("無任何日期可供回測")
 	}
-
-	// 只取最近 backTestDays 天
 	if backTestDays > 0 && backTestDays < len(allDates) {
 		allDates = allDates[len(allDates)-backTestDays:]
 	}
 
-	cash := appCtx.Cfg.InitialCash
-	positions := make(map[string][]lot, len(appCtx.Cfg.TrackStocks))
-	lastBuy := make(map[string]time.Time, len(appCtx.Cfg.TrackStocks))
-	cooldown := time.Duration(appCtx.Cfg.CooldownDays) * 24 * time.Hour
-	mult := appCtx.Cfg.BuyAndSellMultiplier
-	pyramidSellAmount := appCtx.Cfg.PyramidSellAmount
-	pyramidSellThreshold := appCtx.Cfg.PyramidSellThreshold
+	cash := cfg.InitialCash
+	positions := make(map[string][]lot, len(cfg.TrackStocks))
+	lastBuy := make(map[string]time.Time, len(cfg.TrackStocks))
+	cooldown := time.Duration(cfg.CooldownDays) * 24 * time.Hour
+	mult := cfg.BuyAndSellMultiplier
+	sellAmountTarget := cfg.BaselineSellAmount
+	sellThreshold := cfg.BaselineSellThreshold
 
 	totalBuys := 0
 	totalSells := 0
+	skippedBuys := 0
 
 	for _, today := range allDates {
-		for _, stockID := range appCtx.Cfg.TrackStocks {
+		for _, stockID := range cfg.TrackStocks {
 			s, ok := series[stockID]
 			if !ok {
 				continue
 			}
 			idx, ok := s.dateIndex[today.Format("2006-01-02")]
 			if !ok {
-				// 該股票當日休市/無資料，跳過
 				continue
 			}
 			todayPrice := s.closePrices[idx]
@@ -101,11 +108,30 @@ func RunBacktest(appCtx *app_context.AppContext, backTestDays int) (*BacktestRes
 					if highestPrice > 0 {
 						percentages = (todayPrice - highestPrice) / highestPrice
 					}
-					buyAmount := pyramidBuyAmount(appCtx, percentages) * mult
+					buyAmount := baselineBuyAmountFromCfg(cfg, percentages) * mult
 					shares := amountToShares(buyAmount, todayPrice)
-					if shares > 0 {
+
+					// === 防作弊現金夾取：可利用資金僅為當前持有現金，不得借錢 ===
+					// 依當下可用現金限縮買入股數；若一股都買不起則跳過 (不扣負數現金)。
+					maxAffordable := 0
+					if todayPrice > 0 {
+						maxAffordable = int(math.Floor(cash / todayPrice))
+					}
+					if shares > maxAffordable {
+						shares = maxAffordable
+					}
+					if shares <= 0 {
+						// 略過此次買進，記錄一次被夾取的訊號
+						if buyAmount > 0 {
+							skippedBuys++
+						}
+					} else {
 						cost := float64(shares) * todayPrice
 						cash -= cost
+						if cash < 0 {
+							// 不變量被破壞：任何路徑都不得讓現金為負。
+							return nil, fmt.Errorf("internal invariant violated: cash went negative (%.6f)", cash)
+						}
 						positions[stockID] = append(positions[stockID], lot{
 							date:   today,
 							shares: shares,
@@ -118,7 +144,6 @@ func RunBacktest(appCtx *app_context.AppContext, backTestDays int) (*BacktestRes
 			}
 
 			// === 賣出判斷 ===
-			// 找最低買入價；若最低價獲利 >= 門檻則賣出 pyramidSellAmount (換算股數)。
 			pos := positions[stockID]
 			if len(pos) == 0 {
 				continue
@@ -133,10 +158,10 @@ func RunBacktest(appCtx *app_context.AppContext, backTestDays int) (*BacktestRes
 				continue
 			}
 			gain := (todayPrice - lowestPrice) / lowestPrice
-			if gain < pyramidSellThreshold {
+			if gain < sellThreshold {
 				continue
 			}
-			targetShares := amountToShares(pyramidSellAmount*mult, todayPrice)
+			targetShares := amountToShares(sellAmountTarget*mult, todayPrice)
 			if targetShares <= 0 {
 				continue
 			}
@@ -159,7 +184,6 @@ func RunBacktest(appCtx *app_context.AppContext, backTestDays int) (*BacktestRes
 					cash += float64(l.shares) * todayPrice
 					remaining -= l.shares
 					totalSells++
-					// lot 被全部賣掉，不加回
 				} else {
 					cash += float64(remaining) * todayPrice
 					l.shares -= remaining
@@ -169,6 +193,10 @@ func RunBacktest(appCtx *app_context.AppContext, backTestDays int) (*BacktestRes
 				}
 			}
 			positions[stockID] = newPos
+		}
+
+		if cash < 0 {
+			return nil, fmt.Errorf("internal invariant violated: cash went negative (%.6f) on %s", cash, today.Format("2006-01-02"))
 		}
 	}
 
@@ -185,15 +213,25 @@ func RunBacktest(appCtx *app_context.AppContext, backTestDays int) (*BacktestRes
 		}
 	}
 
-	result := &BacktestResult{
-		InitialCash:       appCtx.Cfg.InitialCash,
+	return &BacktestResult{
+		InitialCash:       cfg.InitialCash,
 		FinalCash:         cash,
 		FinalHoldingValue: finalHolding,
 		FinalTotal:        cash + finalHolding,
 		TotalBuys:         totalBuys,
 		TotalSells:        totalSells,
+		SkippedBuys:       skippedBuys,
+	}, nil
+}
+
+// baselineBuyAmountFromCfg 依照 config 中 tier 決定買入目標金額，純函式版。
+func baselineBuyAmountFromCfg(cfg *config.Config, percentages float64) float64 {
+	for _, tier := range cfg.BaselineBuyTiers {
+		if percentages > tier.Above {
+			return tier.Amount
+		}
 	}
-	return result, nil
+	return cfg.BaselineBuyFallbackAmount
 }
 
 // loadStockSeries 從 DB 一次讀入所有追蹤股票的歷史資料並預先計算 20MA。

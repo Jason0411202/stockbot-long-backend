@@ -51,6 +51,7 @@ func main() {
 	fmt.Printf("FinalTotal:          %.2f\n", result.FinalTotal)
 	fmt.Printf("TotalBuys:           %d\n", result.TotalBuys)
 	fmt.Printf("TotalSells:          %d\n", result.TotalSells)
+	fmt.Printf("SkippedBuys:         %d\n", result.SkippedBuys)
 	fmt.Printf("PnL vs Initial:      %+.2f (%+.2f%%)\n",
 		result.FinalTotal-result.InitialCash,
 		(result.FinalTotal-result.InitialCash)/result.InitialCash*100)

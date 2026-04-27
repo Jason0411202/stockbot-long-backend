@@ -6,8 +6,8 @@ track_stocks:
   - "006208"
   - "00830"
 
-# 加減碼策略，目前僅支援 Pyramid
-scaling_strategy: Pyramid
+# 加減碼策略，目前僅支援 Baseline
+scaling_strategy: Baseline
 
 # 加減碼金額乘數 (隨本金擴大時用來等比例放大買賣金額)
 buy_and_sell_multiplier: 2.0
@@ -22,20 +22,20 @@ back_testing_days: 3600
 # 單檔股票買/賣後的冷卻天數 (買進 14 天內不會再買進同檔股票)
 cooldown_days: 14
 
-# 金字塔策略的加碼級距 (依序檢查，第一個符合條件的 tier 決定買入金額)
+# Baseline 策略的加碼級距 (依序檢查，第一個符合條件的 tier 決定買入金額)
 # 判斷值 = (今日股價 - 當前持有最高買入價) / 當前持有最高買入價
-pyramid_buy_tiers:
+baseline_buy_tiers:
   - { above: -0.1, amount: 500 }
   - { above: -0.2, amount: 750 }
   - { above: -0.3, amount: 1300 }
   - { above: -0.4, amount: 2000 }
 # 若沒有任何 tier 符合 (股價相對最高買入價跌超過 40%)，採用以下金額
-pyramid_buy_fallback_amount: 3000
+baseline_buy_fallback_amount: 3000
 
 # 當 "今日股價 / 持有最低買入價 - 1" 超過下列閾值時，觸發賣出，
-# 賣出目標金額即為 pyramid_sell_amount (套用 buy_and_sell_multiplier)。
-pyramid_sell_threshold: 1.0
-pyramid_sell_amount: 10000
+# 賣出目標金額即為 baseline_sell_amount (套用 buy_and_sell_multiplier)。
+baseline_sell_threshold: 1.0
+baseline_sell_amount: 10000
 
 # 回測起始現金 (只影響回測最終「持有現金」指標)
 initial_cash: 100000
