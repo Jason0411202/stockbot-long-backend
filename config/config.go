@@ -21,7 +21,7 @@ type Config struct {
 	ScalingStrategy           string            `yaml:"scaling_strategy"`
 	BuyAndSellMultiplier      float64           `yaml:"buy_and_sell_multiplier"`
 	MaxBackMonths             int               `yaml:"max_back_months"`
-	BackTestingDays           int               `yaml:"back_testing_days"`
+	BackTestingMonths         int               `yaml:"back_testing_months"`
 	CooldownDays              int               `yaml:"cooldown_days"`
 	BaselineBuyTiers          []BaselineBuyTier `yaml:"baseline_buy_tiers"`
 	BaselineBuyFallbackAmount float64           `yaml:"baseline_buy_fallback_amount"`
@@ -60,6 +60,15 @@ func Load(path string) (*Config, error) {
 	}
 	if len(c.TrackStocks) == 0 {
 		return nil, fmt.Errorf("track_stocks must not be empty")
+	}
+
+	// 跨欄位 sanity check:back_testing_months 不能超過 init_db_back_months,
+	// 否則 backtest 會靜默退化成「DB 有多少資料就跑多少」,讓使用者誤以為跑滿了 N 個月。
+	// 兩者同單位 (月),比較完全精確,不需要估算每月交易日數。
+	if c.BackTestingMonths > 0 && c.BackTestingMonths > c.InitDBBackMonths {
+		return nil, fmt.Errorf(
+			"back_testing_months=%d 超過 init_db_back_months=%d;請增加 init_db_back_months 或降低 back_testing_months",
+			c.BackTestingMonths, c.InitDBBackMonths)
 	}
 
 	return &c, nil

@@ -226,9 +226,9 @@ func SellStock(appCtx *app_context.AppContext, today string) {
 func DailyCheck(appCtx *app_context.AppContext) {
 	appCtx.Log.Info("DailyCheck 開始執行")
 
-	backTesting := appCtx.Cfg.BackTestingDays
+	backTesting := appCtx.Cfg.BackTestingMonths
 	if backTesting > 0 {
-		appCtx.Log.Info("進入回測模式 (in-memory), days=", backTesting)
+		appCtx.Log.Info("進入回測模式 (in-memory), months=", backTesting)
 		if err := sqls.UpdataDatebase(appCtx); err != nil {
 			appCtx.Log.Error("回測模式出錯，UpdataDatebase 錯誤:", err)
 		} else {

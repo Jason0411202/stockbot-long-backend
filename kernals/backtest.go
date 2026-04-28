@@ -2,12 +2,18 @@ package kernals
 
 import (
 	"fmt"
+	"io"
 	"main/app_context"
 	"main/config"
 	"math"
+	"os"
 	"sort"
 	"time"
 )
+
+// backtestWarnSink 是 runBacktestOnSeries 寫 runtime warning 的目的地;
+// 預設指向 os.Stderr,測試可注入 buffer 觀察 warning。
+var backtestWarnSink io.Writer = os.Stderr
 
 // BacktestResult 是一次回測的數值結果。衡量指標為 FinalTotal = FinalCash + FinalHoldingValue。
 type BacktestResult struct {
@@ -37,7 +43,7 @@ type stockSeries struct {
 
 // RunBacktest 以記憶體為主的方式，對所有追蹤股票做一次回測。
 // 回測邏輯與 BuyStock/SellStock 相同，但省略大量 DB 來回與 Discord 通知。
-func RunBacktest(appCtx *app_context.AppContext, backTestDays int) (*BacktestResult, error) {
+func RunBacktest(appCtx *app_context.AppContext, backTestMonths int) (*BacktestResult, error) {
 	if appCtx.Cfg.ScalingStrategy != "Baseline" {
 		return nil, fmt.Errorf("回測目前僅支援 Scaling_Strategy=Baseline")
 	}
@@ -48,12 +54,15 @@ func RunBacktest(appCtx *app_context.AppContext, backTestDays int) (*BacktestRes
 	if len(series) == 0 {
 		return nil, fmt.Errorf("無任何股票歷史資料可供回測")
 	}
-	return runBacktestOnSeries(appCtx.Cfg, series, backTestDays)
+	return runBacktestOnSeries(appCtx.Cfg, series, backTestMonths)
 }
 
 // runBacktestOnSeries 為不依賴 DB 與 Discord 的純函式版本，方便做單元測試。
 // 唯一交易策略為 baseline method (原金字塔策略)，並實作「現金不得為負」的夾取。
-func runBacktestOnSeries(cfg *config.Config, series map[string]*stockSeries, backTestDays int) (*BacktestResult, error) {
+//
+// backTestMonths 表示回測往前推幾個「日曆月」(用 time.AddDate(0, -N, 0) 計算 cutoff 日期),
+// 不是 N × 22 個交易日的近似。<= 0 表示停用截尾、用全部資料。
+func runBacktestOnSeries(cfg *config.Config, series map[string]*stockSeries, backTestMonths int) (*BacktestResult, error) {
 	if cfg.ScalingStrategy != "Baseline" {
 		return nil, fmt.Errorf("回測目前僅支援 Scaling_Strategy=Baseline")
 	}
@@ -62,8 +71,23 @@ func runBacktestOnSeries(cfg *config.Config, series map[string]*stockSeries, bac
 	if len(allDates) == 0 {
 		return nil, fmt.Errorf("無任何日期可供回測")
 	}
-	if backTestDays > 0 && backTestDays < len(allDates) {
-		allDates = allDates[len(allDates)-backTestDays:]
+	if backTestMonths > 0 {
+		latest := allDates[len(allDates)-1]
+		cutoff := latest.AddDate(0, -backTestMonths, 0)
+		if cutoff.Before(allDates[0]) || cutoff.Equal(allDates[0]) {
+			// DB 提供的資料比 back_testing_months 要求的少。即使 config.Load 已經 sanity check 過配置,
+			// 真實情況仍可能更短 (TWSE 抓不到、股票上市日晚於 cutoff、手動動過 DB...)。
+			fmt.Fprintf(backtestWarnSink,
+				"⚠️  back_testing_months=%d 要求往前推到 %s,但 DB 最早資料只到 %s,回測實際使用全部 %d 天\n",
+				backTestMonths, cutoff.Format("2006-01-02"),
+				allDates[0].Format("2006-01-02"), len(allDates))
+		} else {
+			// 切到第一個 >= cutoff 的索引
+			idx := sort.Search(len(allDates), func(i int) bool {
+				return !allDates[i].Before(cutoff)
+			})
+			allDates = allDates[idx:]
+		}
 	}
 
 	cash := cfg.InitialCash

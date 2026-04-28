@@ -36,7 +36,7 @@ func main() {
 		appCtx.Log.Fatalf("ConnectToDatabase 失敗: %v", err)
 	}
 
-	result, err := kernals.RunBacktest(appCtx, appCtx.Cfg.BackTestingDays)
+	result, err := kernals.RunBacktest(appCtx, appCtx.Cfg.BackTestingMonths)
 	if err != nil {
 		appCtx.Log.Fatalf("RunBacktest 失敗: %v", err)
 	}
@@ -44,7 +44,7 @@ func main() {
 	elapsed := time.Since(start)
 	fmt.Println("=== BACKTEST RESULT ===")
 	fmt.Printf("TrackStocks:         %v\n", appCtx.Cfg.TrackStocks)
-	fmt.Printf("BackTestingDays:     %d\n", appCtx.Cfg.BackTestingDays)
+	fmt.Printf("BackTestingMonths:   %d\n", appCtx.Cfg.BackTestingMonths)
 	fmt.Printf("InitialCash:         %.2f\n", result.InitialCash)
 	fmt.Printf("FinalCash:           %.2f\n", result.FinalCash)
 	fmt.Printf("FinalHoldingValue:   %.2f\n", result.FinalHoldingValue)
