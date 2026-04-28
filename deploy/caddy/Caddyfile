@@ -1,0 +1,19 @@
+# 兼容本機 / 正式機:由 SITE_ADDRESS 環境變數決定 Caddy 的行為。
+#   SITE_ADDRESS=:80              → HTTP only,不走 ACME (本機開發,沒有網域)
+#   SITE_ADDRESS=localhost        → HTTP + HTTPS 自簽 (本機要測 HTTPS)
+#   SITE_ADDRESS=your-domain.com  → HTTP + HTTPS 自動跟 Let's Encrypt 簽證書 (正式機)
+#
+# Caddyfile 的 {$VAR} 是 parse-time 環境變數代換,不支援 {$VAR:default} 語法,
+# 預設值請在 docker-compose.yml 的 environment: 用 ${VAR:-default} 補上。
+{
+    email {$ACME_EMAIL}
+}
+
+{$SITE_ADDRESS} {
+    reverse_proxy app:8080
+    encode gzip
+    log {
+        output stdout
+        format console
+    }
+}
