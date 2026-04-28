@@ -92,38 +92,22 @@ func UpdataDatebase(appCtx *app_context.AppContext) error {
 	Dates := monthlyBackfillDates(currentDate, maxBackMonths)
 	appCtx.Log.Info("Dates: ", Dates)
 
-	for _, stockID := range appCtx.Cfg.TrackStocks { // 依序取出每一個股票 id
-		for _, date := range Dates { // 依序取出每一個日期
-			datas, stockName, err := TWSEapi(date, stockID, appCtx) // 呼叫 TWSEapi 函式，取得資料 (股票資料，股票名稱，錯誤訊息)
+	currentMonth := time.Now().Format("2006-01")
+
+	for _, stockID := range appCtx.Cfg.TrackStocks {
+		for _, date := range Dates {
+			ym, err := dateToYearMonth(date)
 			if err != nil {
-				appCtx.Log.Error("TWSEapi 發生錯誤", err)
+				appCtx.Log.Error("dateToYearMonth 錯誤: ", err)
+				continue
+			}
+			// 每日 daily 一律重抓 (currentMonth 必抓;previous month 也允許覆蓋,
+			// 確保跨月當天能將上個月最後一個交易日的資料補齊並標記完成)。
+			if err := fetchAndInsertMonth(appCtx, stockID, date, ym, currentMonth); err != nil {
+				appCtx.Log.Error("fetchAndInsertMonth 錯誤: ", err)
 				break
 			}
-
-			INSERT_FLAG := 0 // 如果某支股票在某個日期的資料新增失敗，則將 INSERT_FLAG 設為 1，換下一支股票
-			for _, data := range datas {
-				appCtx.Log.Info("data: ", data)
-				AD_formatDate, err := helper.ROCToAD(data[0]) // 將 "113/01/01" 這種格式，轉換成 "2024-01-01"
-				if err != nil {
-					appCtx.Log.Error("helper.ROCToAD 錯誤: ", err)
-					INSERT_FLAG = 1
-					break
-				}
-
-				query := `INSERT IGNORE INTO StockHistory (stock_id, stock_name, date, volume, value, open_price, high_price, low_price, close_price, price_change, transactions) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-				_, err = appCtx.Db.Exec(query, stockID, stockName, AD_formatDate, data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8])
-				appCtx.Log.Info("quary: ", fmt.Sprintf(query, stockID, stockName, AD_formatDate, data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8]))
-				if err != nil {
-					appCtx.Log.Error("資料庫新增資料錯誤, err: ", err)
-					INSERT_FLAG = 1
-					break
-				}
-			}
-			if INSERT_FLAG == 1 {
-				break
-			}
-
-			time.Sleep(3 * time.Second) // 每次執行完 TWSEapi 函式後，休息 3 秒
+			time.Sleep(3 * time.Second)
 		}
 	}
 
@@ -237,9 +221,9 @@ func InitDatabase(appCtx *app_context.AppContext) error {
 
 // updateDatabaseWithMonths 跟 UpdataDatebase 功能相同，但可指定回補月數 (用於初始化時)。
 //
-// 與 UpdataDatebase 不同處:會先檢查 DB 中該股票已存在哪些月份,只對「缺資料」的月份打 TWSE API。
+// 與 UpdataDatebase 不同處:會先查 BackfillStatus 表,跳過「已標記完成」的月份。
 // 當月 (YYYY-MM == today's month) 例外,一律重抓以涵蓋當月最新交易日。
-// 這樣在 init_db_back_months 設大 (例如 60) 但 DB 已建立過的情境下,可大幅減少 API 呼叫與冷啟時間。
+// 整月 INSERT 全數成功 (且非當月) 才會寫入 BackfillStatus,避免 partial-fetch 月份被誤判為完成。
 func updateDatabaseWithMonths(appCtx *app_context.AppContext, months int) error {
 	err := ConnectToMariadb(appCtx)
 	if err != nil {
@@ -256,9 +240,9 @@ func updateDatabaseWithMonths(appCtx *app_context.AppContext, months int) error 
 	currentMonth := time.Now().Format("2006-01")
 
 	for _, stockID := range appCtx.Cfg.TrackStocks {
-		existingMonths, err := getExistingStockMonths(appCtx, stockID)
+		completedMonths, err := getCompletedBackfillMonths(appCtx, stockID)
 		if err != nil {
-			return fmt.Errorf("getExistingStockMonths(%s) 失敗: %w", stockID, err)
+			return fmt.Errorf("getCompletedBackfillMonths(%s) 失敗: %w", stockID, err)
 		}
 
 		for _, date := range Dates {
@@ -267,34 +251,14 @@ func updateDatabaseWithMonths(appCtx *app_context.AppContext, months int) error 
 				appCtx.Log.Error("dateToYearMonth 錯誤: ", err)
 				continue
 			}
-			if ym != currentMonth && existingMonths[ym] {
-				appCtx.Log.Infof("%s 月份 %s 已存在於 DB,跳過 TWSE API 呼叫", stockID, ym)
+			if ym != currentMonth && completedMonths[ym] {
+				appCtx.Log.Infof("%s 月份 %s 已標記完成,跳過 TWSE API 呼叫", stockID, ym)
 				continue
 			}
 
-			datas, stockName, err := TWSEapi(date, stockID, appCtx)
-			if err != nil {
-				appCtx.Log.Error("TWSEapi 發生錯誤", err)
-				break
-			}
-			INSERT_FLAG := 0
-			for _, data := range datas {
-				AD_formatDate, err := helper.ROCToAD(data[0])
-				if err != nil {
-					appCtx.Log.Error("helper.ROCToAD 錯誤: ", err)
-					INSERT_FLAG = 1
-					break
-				}
-				query := `INSERT IGNORE INTO StockHistory (stock_id, stock_name, date, volume, value, open_price, high_price, low_price, close_price, price_change, transactions) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-				_, err = appCtx.Db.Exec(query, stockID, stockName, AD_formatDate, data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8])
-				if err != nil {
-					appCtx.Log.Error("資料庫新增資料錯誤, err: ", err)
-					INSERT_FLAG = 1
-					break
-				}
-			}
-			if INSERT_FLAG == 1 {
-				break
+			if err := fetchAndInsertMonth(appCtx, stockID, date, ym, currentMonth); err != nil {
+				appCtx.Log.Error("fetchAndInsertMonth 錯誤: ", err)
+				break // 該股票後續月份直接停止,避免持續打 API 失敗
 			}
 			time.Sleep(3 * time.Second)
 		}
@@ -302,9 +266,37 @@ func updateDatabaseWithMonths(appCtx *app_context.AppContext, months int) error 
 	return nil
 }
 
-// getExistingStockMonths 回傳 DB 中該股票已存在資料的所有 YYYY-MM 月份集合。
-// StockHistory.date 為 VARCHAR (格式 "YYYY-MM-DD"),故用 LEFT(date, 7) 取月份。
-func getExistingStockMonths(appCtx *app_context.AppContext, stockID string) (map[string]bool, error) {
+// fetchAndInsertMonth 對單一 (stockID, date) 打 TWSE API,將整月資料 INSERT 進 StockHistory。
+// 整月 (datas) 全數成功插入,且 ym 不是當月時,寫入 BackfillStatus 標記完成。
+// 任一步驟失敗則 return error,不寫 BackfillStatus,下次 init 會重抓該月。
+func fetchAndInsertMonth(appCtx *app_context.AppContext, stockID, date, ym, currentMonth string) error {
+	datas, stockName, err := TWSEapi(date, stockID, appCtx)
+	if err != nil {
+		return fmt.Errorf("TWSEapi(%s, %s) 失敗: %w", stockID, date, err)
+	}
+
+	query := `INSERT IGNORE INTO StockHistory (stock_id, stock_name, date, volume, value, open_price, high_price, low_price, close_price, price_change, transactions) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	for _, data := range datas {
+		AD_formatDate, err := helper.ROCToAD(data[0])
+		if err != nil {
+			return fmt.Errorf("helper.ROCToAD(%s) 失敗: %w", data[0], err)
+		}
+		if _, err := appCtx.Db.Exec(query, stockID, stockName, AD_formatDate, data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8]); err != nil {
+			return fmt.Errorf("INSERT StockHistory 失敗: %w", err)
+		}
+	}
+
+	// 整月成功才標記;當月不標,因為當月仍有未到的交易日。
+	if ym != currentMonth {
+		if err := markBackfillMonthComplete(appCtx, stockID, ym); err != nil {
+			appCtx.Log.Warn("markBackfillMonthComplete 失敗 (不致命,下次會重抓): ", err)
+		}
+	}
+	return nil
+}
+
+// getCompletedBackfillMonths 回傳該股票已在 BackfillStatus 表中標記完成的月份集合。
+func getCompletedBackfillMonths(appCtx *app_context.AppContext, stockID string) (map[string]bool, error) {
 	if err := ConnectToMariadb(appCtx); err != nil {
 		return nil, err
 	}
@@ -312,24 +304,43 @@ func getExistingStockMonths(appCtx *app_context.AppContext, stockID string) (map
 		return nil, err
 	}
 
-	rows, err := appCtx.Db.Query("SELECT DISTINCT LEFT(date, 7) AS ym FROM StockHistory WHERE stock_id = ?;", stockID)
+	rows, err := appCtx.Db.Query("SELECT month FROM BackfillStatus WHERE stock_id = ?;", stockID)
 	if err != nil {
-		return nil, fmt.Errorf("query existing months: %w", err)
+		return nil, fmt.Errorf("query BackfillStatus: %w", err)
 	}
 	defer rows.Close()
 
-	existing := make(map[string]bool)
+	completed := make(map[string]bool)
 	for rows.Next() {
 		var ym string
 		if err := rows.Scan(&ym); err != nil {
-			return nil, fmt.Errorf("scan ym: %w", err)
+			return nil, fmt.Errorf("scan month: %w", err)
 		}
-		existing[ym] = true
+		completed[ym] = true
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("rows iteration: %w", err)
 	}
-	return existing, nil
+	return completed, nil
+}
+
+// markBackfillMonthComplete 將 (stockID, month) 寫入 BackfillStatus。
+// 使用 INSERT IGNORE,重複呼叫不會出錯。
+func markBackfillMonthComplete(appCtx *app_context.AppContext, stockID, month string) error {
+	if err := ConnectToMariadb(appCtx); err != nil {
+		return err
+	}
+	if err := ConnectToDatabase(appCtx, "StockLongData"); err != nil {
+		return err
+	}
+	_, err := appCtx.Db.Exec(
+		"INSERT IGNORE INTO BackfillStatus (stock_id, month, completed_at) VALUES (?, ?, NOW());",
+		stockID, month,
+	)
+	if err != nil {
+		return fmt.Errorf("INSERT BackfillStatus(%s, %s): %w", stockID, month, err)
+	}
+	return nil
 }
 
 // dateToYearMonth 將 "YYYYMMDD" 轉成 "YYYY-MM"。

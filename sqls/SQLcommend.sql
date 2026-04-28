@@ -42,3 +42,13 @@ CREATE TABLE IF NOT EXISTS RealizedGainsLosses (
 -- 向後相容：若資料表已存在但缺少 shares 欄位，則補上 (MariaDB 10.0.2+ / MySQL 8.0.29+)
 ALTER TABLE UnrealizedGainsLosses ADD COLUMN IF NOT EXISTS shares INT NOT NULL DEFAULT 0;
 ALTER TABLE RealizedGainsLosses ADD COLUMN IF NOT EXISTS shares INT NOT NULL DEFAULT 0;
+
+-- BackfillStatus: 記錄某 (stock_id, month) 是否已「完整」抓取完畢。
+-- 規則:整月 INSERT 全數成功才寫入；只記錄「已過完」的月份 (不會記錄 currentMonth)。
+-- init/daily 流程在開抓前先查此表決定該月是否可跳過 TWSE API。
+CREATE TABLE IF NOT EXISTS BackfillStatus (
+    stock_id VARCHAR(10) NOT NULL, -- 股票代號
+    month VARCHAR(7) NOT NULL, -- "YYYY-MM"
+    completed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (stock_id, month)
+);
