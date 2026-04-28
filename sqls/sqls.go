@@ -236,6 +236,10 @@ func InitDatabase(appCtx *app_context.AppContext) error {
 }
 
 // updateDatabaseWithMonths 跟 UpdataDatebase 功能相同，但可指定回補月數 (用於初始化時)。
+//
+// 與 UpdataDatebase 不同處:會先檢查 DB 中該股票已存在哪些月份,只對「缺資料」的月份打 TWSE API。
+// 當月 (YYYY-MM == today's month) 例外,一律重抓以涵蓋當月最新交易日。
+// 這樣在 init_db_back_months 設大 (例如 60) 但 DB 已建立過的情境下,可大幅減少 API 呼叫與冷啟時間。
 func updateDatabaseWithMonths(appCtx *app_context.AppContext, months int) error {
 	err := ConnectToMariadb(appCtx)
 	if err != nil {
@@ -249,8 +253,25 @@ func updateDatabaseWithMonths(appCtx *app_context.AppContext, months int) error 
 	Dates := monthlyBackfillDates(currentDate, months)
 	appCtx.Log.Info("Init Dates: ", Dates)
 
+	currentMonth := time.Now().Format("2006-01")
+
 	for _, stockID := range appCtx.Cfg.TrackStocks {
+		existingMonths, err := getExistingStockMonths(appCtx, stockID)
+		if err != nil {
+			return fmt.Errorf("getExistingStockMonths(%s) 失敗: %w", stockID, err)
+		}
+
 		for _, date := range Dates {
+			ym, err := dateToYearMonth(date)
+			if err != nil {
+				appCtx.Log.Error("dateToYearMonth 錯誤: ", err)
+				continue
+			}
+			if ym != currentMonth && existingMonths[ym] {
+				appCtx.Log.Infof("%s 月份 %s 已存在於 DB,跳過 TWSE API 呼叫", stockID, ym)
+				continue
+			}
+
 			datas, stockName, err := TWSEapi(date, stockID, appCtx)
 			if err != nil {
 				appCtx.Log.Error("TWSEapi 發生錯誤", err)
@@ -279,6 +300,45 @@ func updateDatabaseWithMonths(appCtx *app_context.AppContext, months int) error 
 		}
 	}
 	return nil
+}
+
+// getExistingStockMonths 回傳 DB 中該股票已存在資料的所有 YYYY-MM 月份集合。
+// StockHistory.date 為 VARCHAR (格式 "YYYY-MM-DD"),故用 LEFT(date, 7) 取月份。
+func getExistingStockMonths(appCtx *app_context.AppContext, stockID string) (map[string]bool, error) {
+	if err := ConnectToMariadb(appCtx); err != nil {
+		return nil, err
+	}
+	if err := ConnectToDatabase(appCtx, "StockLongData"); err != nil {
+		return nil, err
+	}
+
+	rows, err := appCtx.Db.Query("SELECT DISTINCT LEFT(date, 7) AS ym FROM StockHistory WHERE stock_id = ?;", stockID)
+	if err != nil {
+		return nil, fmt.Errorf("query existing months: %w", err)
+	}
+	defer rows.Close()
+
+	existing := make(map[string]bool)
+	for rows.Next() {
+		var ym string
+		if err := rows.Scan(&ym); err != nil {
+			return nil, fmt.Errorf("scan ym: %w", err)
+		}
+		existing[ym] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows iteration: %w", err)
+	}
+	return existing, nil
+}
+
+// dateToYearMonth 將 "YYYYMMDD" 轉成 "YYYY-MM"。
+func dateToYearMonth(date string) (string, error) {
+	t, err := time.Parse("20060102", date)
+	if err != nil {
+		return "", fmt.Errorf("parse date %s: %w", date, err)
+	}
+	return t.Format("2006-01"), nil
 }
 
 func LastBuyTime(appCtx *app_context.AppContext, stockID string, today string) (string, error) {
