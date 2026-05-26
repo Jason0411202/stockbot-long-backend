@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -352,70 +353,157 @@ func dateToYearMonth(date string) (string, error) {
 	return t.Format("2006-01"), nil
 }
 
-func LastBuyTime(appCtx *app_context.AppContext, stockID string, today string) (string, error) {
-	err := ConnectToMariadb(appCtx) // 連接至 Mariadb Server
-	if err != nil {
-		appCtx.Log.Error("ConnectToMariadb 錯誤:")
-		return "", err
+// LoadLastBuyDate 取得某股票最近一次「買入」日期 (含已賣出的 lot)。
+//
+// 這修正了原本 LastBuyTime 只查 UnrealizedGainsLosses 的 bug:
+// 當 lot 被全數賣出後,UnrealizedGainsLosses 對應紀錄會被刪除,
+// 舊的查詢會把這檔股票誤判為「沒有過買入紀錄」,冷卻期被意外重置。
+// 改成 UnrealizedGainsLosses ∪ RealizedGainsLosses,即使賣光也能保留歷史。
+func LoadLastBuyDate(appCtx *app_context.AppContext, stockID string) (time.Time, bool, error) {
+	if err := ConnectToMariadb(appCtx); err != nil {
+		return time.Time{}, false, err
+	}
+	if err := ConnectToDatabase(appCtx, "StockLongData"); err != nil {
+		return time.Time{}, false, err
 	}
 
-	err = ConnectToDatabase(appCtx, "StockLongData") // 嘗試使用資料庫 "StockLongData"
-	if err != nil {
-		appCtx.Log.Error("ConnectToDatabase 錯誤:")
-		return "", err
+	SQL_cmd := `
+		SELECT MAX(d) FROM (
+			SELECT MAX(transaction_date) AS d FROM UnrealizedGainsLosses WHERE stock_id = ?
+			UNION ALL
+			SELECT MAX(buy_date) AS d FROM RealizedGainsLosses WHERE stock_id = ?
+		) t;`
+	row := appCtx.Db.QueryRow(SQL_cmd, stockID, stockID)
+	var dateStr sql.NullString
+	if err := row.Scan(&dateStr); err != nil {
+		if err == sql.ErrNoRows {
+			return time.Time{}, false, nil
+		}
+		return time.Time{}, false, err
 	}
-
-	SQL_cmd := "SELECT transaction_date FROM UnrealizedGainsLosses WHERE stock_id = ? AND transaction_date = ( SELECT MAX(transaction_date) FROM UnrealizedGainsLosses WHERE stock_id = ? AND transaction_date <= ?);"
-	rows, err := appCtx.Db.Query(SQL_cmd, stockID, stockID, today)
-	if err != nil {
-		appCtx.Log.Error("appCtx.Db.Query 錯誤:")
-		return "", err
+	if !dateStr.Valid || dateStr.String == "" {
+		return time.Time{}, false, nil
 	}
-	defer rows.Close()
-
-	var transactionDate string
-	for rows.Next() {
-		err := rows.Scan(&transactionDate)
+	t, err := time.Parse("2006-01-02", dateStr.String)
+	if err != nil {
+		t, err = time.Parse("2006-01-02 15:04:05", dateStr.String)
 		if err != nil {
-			appCtx.Log.Error("rows.Scan 錯誤:")
-			return "", err
+			return time.Time{}, false, fmt.Errorf("parse last buy date %q: %w", dateStr.String, err)
 		}
 	}
-
-	return transactionDate, nil
+	return t, true, nil
 }
 
-func LastSellTime(appCtx *app_context.AppContext, stockID string, today string) (string, error) {
-	err := ConnectToMariadb(appCtx) // 連接至 Mariadb Server
-	if err != nil {
-		appCtx.Log.Error("ConnectToMariadb 錯誤:")
-		return "", err
+// LotRecord 是 LoadAllUnrealizedLots 回傳的單筆持倉,用於上線 engine 重啟時還原。
+type LotRecord struct {
+	StockID string
+	Date    string
+	Shares  int
+	Price   float64
+}
+
+// LoadAllUnrealizedLots 還原所有未實現持倉。
+// 上線啟動時,engine 用這份還原 in-memory positions,確保「策略觀點」與 DB 一致。
+func LoadAllUnrealizedLots(appCtx *app_context.AppContext) ([]LotRecord, error) {
+	if err := ConnectToMariadb(appCtx); err != nil {
+		return nil, err
+	}
+	if err := ConnectToDatabase(appCtx, "StockLongData"); err != nil {
+		return nil, err
 	}
 
-	err = ConnectToDatabase(appCtx, "StockLongData") // 嘗試使用資料庫 "StockLongData"
+	rows, err := appCtx.Db.Query(
+		"SELECT transaction_date, stock_id, transaction_price, shares FROM UnrealizedGainsLosses;")
 	if err != nil {
-		appCtx.Log.Error("ConnectToDatabase 錯誤:")
-		return "", err
-	}
-
-	SQL_cmd := "SELECT sell_date FROM RealizedGainsLosses WHERE stock_id = ? AND sell_date = ( SELECT MAX(sell_date) FROM RealizedGainsLosses WHERE stock_id = ? AND sell_date <= ?);"
-	rows, err := appCtx.Db.Query(SQL_cmd, stockID, stockID, today)
-	if err != nil {
-		appCtx.Log.Error("appCtx.Db.Query 錯誤:")
-		return "", err
+		return nil, fmt.Errorf("query UnrealizedGainsLosses: %w", err)
 	}
 	defer rows.Close()
 
-	var transactionDate string
+	out := make([]LotRecord, 0)
 	for rows.Next() {
-		err := rows.Scan(&transactionDate)
-		if err != nil {
-			appCtx.Log.Error("rows.Scan 錯誤:")
-			return "", err
+		var r LotRecord
+		if err := rows.Scan(&r.Date, &r.StockID, &r.Price, &r.Shares); err != nil {
+			return nil, err
 		}
+		out = append(out, r)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
 
-	return transactionDate, nil
+// LoadWatermark 取得引擎上次處理到的最後一天 (BotState.last_processed_date)。
+// 首次啟動 (尚未有紀錄) 回傳 zero time,呼叫端視為「從最早資料開始 catch-up」。
+func LoadWatermark(appCtx *app_context.AppContext) (time.Time, error) {
+	v, ok, err := loadBotState(appCtx, "last_processed_date")
+	if err != nil || !ok {
+		return time.Time{}, err
+	}
+	t, err := time.Parse("2006-01-02", v)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parse watermark %q: %w", v, err)
+	}
+	return t, nil
+}
+
+// SaveWatermark 將引擎處理完的最後一天寫入 BotState。
+func SaveWatermark(appCtx *app_context.AppContext, t time.Time) error {
+	return saveBotState(appCtx, "last_processed_date", t.Format("2006-01-02"))
+}
+
+// LoadCash 取得引擎當前現金。第二個回傳值 false 表示 BotState 尚未有紀錄
+// (呼叫端應 fallback 到 cfg.InitialCash)。
+func LoadCash(appCtx *app_context.AppContext) (float64, bool, error) {
+	v, ok, err := loadBotState(appCtx, "current_cash")
+	if err != nil || !ok {
+		return 0, false, err
+	}
+	c, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return 0, false, fmt.Errorf("parse cash %q: %w", v, err)
+	}
+	return c, true, nil
+}
+
+// SaveCash 將引擎當前現金寫入 BotState。
+func SaveCash(appCtx *app_context.AppContext, cash float64) error {
+	return saveBotState(appCtx, "current_cash", strconv.FormatFloat(cash, 'f', -1, 64))
+}
+
+func loadBotState(appCtx *app_context.AppContext, key string) (string, bool, error) {
+	if err := ConnectToMariadb(appCtx); err != nil {
+		return "", false, err
+	}
+	if err := ConnectToDatabase(appCtx, "StockLongData"); err != nil {
+		return "", false, err
+	}
+	row := appCtx.Db.QueryRow("SELECT state_value FROM BotState WHERE state_key = ?;", key)
+	var v string
+	if err := row.Scan(&v); err != nil {
+		if err == sql.ErrNoRows {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	return v, true, nil
+}
+
+func saveBotState(appCtx *app_context.AppContext, key, value string) error {
+	if err := ConnectToMariadb(appCtx); err != nil {
+		return err
+	}
+	if err := ConnectToDatabase(appCtx, "StockLongData"); err != nil {
+		return err
+	}
+	_, err := appCtx.Db.Exec(
+		"INSERT INTO BotState (state_key, state_value) VALUES (?, ?) "+
+			"ON DUPLICATE KEY UPDATE state_value = VALUES(state_value);",
+		key, value)
+	if err != nil {
+		return fmt.Errorf("upsert BotState(%s): %w", key, err)
+	}
+	return nil
 }
 
 func LowerPointDays(appCtx *app_context.AppContext, stockID string, today string) int {

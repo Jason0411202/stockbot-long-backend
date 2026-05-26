@@ -5,263 +5,263 @@ import (
 	"main/app_context"
 	"main/discord"
 	"main/sqls"
-	"math"
+	"sort"
 	"time"
 )
 
-// cooldownHours 回傳設定檔中 CooldownDays 轉成的 time.Duration。
-func cooldownHours(appCtx *app_context.AppContext) time.Duration {
-	return time.Duration(appCtx.Cfg.CooldownDays) * 24 * time.Hour
-}
-
-// CheckIfBuy_TimeChecking 每隻股票都有自己的冷卻期。回傳 1 表示可以買，0 表示冷卻中，-1 表示錯誤。
-func CheckIfBuy_TimeChecking(appCtx *app_context.AppContext, stockID string, today string) int {
-	lastBuyTime, err := sqls.LastBuyTime(appCtx, stockID, today)
-	if err != nil {
-		appCtx.Log.Error("LastBuyTime 發生錯誤:", err)
-		return -1
-	}
-	if lastBuyTime == "" {
-		return 1
-	}
-
-	lastBuy, err := time.Parse("2006-01-02", lastBuyTime)
-	if err != nil {
-		appCtx.Log.Error("無法將 lastBuyTime 轉成 time.time:", err)
-		return -1
-	}
-	todayT, err := time.Parse("2006-01-02", today)
-	if err != nil {
-		appCtx.Log.Error("無法將 today 轉成 time.time:", err)
-		return -1
-	}
-
-	diff := todayT.Sub(lastBuy)
-	if diff >= 0 && diff < cooldownHours(appCtx) {
-		appCtx.Log.Info(stockID, " 仍在買入冷卻期內, lastBuy=", lastBuyTime)
-		return 0
-	}
-	return 1
-}
-
-// CheckIfSell_TimeChecking 每隻股票都有自己的冷卻期。
-func CheckIfSell_TimeChecking(appCtx *app_context.AppContext, stockID string, today string) int {
-	lastSellTime, err := sqls.LastSellTime(appCtx, stockID, today)
-	if err != nil {
-		appCtx.Log.Error("LastSellTime 發生錯誤:", err)
-		return -1
-	}
-	if lastSellTime == "" {
-		return 1
-	}
-	lastSell, err := time.Parse("2006-01-02", lastSellTime)
-	if err != nil {
-		appCtx.Log.Error("無法將 lastSellTime 轉成 time.time:", err)
-		return -1
-	}
-	todayT, err := time.Parse("2006-01-02", today)
-	if err != nil {
-		appCtx.Log.Error("無法將 today 轉成 time.time:", err)
-		return -1
-	}
-
-	diff := todayT.Sub(lastSell)
-	if diff >= 0 && diff < cooldownHours(appCtx) {
-		appCtx.Log.Info(stockID, " 仍在賣出冷卻期內, lastSell=", lastSellTime)
-		return 0
-	}
-	return 1
-}
-
-func CheckIfBuy_BuyPointChecking(appCtx *app_context.AppContext, stockID string, today string) int {
-	AverageStockPrice20, err := sqls.GetAverageStockPrice(appCtx, stockID, today, 20)
-	if err != nil {
-		appCtx.Log.Error("GetAverageStockPrice 錯誤:", err)
-		return -1
-	}
-	todayPrice, err := sqls.GetTodayStockPrice(appCtx, stockID, today, "close_price")
-	if err != nil {
-		appCtx.Log.Error("GetTodayStockPrice 錯誤:", err)
-		return -1
-	}
-
-	if todayPrice >= AverageStockPrice20 {
-		appCtx.Log.Info(stockID, " 目前股價高於 20 日均價")
-		return 0
-	}
-	appCtx.Log.Info(stockID, " 目前股價低於 20 日均價")
-	return 1
-}
-
-// CheckIfBuy 簡化後僅檢查單一股票自己的冷卻期與買點。
-func CheckIfBuy(appCtx *app_context.AppContext, stockID string, today string) int {
-	if CheckIfBuy_TimeChecking(appCtx, stockID, today) != 1 {
-		return 0
-	}
-	if CheckIfBuy_BuyPointChecking(appCtx, stockID, today) != 1 {
-		return 0
-	}
-	return 1
-}
-
-// CheckIfSell baseline 策略下，只要有滿足獲利門檻即可賣出 (無需冷卻)。
-func CheckIfSell(appCtx *app_context.AppContext, stockID string, today string) int {
-	// Baseline 策略下，賣出由 SellStock 內部的獲利門檻決定，此處一律放行。
-	return 1
-}
-
-// baselineBuyAmount 依照 config 中 tier 決定買入目標金額。
-func baselineBuyAmount(appCtx *app_context.AppContext, percentages float64) float64 {
-	for _, tier := range appCtx.Cfg.BaselineBuyTiers {
-		if percentages > tier.Above {
-			return tier.Amount
-		}
-	}
-	return appCtx.Cfg.BaselineBuyFallbackAmount
-}
-
-// amountToShares 將金額轉為最接近的股數 (四捨五入)。若 price<=0 則回傳 0。
-func amountToShares(amount float64, price float64) int {
-	if price <= 0 || amount <= 0 {
-		return 0
-	}
-	return int(math.Round(amount / price))
-}
-
-func BuyStock(appCtx *app_context.AppContext, today string) {
-	appCtx.Log.Info("BuyStock 開始執行")
-	for _, stockID := range appCtx.Cfg.TrackStocks {
-		if CheckIfBuy(appCtx, stockID, today) != 1 {
-			continue
-		}
-		if appCtx.Cfg.ScalingStrategy != "Baseline" {
-			appCtx.Log.Error("目前僅支援 Scaling_Strategy=Baseline, got ", appCtx.Cfg.ScalingStrategy)
-			return
-		}
-
-		todayPrice, err := sqls.GetTodayStockPrice(appCtx, stockID, today, "close_price")
-		if err != nil {
-			appCtx.Log.Error("GetTodayStockPrice 錯誤:", err)
-			continue
-		}
-		highestPrice, err := sqls.GetTransactionPriceOfUnrealizedGainsLosses(appCtx, stockID, today, "Highest")
-		if err != nil {
-			appCtx.Log.Error("GetTransactionPriceOfUnrealizedGainsLosses 錯誤:", err)
-			continue
-		}
-
-		percentages := 0.0
-		if highestPrice > 0 {
-			percentages = (todayPrice - highestPrice) / highestPrice
-		}
-		appCtx.Log.Info(stockID, " 今日股價: ", todayPrice, " 最高價: ", highestPrice, " 與最高價之相對比例: ", percentages)
-
-		buyAmount := baselineBuyAmount(appCtx, percentages) * appCtx.Cfg.BuyAndSellMultiplier
-		shares := amountToShares(buyAmount, todayPrice)
-		if shares <= 0 {
-			appCtx.Log.Info(stockID, " 計算出的買入股數為 0，略過")
-			continue
-		}
-
-		if err := sqls.SQLBuyStock(appCtx, stockID, today, shares); err != nil {
-			appCtx.Log.Error("SQLBuyStock 錯誤:", err)
-			continue
-		}
-		actualCost := float64(shares) * todayPrice
-		appCtx.Log.Infof("%s 買入成功，股數: %d, 單價: %.2f, 實際金額: %.2f", stockID, shares, todayPrice, actualCost)
-		if err := discord.SendEmbedDiscordMessage(appCtx, "🔴 買入通知", fmt.Sprintf("stockID: %s, 股數: %d, 單價: %.2f, 金額: %.2f", stockID, shares, todayPrice, actualCost), 0xD50000); err != nil {
-			appCtx.Log.Error("發送 Discord 訊息失敗:", err)
-		}
-	}
-}
-
-func SellStock(appCtx *app_context.AppContext, today string) {
-	appCtx.Log.Info("SellStock 開始執行")
-	for _, stockID := range appCtx.Cfg.TrackStocks {
-		if CheckIfSell(appCtx, stockID, today) != 1 {
-			continue
-		}
-		if appCtx.Cfg.ScalingStrategy != "Baseline" {
-			appCtx.Log.Error("目前僅支援 Scaling_Strategy=Baseline, got ", appCtx.Cfg.ScalingStrategy)
-			return
-		}
-
-		todayPrice, err := sqls.GetTodayStockPrice(appCtx, stockID, today, "close_price")
-		if err != nil {
-			appCtx.Log.Error("GetTodayStockPrice 錯誤:", err)
-			continue
-		}
-
-		lowestPrice, err := sqls.GetTransactionPriceOfUnrealizedGainsLosses(appCtx, stockID, today, "Lowest")
-		if err != nil {
-			appCtx.Log.Error("GetTransactionPriceOfUnrealizedGainsLosses 錯誤:", err)
-			continue
-		}
-		if lowestPrice <= 0 {
-			continue // 無持倉
-		}
-		gain := (todayPrice - lowestPrice) / lowestPrice
-		if gain < appCtx.Cfg.BaselineSellThreshold {
-			continue // 未達獲利門檻
-		}
-
-		sellAmount := appCtx.Cfg.BaselineSellAmount * appCtx.Cfg.BuyAndSellMultiplier
-		targetShares := amountToShares(sellAmount, todayPrice)
-		if targetShares <= 0 {
-			continue
-		}
-
-		if err := sqls.SQLSellStock(appCtx, stockID, today, targetShares); err != nil {
-			appCtx.Log.Error("SQLSellStock 錯誤:", err)
-			continue
-		}
-		actualRevenue := float64(targetShares) * todayPrice
-		appCtx.Log.Infof("%s 賣出股數: %d, 單價: %.2f, 估計金額: %.2f", stockID, targetShares, todayPrice, actualRevenue)
-		if err := discord.SendEmbedDiscordMessage(appCtx, "🟢 賣出通知", fmt.Sprintf("stockID: %s, 股數: %d, 單價: %.2f, 金額: %.2f", stockID, targetShares, todayPrice, actualRevenue), 0x00C853); err != nil {
-			appCtx.Log.Error("發送 Discord 訊息失敗:", err)
-		}
-	}
-}
-
+// DailyCheck 是 main 啟動後的進入點。
+// 行為:
+//   - back_testing_months > 0:跑一次回測,結束並回報結果 (不進入每日 loop)。
+//   - 否則:進入上線模式 — 啟動時 catch-up 回放歷史交易,接著每日 14:00 觸發決策。
 func DailyCheck(appCtx *app_context.AppContext) {
 	appCtx.Log.Info("DailyCheck 開始執行")
 
-	backTesting := appCtx.Cfg.BackTestingMonths
-	if backTesting > 0 {
-		appCtx.Log.Info("進入回測模式 (in-memory), months=", backTesting)
-		if err := sqls.UpdataDatebase(appCtx); err != nil {
-			appCtx.Log.Error("回測模式出錯，UpdataDatebase 錯誤:", err)
-		} else {
-			result, err := RunBacktest(appCtx, backTesting)
-			if err != nil {
-				appCtx.Log.Error("回測執行錯誤:", err)
-			} else {
-				appCtx.Log.Infof("=== 回測結果 === 起始現金: %.2f, 期末現金: %.2f, 期末持股市值: %.2f, 合計: %.2f",
-					result.InitialCash, result.FinalCash, result.FinalHoldingValue, result.FinalTotal)
-				_ = discord.SendEmbedDiscordMessage(appCtx, "📊 回測結果",
-					fmt.Sprintf("起始現金: %.2f\n期末現金: %.2f\n期末持股市值: %.2f\n合計: %.2f",
-						result.InitialCash, result.FinalCash, result.FinalHoldingValue, result.FinalTotal),
-					0x2196F3)
-			}
-		}
+	if appCtx.Cfg.BackTestingMonths > 0 {
+		runBacktestMode(appCtx)
+		return
+	}
+	if err := runOnlineMode(appCtx); err != nil {
+		appCtx.Log.Fatal("上線模式啟動失敗:", err)
+	}
+}
+
+// runBacktestMode 跑一次 in-memory 回測並把結果發到 Discord。
+// 與上線唯一差別:沒有副作用 (noopExecutor) 且跑完即停。
+func runBacktestMode(appCtx *app_context.AppContext) {
+	appCtx.Log.Info("進入回測模式 (in-memory), months=", appCtx.Cfg.BackTestingMonths)
+	if err := sqls.UpdataDatebase(appCtx); err != nil {
+		appCtx.Log.Error("回測模式出錯,UpdataDatebase 錯誤:", err)
+		return
+	}
+	result, err := RunBacktest(appCtx, appCtx.Cfg.BackTestingMonths)
+	if err != nil {
+		appCtx.Log.Error("回測執行錯誤:", err)
+		return
+	}
+	appCtx.Log.Infof("=== 回測結果 === 起始現金: %.2f, 期末現金: %.2f, 期末持股市值: %.2f, 合計: %.2f",
+		result.InitialCash, result.FinalCash, result.FinalHoldingValue, result.FinalTotal)
+	_ = discord.SendEmbedDiscordMessage(appCtx, "📊 回測結果",
+		fmt.Sprintf("起始現金: %.2f\n期末現金: %.2f\n期末持股市值: %.2f\n合計: %.2f",
+			result.InitialCash, result.FinalCash, result.FinalHoldingValue, result.FinalTotal),
+		0x2196F3)
+}
+
+// runOnlineMode 啟動上線模式。
+// 步驟:
+//  1. 抓 TWSE 最新資料 (失敗不致命,沿用既有 DB)。
+//  2. 載入價格 series。
+//  3. 從 DB (BotState + UnrealizedGainsLosses + RealizedGainsLosses) 還原 engine 狀態。
+//  4. catch-up:把 [watermark+1, 最新日] 透過引擎跑一次,寫入 DB 但不發 Discord per-trade。
+//  5. 進入每日 loop:每天 14:00 Taipei 抓資料 + 跑當日決策 + 發 Discord。
+//
+// 上線與回測的唯一語意差別,就只在「step 4 之後是否進入 step 5」這一點。
+func runOnlineMode(appCtx *app_context.AppContext) error {
+	if appCtx.Cfg.ScalingStrategy != "Baseline" {
+		return fmt.Errorf("目前僅支援 Scaling_Strategy=Baseline, got %s", appCtx.Cfg.ScalingStrategy)
 	}
 
+	if err := sqls.UpdataDatebase(appCtx); err != nil {
+		appCtx.Log.Error("UpdataDatebase 錯誤 (不致命,沿用既有 DB):", err)
+	}
+
+	series, err := loadStockSeries(appCtx)
+	if err != nil {
+		return fmt.Errorf("loadStockSeries: %w", err)
+	}
+	if len(series) == 0 {
+		return fmt.Errorf("無任何股票歷史資料")
+	}
+
+	engine := NewEngine(appCtx.Cfg)
+	if err := seedEngineFromDB(appCtx, engine); err != nil {
+		return fmt.Errorf("seedEngineFromDB: %w", err)
+	}
+
+	if err := runCatchUp(appCtx, engine, series); err != nil {
+		return fmt.Errorf("catch-up: %w", err)
+	}
+
+	return runDailyLoop(appCtx, engine)
+}
+
+// seedEngineFromDB 從 DB 還原 engine 的現金、持倉、冷卻基準。
+// 順序很重要:cash 優先用 BotState (持久化過的真實餘額);如果沒有 (第一次啟動),
+// 則維持 NewEngine 預設的 cfg.InitialCash。
+func seedEngineFromDB(appCtx *app_context.AppContext, engine *Engine) error {
+	cash, hasCash, err := sqls.LoadCash(appCtx)
+	if err != nil {
+		return fmt.Errorf("LoadCash: %w", err)
+	}
+	if hasCash {
+		engine.SeedCash(cash)
+		appCtx.Log.Infof("從 BotState 還原現金: %.2f", cash)
+	} else {
+		appCtx.Log.Infof("BotState 無現金紀錄,使用 cfg.InitialCash=%.2f", appCtx.Cfg.InitialCash)
+	}
+
+	lots, err := sqls.LoadAllUnrealizedLots(appCtx)
+	if err != nil {
+		return fmt.Errorf("LoadAllUnrealizedLots: %w", err)
+	}
+	for _, r := range lots {
+		date, err := time.Parse("2006-01-02", r.Date)
+		if err != nil {
+			date, err = time.Parse("2006-01-02 15:04:05", r.Date)
+			if err != nil {
+				appCtx.Log.Warnf("跳過無法解析的 lot date=%q: %v", r.Date, err)
+				continue
+			}
+		}
+		engine.SeedPosition(r.StockID, date, r.Shares, r.Price)
+	}
+	appCtx.Log.Infof("從 UnrealizedGainsLosses 還原 %d 筆持倉", len(lots))
+
+	for _, stockID := range appCtx.Cfg.TrackStocks {
+		lb, has, err := sqls.LoadLastBuyDate(appCtx, stockID)
+		if err != nil {
+			return fmt.Errorf("LoadLastBuyDate(%s): %w", stockID, err)
+		}
+		if has {
+			engine.SeedLastBuy(stockID, lb)
+		}
+	}
+	return nil
+}
+
+// runCatchUp 把 [watermark+1, latest series date] 透過引擎跑一遍。
+// 使用 silent executor:寫 DB 但不發 Discord (避免歷史回放灌爆通知)。
+func runCatchUp(appCtx *app_context.AppContext, engine *Engine, series map[string]*stockSeries) error {
+	watermark, err := sqls.LoadWatermark(appCtx)
+	if err != nil {
+		return fmt.Errorf("LoadWatermark: %w", err)
+	}
+
+	allDates := collectDateUnion(series)
+	if len(allDates) == 0 {
+		appCtx.Log.Warn("series 為空,跳過 catch-up")
+		return nil
+	}
+
+	var catchupDates []time.Time
+	if watermark.IsZero() {
+		appCtx.Log.Info("首次啟動,從最早資料 catch-up")
+		catchupDates = allDates
+	} else {
+		idx := sort.Search(len(allDates), func(i int) bool {
+			return allDates[i].After(watermark)
+		})
+		catchupDates = allDates[idx:]
+	}
+	if len(catchupDates) == 0 {
+		appCtx.Log.Info("無需要 catch-up 的日期,直接進入每日 loop")
+		return nil
+	}
+
+	appCtx.Log.Infof("catch-up %d 天 (%s ~ %s),靜默回放中...",
+		len(catchupDates),
+		catchupDates[0].Format("2006-01-02"),
+		catchupDates[len(catchupDates)-1].Format("2006-01-02"))
+
+	silent := &dbExecutor{appCtx: appCtx, notify: false}
+	if err := engine.ProcessDates(catchupDates, series, silent); err != nil {
+		return fmt.Errorf("ProcessDates: %w", err)
+	}
+
+	newWatermark := catchupDates[len(catchupDates)-1]
+	if err := sqls.SaveWatermark(appCtx, newWatermark); err != nil {
+		appCtx.Log.Warn("SaveWatermark 失敗 (不致命):", err)
+	}
+	if err := sqls.SaveCash(appCtx, engine.Cash()); err != nil {
+		appCtx.Log.Warn("SaveCash 失敗 (不致命):", err)
+	}
+	stats := engine.Stats()
+	appCtx.Log.Infof("catch-up 完成: cash=%.2f, buys=%d, sells=%d, skipped=%d",
+		engine.Cash(), stats.TotalBuys, stats.TotalSells, stats.SkippedBuys)
+	return nil
+}
+
+// runDailyLoop 是上線模式的本體:每天 Taipei 時間 14:00 觸發一次當日決策。
+// 處理流程與 catch-up 相同,只差在會發 Discord per-trade。
+func runDailyLoop(appCtx *app_context.AppContext, engine *Engine) error {
 	taiwanTimeZone, err := time.LoadLocation("Asia/Taipei")
 	if err != nil {
-		appCtx.Log.Fatal("取得 taiwanTimeZone 時發生錯誤", err)
+		return fmt.Errorf("LoadLocation Asia/Taipei: %w", err)
 	}
+	noisy := &dbExecutor{appCtx: appCtx, notify: true}
 
 	for {
 		now := time.Now().In(taiwanTimeZone)
 		if now.Hour() == 14 && now.Minute() == 0 {
-			appCtx.Log.Info("現在時間: ", now)
-			if err = sqls.UpdataDatebase(appCtx); err != nil {
-				appCtx.Log.Error("UpdataDatebase 錯誤:", err)
-			} else {
-				BuyStock(appCtx, time.Now().Format("2006-01-02"))
-				SellStock(appCtx, time.Now().Format("2006-01-02"))
+			appCtx.Log.Info("現在時間:", now)
+			if err := runOneDay(appCtx, engine, noisy, now); err != nil {
+				appCtx.Log.Error("runOneDay 錯誤:", err)
 			}
 		}
 		time.Sleep(60 * time.Second)
 	}
+}
+
+// runOneDay 抓今日 TWSE → reload series → 引擎處理一日 → 持久化 watermark/cash。
+func runOneDay(appCtx *app_context.AppContext, engine *Engine, exec Executor, now time.Time) error {
+	if err := sqls.UpdataDatebase(appCtx); err != nil {
+		return fmt.Errorf("UpdataDatebase: %w", err)
+	}
+	series, err := loadStockSeries(appCtx)
+	if err != nil {
+		return fmt.Errorf("loadStockSeries: %w", err)
+	}
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	if err := engine.ProcessDay(today, series, exec); err != nil {
+		return fmt.Errorf("ProcessDay: %w", err)
+	}
+	if err := sqls.SaveWatermark(appCtx, today); err != nil {
+		appCtx.Log.Warn("SaveWatermark 失敗 (不致命):", err)
+	}
+	if err := sqls.SaveCash(appCtx, engine.Cash()); err != nil {
+		appCtx.Log.Warn("SaveCash 失敗 (不致命):", err)
+	}
+	return nil
+}
+
+// dbExecutor 是上線模式的 Executor 實作:寫入 UnrealizedGainsLosses /
+// RealizedGainsLosses,並可選擇是否發 Discord (notify=false 用於 catch-up 回放)。
+type dbExecutor struct {
+	appCtx *app_context.AppContext
+	notify bool
+}
+
+func (e *dbExecutor) OnBuyApplied(stockID string, day time.Time, shares int, price float64, cashAfter float64) error {
+	dateStr := day.Format("2006-01-02")
+	if err := sqls.SQLBuyStock(e.appCtx, stockID, dateStr, shares); err != nil {
+		return fmt.Errorf("SQLBuyStock: %w", err)
+	}
+	cost := float64(shares) * price
+	e.appCtx.Log.Infof("%s 買入: shares=%d, price=%.2f, cost=%.2f, cash=%.2f",
+		stockID, shares, price, cost, cashAfter)
+	if e.notify {
+		if err := discord.SendEmbedDiscordMessage(e.appCtx, "🔴 買入通知",
+			fmt.Sprintf("stockID: %s, 股數: %d, 單價: %.2f, 金額: %.2f\n剩餘現金: %.2f",
+				stockID, shares, price, cost, cashAfter), 0xD50000); err != nil {
+			e.appCtx.Log.Error("發送 Discord 訊息失敗:", err)
+		}
+	}
+	return nil
+}
+
+func (e *dbExecutor) OnSellApplied(stockID string, day time.Time, shares int, price float64, cashAfter float64) error {
+	dateStr := day.Format("2006-01-02")
+	if err := sqls.SQLSellStock(e.appCtx, stockID, dateStr, shares); err != nil {
+		return fmt.Errorf("SQLSellStock: %w", err)
+	}
+	revenue := float64(shares) * price
+	e.appCtx.Log.Infof("%s 賣出: shares=%d, price=%.2f, revenue=%.2f, cash=%.2f",
+		stockID, shares, price, revenue, cashAfter)
+	if e.notify {
+		if err := discord.SendEmbedDiscordMessage(e.appCtx, "🟢 賣出通知",
+			fmt.Sprintf("stockID: %s, 股數: %d, 單價: %.2f, 金額: %.2f\n剩餘現金: %.2f",
+				stockID, shares, price, revenue, cashAfter), 0x00C853); err != nil {
+			e.appCtx.Log.Error("發送 Discord 訊息失敗:", err)
+		}
+	}
+	return nil
 }

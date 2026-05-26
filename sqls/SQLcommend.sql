@@ -52,3 +52,17 @@ CREATE TABLE IF NOT EXISTS BackfillStatus (
     completed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (stock_id, month)
 );
+
+-- BotState: 上線模式跨重啟用的 key/value 狀態。
+-- 目前儲存:
+--   last_processed_date   YYYY-MM-DD,引擎已處理過的最後一天 (decision watermark)
+--   current_cash          字串化的 float64,引擎當前現金
+-- 設計理由:上線模式啟動會 catch-up 回放 [watermark+1, latest] 的所有交易日,
+-- 因此 watermark 必須跨重啟持久化以避免重複下單;cash 也必須持久化才能讓現金約束
+-- 在多次重啟之間維持一致。
+CREATE TABLE IF NOT EXISTS BotState (
+    state_key VARCHAR(64) NOT NULL,
+    state_value VARCHAR(256) NOT NULL,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (state_key)
+);
