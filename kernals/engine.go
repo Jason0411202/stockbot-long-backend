@@ -24,6 +24,33 @@ type stockSeries struct {
 	ma20        []float64 // ma20[i] = 截至 dates[i] 的 20 日均價;不足 20 日以 NaN 表示
 }
 
+// closeAsOf 回傳「在 day 當天或之前最近一個交易日」的收盤價 (as-of 查價)。
+// 用於在「聯集日期」上替某檔沒交易的股票估值 (例如某檔放假、或尚未上市)。
+//   - day 早於該股第一筆資料 (尚未上市) -> (0, false)。
+//   - 其餘 -> 最近一個 <= day 的收盤價, true。
+//
+// 只看過去資料,絕無未來資訊洩漏;O(log n) 走既有已排序的 dates。
+// 注意:不可用 dateIndex (只含精確交易日),也不可用 closePrices[len-1] (那是全序列最後價)。
+func (s *stockSeries) closeAsOf(day time.Time) (float64, bool) {
+	i := sort.Search(len(s.dates), func(i int) bool { return s.dates[i].After(day) })
+	if i == 0 {
+		return 0, false
+	}
+	return s.closePrices[i-1], true
+}
+
+// DayRecorder 為「選用」的觀測回呼,讓回測/評估可在不改變引擎決策的前提下,
+// 收集每日權益曲線與對外現金流。上線模式不掛 recorder (rec == nil),故行為完全不變。
+//
+// 設計成「struct of callbacks 的可空指標 field」而非擴充 Executor 介面 —— 因為 Executor
+// 有兩個既有實作 (noopExecutor / dbExecutor) 且只在成交時被呼叫,無法觀測「無成交日」的權益點。
+type DayRecorder struct {
+	// OnCashflow 在每次實際成交後觸發。買入為負、賣出為正 (金額為夾取後的真實成交額)。
+	OnCashflow func(day time.Time, amount float64)
+	// OnEquity 在每個處理日結束時觸發一次 (即使當日無成交),回報帳戶總權益 / 現金 / 持股市值。
+	OnEquity func(day time.Time, equity, cash, holdings float64)
+}
+
 // Executor 是引擎將 Intent 套用後通知副作用的回呼介面。
 //   - 回測模式:使用 noopExecutor,不產生任何 DB / Discord 副作用。
 //   - 上線模式:寫入 UnrealizedGainsLosses / RealizedGainsLosses,並可選擇是否發 Discord。
@@ -52,6 +79,8 @@ type Engine struct {
 	totalBuys   int
 	totalSells  int
 	skippedBuys int
+
+	rec *DayRecorder // 選用觀測者;nil 表示不收集 (上線模式)。
 }
 
 // EngineStats 為引擎自啟動以來的累計事件數。
@@ -70,6 +99,9 @@ func NewEngine(cfg *config.Config) *Engine {
 		lastBuy:   make(map[string]time.Time, len(cfg.TrackStocks)),
 	}
 }
+
+// SetRecorder 掛上選用觀測者 (回測/評估用)。傳 nil 可卸除。上線模式不呼叫此方法。
+func (e *Engine) SetRecorder(r *DayRecorder) { e.rec = r }
 
 // SeedCash 由外部 (上線啟動) 指定起始現金,覆蓋預設的 cfg.InitialCash。
 func (e *Engine) SeedCash(cash float64) { e.cash = cash }
@@ -97,6 +129,30 @@ func (e *Engine) Stats() EngineStats {
 		TotalSells:  e.totalSells,
 		SkippedBuys: e.skippedBuys,
 	}
+}
+
+// HoldingValueAsOf 以「day 當天或之前最近收盤價」結算所有持股市值 (as-of 估值)。
+// 用於建立每日權益曲線,以及替「結束日 < 全序列最後日」的視窗正確收尾。
+// 尚未上市 (closeAsOf 回傳 false) 的股票貢獻 0,符合事實。
+func (e *Engine) HoldingValueAsOf(series map[string]*stockSeries, day time.Time) float64 {
+	total := 0.0
+	for stockID, pos := range e.positions {
+		if len(pos) == 0 {
+			continue
+		}
+		s, ok := series[stockID]
+		if !ok {
+			continue
+		}
+		price, ok := s.closeAsOf(day)
+		if !ok {
+			continue
+		}
+		for _, l := range pos {
+			total += float64(l.shares) * price
+		}
+	}
+	return total
 }
 
 // FinalHoldingValue 以每檔股票最後可得收盤價結算持股市值。
@@ -158,6 +214,12 @@ func (e *Engine) ProcessDay(today time.Time, series map[string]*stockSeries, exe
 	}
 	if e.cash < 0 {
 		return fmt.Errorf("internal invariant violated: cash went negative (%.6f) on %s", e.cash, todayStr)
+	}
+	// 每個處理日結束 (含無成交日) 記錄一次權益點;以 as-of 估值,故跨上市日空窗也正確。
+	// rec == nil (上線模式) 時整段略過,僅多一次 nil 判斷,行為與原本一致。
+	if e.rec != nil && e.rec.OnEquity != nil {
+		holdings := e.HoldingValueAsOf(series, today)
+		e.rec.OnEquity(today, e.cash+holdings, e.cash, holdings)
 	}
 	return nil
 }
@@ -231,6 +293,10 @@ func (e *Engine) applyBuy(stockID string, today time.Time, intent BuyIntent, exe
 	})
 	e.lastBuy[stockID] = today
 	e.totalBuys++
+	// 觀測者記錄夾取後的真實成交額 (買入為負現金流)。被夾取到 0 股的情況已在上面提前 return。
+	if e.rec != nil && e.rec.OnCashflow != nil {
+		e.rec.OnCashflow(today, -cost)
+	}
 	return exec.OnBuyApplied(stockID, today, shares, intent.Price, e.cash)
 }
 
@@ -271,6 +337,9 @@ func (e *Engine) applySell(stockID string, today time.Time, intent SellIntent, e
 	}
 	e.positions[stockID] = newPos
 	if soldShares > 0 {
+		if e.rec != nil && e.rec.OnCashflow != nil {
+			e.rec.OnCashflow(today, float64(soldShares)*intent.Price)
+		}
 		return exec.OnSellApplied(stockID, today, soldShares, intent.Price, e.cash)
 	}
 	return nil

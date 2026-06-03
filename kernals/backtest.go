@@ -7,6 +7,7 @@ import (
 	"main/config"
 	"os"
 	"sort"
+	"time"
 )
 
 // backtestWarnSink 是 runBacktestOnSeries 寫 runtime warning 的目的地;
@@ -46,18 +47,18 @@ func RunBacktest(appCtx *app_context.AppContext, backTestMonths int) (*BacktestR
 //
 // backTestMonths 表示回測往前推幾個「日曆月」(用 time.AddDate(0, -N, 0) 計算 cutoff 日期),
 // 不是 N × 22 個交易日的近似。<= 0 表示停用截尾、用全部資料。
+//
+// 它現在只負責「把 backTestMonths 換算成 [start, end] 區間 (含原本的不足資料 warning)」,
+// 實際模擬委派給 runBacktestWindow。
 func runBacktestOnSeries(cfg *config.Config, series map[string]*stockSeries, backTestMonths int) (*BacktestResult, error) {
-	if cfg.ScalingStrategy != "Baseline" {
-		return nil, fmt.Errorf("回測目前僅支援 Scaling_Strategy=Baseline")
-	}
-
 	allDates := collectDateUnion(series)
 	if len(allDates) == 0 {
 		return nil, fmt.Errorf("無任何日期可供回測")
 	}
+	start := allDates[0]
+	end := allDates[len(allDates)-1]
 	if backTestMonths > 0 {
-		latest := allDates[len(allDates)-1]
-		cutoff := latest.AddDate(0, -backTestMonths, 0)
+		cutoff := end.AddDate(0, -backTestMonths, 0)
 		if cutoff.Before(allDates[0]) || cutoff.Equal(allDates[0]) {
 			// DB 提供的資料比 back_testing_months 要求的少。即使 config.Load 已經 sanity check 過配置,
 			// 真實情況仍可能更短 (TWSE 抓不到、股票上市日晚於 cutoff、手動動過 DB...)。
@@ -66,21 +67,38 @@ func runBacktestOnSeries(cfg *config.Config, series map[string]*stockSeries, bac
 				backTestMonths, cutoff.Format("2006-01-02"),
 				allDates[0].Format("2006-01-02"), len(allDates))
 		} else {
-			// 切到第一個 >= cutoff 的索引
-			idx := sort.Search(len(allDates), func(i int) bool {
-				return !allDates[i].Before(cutoff)
-			})
-			allDates = allDates[idx:]
+			start = cutoff
 		}
 	}
+	return runBacktestWindow(cfg, series, start, end)
+}
+
+// runBacktestWindow 是「對任意 [start, end] 日期區間」做一次回測的核心 (fresh engine,fresh 現金池)。
+// 走查同一份 series,持股以 HoldingValueAsOf(series, end) 收尾,故結束日 < 全序列最後日的視窗也能正確估值。
+// 這是 walk-forward 滾動視窗評估的基本單位 —— 每個視窗各自 NewEngine,彼此無狀態洩漏。
+func runBacktestWindow(cfg *config.Config, series map[string]*stockSeries, start, end time.Time) (*BacktestResult, error) {
+	if cfg.ScalingStrategy != "Baseline" {
+		return nil, fmt.Errorf("回測目前僅支援 Scaling_Strategy=Baseline")
+	}
+	allDates := collectDateUnion(series)
+	if len(allDates) == 0 {
+		return nil, fmt.Errorf("無任何日期可供回測")
+	}
+	lo := sort.Search(len(allDates), func(i int) bool { return !allDates[i].Before(start) })
+	hi := sort.Search(len(allDates), func(i int) bool { return allDates[i].After(end) })
+	if lo >= hi {
+		return nil, fmt.Errorf("視窗 %s ~ %s 內無交易日",
+			start.Format("2006-01-02"), end.Format("2006-01-02"))
+	}
+	windowDates := allDates[lo:hi]
 
 	engine := NewEngine(cfg)
-	if err := engine.ProcessDates(allDates, series, noopExecutor{}); err != nil {
+	if err := engine.ProcessDates(windowDates, series, noopExecutor{}); err != nil {
 		return nil, err
 	}
 
 	stats := engine.Stats()
-	finalHolding := engine.FinalHoldingValue(series)
+	finalHolding := engine.HoldingValueAsOf(series, end)
 	return &BacktestResult{
 		InitialCash:       cfg.InitialCash,
 		FinalCash:         engine.Cash(),
