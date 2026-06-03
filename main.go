@@ -12,7 +12,7 @@ import (
 )
 
 func Init(appCtx *app_context.AppContext) {
-	err := godotenv.Load(".env") // 環境變數 .env 檔案相對於程式的路徑
+	err := godotenv.Load(".env") // 環境變數 .env 檔案相對於程式的路徑 (DB / Discord 憑證)
 	if err != nil {
 		appCtx.Log.Warn("未找到 .env 檔案，使用系統環境變數")
 	}
@@ -26,7 +26,7 @@ func Init(appCtx *app_context.AppContext) {
 	if err != nil {
 		appCtx.Log.Error("初始化 Discord 錯誤:", err)
 	}
-	err = discord.SendEmbedDiscordMessage(appCtx, "📢 SYSTEM", "長線股票模擬交易系統 Discord bot 順利啟動", 0x00ff00) // 發送成功訊息
+	err = discord.SendEmbedDiscordMessage(appCtx, "📢 SYSTEM", "長線股票模擬交易系統 Discord bot 順利啟動", 0x00ff00)
 	if err != nil {
 		appCtx.Log.Error("發送 Discord 訊息失敗:", err)
 	}

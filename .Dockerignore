@@ -5,3 +5,5 @@ privkey.pem
 .github
 *.md
 tmp/
+deploy/
+docker-compose.yml

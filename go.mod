@@ -34,4 +34,5 @@ require (
 	github.com/labstack/echo/v4 v4.12.0
 	github.com/prometheus/client_golang v1.19.0
 	github.com/sirupsen/logrus v1.9.3
+	gopkg.in/yaml.v3 v3.0.1
 )

@@ -84,74 +84,54 @@ func UpdataDatebase(appCtx *app_context.AppContext) error {
 	currentDate := now.Format("20060102") // 格式化為 YYYYMMDD
 	appCtx.Log.Info("currentDate: ", currentDate)
 
-	maxBackMonths := 1
-	maxBackMonthsEnv := strings.TrimSpace(os.Getenv("MaxBackMonths"))
-	if maxBackMonthsEnv != "" {
-		parsed, err := strconv.Atoi(maxBackMonthsEnv)
-		if err != nil || parsed < 0 {
-			appCtx.Log.Warn("MaxBackMonths env invalid, using default 1")
-		} else {
-			maxBackMonths = parsed
-		}
+	maxBackMonths := appCtx.Cfg.MaxBackMonths
+	if maxBackMonths < 0 {
+		maxBackMonths = 1
 	}
 
-	// Backfill from currentDate monthly for maxBackMonths, store in Dates, e.g. [20240627 20240501 ... 20230701]
-	currentYear, _ := strconv.Atoi(currentDate[:4])
-	currentMonth, _ := strconv.Atoi(currentDate[4:6])
-
-	Dates := make([]string, 0)
-	Dates = append(Dates, currentDate)
-	for i := 0; i < maxBackMonths; i++ {
-		currentMonth--
-		if currentMonth == 0 {
-			currentMonth = 12
-			currentYear--
-		}
-		date := fmt.Sprintf("%d%02d%02d", currentYear, currentMonth, 1)
-		Dates = append(Dates, date)
-	}
+	// Backfill from currentDate monthly for maxBackMonths, store in Dates
+	Dates := monthlyBackfillDates(currentDate, maxBackMonths)
 	appCtx.Log.Info("Dates: ", Dates)
 
-	trackStocks_market_array := strings.Split(os.Getenv("TrackStocks_Market"), "&")
-	trackStocks_highDividend_array := strings.Split(os.Getenv("TrackStocks_HighDividend"), "&")
-	trackStocksArray := append(trackStocks_market_array, trackStocks_highDividend_array...)
-	appCtx.Log.Info("TrackStocksArray: ", trackStocksArray)
-	for _, stockID := range trackStocksArray { // 依序取出每一個股票 id
-		for _, date := range Dates { // 依序取出每一個日期
-			datas, stockName, err := TWSEapi(date, stockID, appCtx) // 呼叫 TWSEapi 函式，取得資料 (股票資料，股票名稱，錯誤訊息)
+	currentMonth := time.Now().Format("2006-01")
+
+	for _, stockID := range appCtx.Cfg.TrackStocks {
+		for _, date := range Dates {
+			ym, err := dateToYearMonth(date)
 			if err != nil {
-				appCtx.Log.Error("TWSEapi 發生錯誤", err)
+				appCtx.Log.Error("dateToYearMonth 錯誤: ", err)
+				continue
+			}
+			// 每日 daily 一律重抓 (currentMonth 必抓;previous month 也允許覆蓋,
+			// 確保跨月當天能將上個月最後一個交易日的資料補齊並標記完成)。
+			if err := fetchAndInsertMonth(appCtx, stockID, date, ym, currentMonth); err != nil {
+				appCtx.Log.Error("fetchAndInsertMonth 錯誤: ", err)
 				break
 			}
-
-			INSERT_FLAG := 0 // 如果某支股票在某個日期的資料新增失敗，則將 INSERT_FLAG 設為 1，換下一支股票
-			for _, data := range datas {
-				appCtx.Log.Info("data: ", data)
-				AD_formatDate, err := helper.ROCToAD(data[0]) // 將 "113/01/01" 這種格式，轉換成 "2024-01-01"
-				if err != nil {
-					appCtx.Log.Error("helper.ROCToAD 錯誤: ", err)
-					INSERT_FLAG = 1
-					break
-				}
-
-				query := `INSERT INTO StockHistory (stock_id, stock_name, date, volume, value, open_price, high_price, low_price, close_price, price_change, transactions) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-				_, err = appCtx.Db.Exec(query, stockID, stockName, AD_formatDate, data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8])
-				appCtx.Log.Info("quary: ", fmt.Sprintf(query, stockID, stockName, AD_formatDate, data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8]))
-				if err != nil {
-					appCtx.Log.Error("資料庫新增資料錯誤, err: ", err)
-					INSERT_FLAG = 1
-					break
-				}
-			}
-			if INSERT_FLAG == 1 {
-				break
-			}
-
-			time.Sleep(3 * time.Second) // 每次執行完 TWSEapi 函式後，休息 3 秒
+			time.Sleep(3 * time.Second)
 		}
 	}
 
 	return nil
+}
+
+// monthlyBackfillDates 從 currentDate (YYYYMMDD) 開始，回推 months 個月，
+// 每月取 1 號，回傳 ["YYYYMMDD", ...]，由新到舊排序。
+func monthlyBackfillDates(currentDate string, months int) []string {
+	Dates := make([]string, 0, months+1)
+	Dates = append(Dates, currentDate)
+
+	t, err := time.Parse("20060102", currentDate)
+	if err != nil {
+		return Dates
+	}
+	for i := 0; i < months; i++ {
+		t = t.AddDate(0, -1, 0)
+		// Force day=1
+		firstOfMonth := time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, t.Location())
+		Dates = append(Dates, firstOfMonth.Format("20060102"))
+	}
+	return Dates
 }
 
 // 連接至 Mariadb Server，回傳 *sql.DB
@@ -222,103 +202,322 @@ func InitDatabase(appCtx *app_context.AppContext) error {
 
 	appCtx.Log.Info("資料庫與對應 table 建立完成")
 
-	err = UpdataDatebase(appCtx)
-	if err != nil {
-		appCtx.Log.Error("UpdataDatebase 錯誤:")
-		return err
+	// 初始化時使用 InitDBBackMonths 回補較長區間；完成後再以一般 UpdataDatebase 補最新。
+	if appCtx.Cfg.InitDBBackMonths > appCtx.Cfg.MaxBackMonths {
+		err = updateDatabaseWithMonths(appCtx, appCtx.Cfg.InitDBBackMonths)
+		if err != nil {
+			appCtx.Log.Error("initial UpdataDatebase 錯誤:", err)
+			return err
+		}
+	} else {
+		err = UpdataDatebase(appCtx)
+		if err != nil {
+			appCtx.Log.Error("UpdataDatebase 錯誤:")
+			return err
+		}
 	}
 
 	return nil
 }
 
-func LastBuyTime(appCtx *app_context.AppContext, stockID string, today string) (string, error) {
-	err := ConnectToMariadb(appCtx) // 連接至 Mariadb Server
+// updateDatabaseWithMonths 跟 UpdataDatebase 功能相同，但可指定回補月數 (用於初始化時)。
+//
+// 與 UpdataDatebase 不同處:會先查 BackfillStatus 表,跳過「已標記完成」的月份。
+// 當月 (YYYY-MM == today's month) 例外,一律重抓以涵蓋當月最新交易日。
+// 整月 INSERT 全數成功 (且非當月) 才會寫入 BackfillStatus,避免 partial-fetch 月份被誤判為完成。
+func updateDatabaseWithMonths(appCtx *app_context.AppContext, months int) error {
+	err := ConnectToMariadb(appCtx)
 	if err != nil {
-		appCtx.Log.Error("ConnectToMariadb 錯誤:")
-		return "", err
+		return err
+	}
+	if err := ConnectToDatabase(appCtx, "StockLongData"); err != nil {
+		return err
 	}
 
-	err = ConnectToDatabase(appCtx, "StockLongData") // 嘗試使用資料庫 "StockLongData"
-	if err != nil {
-		appCtx.Log.Error("ConnectToDatabase 錯誤:")
-		return "", err
-	}
+	currentDate := time.Now().Format("20060102")
+	Dates := monthlyBackfillDates(currentDate, months)
+	appCtx.Log.Info("Init Dates: ", Dates)
 
-	SQL_cmd := "SELECT transaction_date FROM UnrealizedGainsLosses WHERE stock_id = ? AND transaction_date = ( SELECT MAX(transaction_date) FROM UnrealizedGainsLosses WHERE stock_id = ? AND transaction_date <= ?);"
-	appCtx.Log.Info("SQL_cmd: ", fmt.Sprintf(SQL_cmd, stockID, stockID, today))
-	rows, err := appCtx.Db.Query(SQL_cmd, stockID, stockID, today)
-	if err != nil {
-		appCtx.Log.Error("appCtx.Db.Query 錯誤:")
-		return "", err
-	}
-	defer rows.Close()
+	currentMonth := time.Now().Format("2006-01")
 
-	var transactionDate string
-	for rows.Next() {
-		err := rows.Scan(&transactionDate)
+	for _, stockID := range appCtx.Cfg.TrackStocks {
+		completedMonths, err := getCompletedBackfillMonths(appCtx, stockID)
 		if err != nil {
-			appCtx.Log.Error("rows.Scan 錯誤:")
-			return "", err
+			return fmt.Errorf("getCompletedBackfillMonths(%s) 失敗: %w", stockID, err)
+		}
+
+		for _, date := range Dates {
+			ym, err := dateToYearMonth(date)
+			if err != nil {
+				appCtx.Log.Error("dateToYearMonth 錯誤: ", err)
+				continue
+			}
+			if ym != currentMonth && completedMonths[ym] {
+				appCtx.Log.Infof("%s 月份 %s 已標記完成,跳過 TWSE API 呼叫", stockID, ym)
+				continue
+			}
+
+			if err := fetchAndInsertMonth(appCtx, stockID, date, ym, currentMonth); err != nil {
+				appCtx.Log.Error("fetchAndInsertMonth 錯誤: ", err)
+				break // 該股票後續月份直接停止,避免持續打 API 失敗
+			}
+			time.Sleep(3 * time.Second)
 		}
 	}
-
-	return transactionDate, nil
+	return nil
 }
 
-func LastSellTime(appCtx *app_context.AppContext, stockID string, today string) (string, error) {
-	err := ConnectToMariadb(appCtx) // 連接至 Mariadb Server
+// fetchAndInsertMonth 對單一 (stockID, date) 打 TWSE API,將整月資料 INSERT 進 StockHistory。
+// 整月 (datas) 全數成功插入,且 ym 不是當月時,寫入 BackfillStatus 標記完成。
+// 任一步驟失敗則 return error,不寫 BackfillStatus,下次 init 會重抓該月。
+func fetchAndInsertMonth(appCtx *app_context.AppContext, stockID, date, ym, currentMonth string) error {
+	datas, stockName, err := TWSEapi(date, stockID, appCtx)
 	if err != nil {
-		appCtx.Log.Error("ConnectToMariadb 錯誤:")
-		return "", err
+		return fmt.Errorf("TWSEapi(%s, %s) 失敗: %w", stockID, date, err)
 	}
 
-	err = ConnectToDatabase(appCtx, "StockLongData") // 嘗試使用資料庫 "StockLongData"
-	if err != nil {
-		appCtx.Log.Error("ConnectToDatabase 錯誤:")
-		return "", err
-	}
-
-	SQL_cmd := "SELECT sell_date FROM RealizedGainsLosses WHERE stock_id = ? AND sell_date = ( SELECT MAX(sell_date) FROM RealizedGainsLosses WHERE stock_id = ? AND sell_date <= ?);"
-	appCtx.Log.Info("SQL_cmd: ", fmt.Sprintf(SQL_cmd, stockID, stockID, today))
-	rows, err := appCtx.Db.Query(SQL_cmd, stockID, stockID, today)
-	if err != nil {
-		appCtx.Log.Error("appCtx.Db.Query 錯誤:")
-		return "", err
-	}
-	defer rows.Close()
-
-	var transactionDate string
-	for rows.Next() {
-		err := rows.Scan(&transactionDate)
+	query := `INSERT IGNORE INTO StockHistory (stock_id, stock_name, date, volume, value, open_price, high_price, low_price, close_price, price_change, transactions) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	for _, data := range datas {
+		AD_formatDate, err := helper.ROCToAD(data[0])
 		if err != nil {
-			appCtx.Log.Error("rows.Scan 錯誤:")
-			return "", err
+			return fmt.Errorf("helper.ROCToAD(%s) 失敗: %w", data[0], err)
+		}
+		if _, err := appCtx.Db.Exec(query, stockID, stockName, AD_formatDate, data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8]); err != nil {
+			return fmt.Errorf("INSERT StockHistory 失敗: %w", err)
 		}
 	}
 
-	return transactionDate, nil
+	// 整月成功才標記;當月不標,因為當月仍有未到的交易日。
+	if ym != currentMonth {
+		if err := markBackfillMonthComplete(appCtx, stockID, ym); err != nil {
+			appCtx.Log.Warn("markBackfillMonthComplete 失敗 (不致命,下次會重抓): ", err)
+		}
+	}
+	return nil
+}
 
+// getCompletedBackfillMonths 回傳該股票已在 BackfillStatus 表中標記完成的月份集合。
+func getCompletedBackfillMonths(appCtx *app_context.AppContext, stockID string) (map[string]bool, error) {
+	if err := ConnectToMariadb(appCtx); err != nil {
+		return nil, err
+	}
+	if err := ConnectToDatabase(appCtx, "StockLongData"); err != nil {
+		return nil, err
+	}
+
+	rows, err := appCtx.Db.Query("SELECT month FROM BackfillStatus WHERE stock_id = ?;", stockID)
+	if err != nil {
+		return nil, fmt.Errorf("query BackfillStatus: %w", err)
+	}
+	defer rows.Close()
+
+	completed := make(map[string]bool)
+	for rows.Next() {
+		var ym string
+		if err := rows.Scan(&ym); err != nil {
+			return nil, fmt.Errorf("scan month: %w", err)
+		}
+		completed[ym] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows iteration: %w", err)
+	}
+	return completed, nil
+}
+
+// markBackfillMonthComplete 將 (stockID, month) 寫入 BackfillStatus。
+// 使用 INSERT IGNORE,重複呼叫不會出錯。
+func markBackfillMonthComplete(appCtx *app_context.AppContext, stockID, month string) error {
+	if err := ConnectToMariadb(appCtx); err != nil {
+		return err
+	}
+	if err := ConnectToDatabase(appCtx, "StockLongData"); err != nil {
+		return err
+	}
+	_, err := appCtx.Db.Exec(
+		"INSERT IGNORE INTO BackfillStatus (stock_id, month, completed_at) VALUES (?, ?, NOW());",
+		stockID, month,
+	)
+	if err != nil {
+		return fmt.Errorf("INSERT BackfillStatus(%s, %s): %w", stockID, month, err)
+	}
+	return nil
+}
+
+// dateToYearMonth 將 "YYYYMMDD" 轉成 "YYYY-MM"。
+func dateToYearMonth(date string) (string, error) {
+	t, err := time.Parse("20060102", date)
+	if err != nil {
+		return "", fmt.Errorf("parse date %s: %w", date, err)
+	}
+	return t.Format("2006-01"), nil
+}
+
+// LoadLastBuyDate 取得某股票最近一次「買入」日期 (含已賣出的 lot)。
+//
+// 這修正了原本 LastBuyTime 只查 UnrealizedGainsLosses 的 bug:
+// 當 lot 被全數賣出後,UnrealizedGainsLosses 對應紀錄會被刪除,
+// 舊的查詢會把這檔股票誤判為「沒有過買入紀錄」,冷卻期被意外重置。
+// 改成 UnrealizedGainsLosses ∪ RealizedGainsLosses,即使賣光也能保留歷史。
+func LoadLastBuyDate(appCtx *app_context.AppContext, stockID string) (time.Time, bool, error) {
+	if err := ConnectToMariadb(appCtx); err != nil {
+		return time.Time{}, false, err
+	}
+	if err := ConnectToDatabase(appCtx, "StockLongData"); err != nil {
+		return time.Time{}, false, err
+	}
+
+	SQL_cmd := `
+		SELECT MAX(d) FROM (
+			SELECT MAX(transaction_date) AS d FROM UnrealizedGainsLosses WHERE stock_id = ?
+			UNION ALL
+			SELECT MAX(buy_date) AS d FROM RealizedGainsLosses WHERE stock_id = ?
+		) t;`
+	row := appCtx.Db.QueryRow(SQL_cmd, stockID, stockID)
+	var dateStr sql.NullString
+	if err := row.Scan(&dateStr); err != nil {
+		if err == sql.ErrNoRows {
+			return time.Time{}, false, nil
+		}
+		return time.Time{}, false, err
+	}
+	if !dateStr.Valid || dateStr.String == "" {
+		return time.Time{}, false, nil
+	}
+	t, err := time.Parse("2006-01-02", dateStr.String)
+	if err != nil {
+		t, err = time.Parse("2006-01-02 15:04:05", dateStr.String)
+		if err != nil {
+			return time.Time{}, false, fmt.Errorf("parse last buy date %q: %w", dateStr.String, err)
+		}
+	}
+	return t, true, nil
+}
+
+// LotRecord 是 LoadAllUnrealizedLots 回傳的單筆持倉,用於上線 engine 重啟時還原。
+type LotRecord struct {
+	StockID string
+	Date    string
+	Shares  int
+	Price   float64
+}
+
+// LoadAllUnrealizedLots 還原所有未實現持倉。
+// 上線啟動時,engine 用這份還原 in-memory positions,確保「策略觀點」與 DB 一致。
+func LoadAllUnrealizedLots(appCtx *app_context.AppContext) ([]LotRecord, error) {
+	if err := ConnectToMariadb(appCtx); err != nil {
+		return nil, err
+	}
+	if err := ConnectToDatabase(appCtx, "StockLongData"); err != nil {
+		return nil, err
+	}
+
+	rows, err := appCtx.Db.Query(
+		"SELECT transaction_date, stock_id, transaction_price, shares FROM UnrealizedGainsLosses;")
+	if err != nil {
+		return nil, fmt.Errorf("query UnrealizedGainsLosses: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]LotRecord, 0)
+	for rows.Next() {
+		var r LotRecord
+		if err := rows.Scan(&r.Date, &r.StockID, &r.Price, &r.Shares); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// LoadWatermark 取得引擎上次處理到的最後一天 (BotState.last_processed_date)。
+// 首次啟動 (尚未有紀錄) 回傳 zero time,呼叫端視為「從最早資料開始 catch-up」。
+func LoadWatermark(appCtx *app_context.AppContext) (time.Time, error) {
+	v, ok, err := loadBotState(appCtx, "last_processed_date")
+	if err != nil || !ok {
+		return time.Time{}, err
+	}
+	t, err := time.Parse("2006-01-02", v)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parse watermark %q: %w", v, err)
+	}
+	return t, nil
+}
+
+// SaveWatermark 將引擎處理完的最後一天寫入 BotState。
+func SaveWatermark(appCtx *app_context.AppContext, t time.Time) error {
+	return saveBotState(appCtx, "last_processed_date", t.Format("2006-01-02"))
+}
+
+// LoadCash 取得引擎當前現金。第二個回傳值 false 表示 BotState 尚未有紀錄
+// (呼叫端應 fallback 到 cfg.InitialCash)。
+func LoadCash(appCtx *app_context.AppContext) (float64, bool, error) {
+	v, ok, err := loadBotState(appCtx, "current_cash")
+	if err != nil || !ok {
+		return 0, false, err
+	}
+	c, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return 0, false, fmt.Errorf("parse cash %q: %w", v, err)
+	}
+	return c, true, nil
+}
+
+// SaveCash 將引擎當前現金寫入 BotState。
+func SaveCash(appCtx *app_context.AppContext, cash float64) error {
+	return saveBotState(appCtx, "current_cash", strconv.FormatFloat(cash, 'f', -1, 64))
+}
+
+func loadBotState(appCtx *app_context.AppContext, key string) (string, bool, error) {
+	if err := ConnectToMariadb(appCtx); err != nil {
+		return "", false, err
+	}
+	if err := ConnectToDatabase(appCtx, "StockLongData"); err != nil {
+		return "", false, err
+	}
+	row := appCtx.Db.QueryRow("SELECT state_value FROM BotState WHERE state_key = ?;", key)
+	var v string
+	if err := row.Scan(&v); err != nil {
+		if err == sql.ErrNoRows {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	return v, true, nil
+}
+
+func saveBotState(appCtx *app_context.AppContext, key, value string) error {
+	if err := ConnectToMariadb(appCtx); err != nil {
+		return err
+	}
+	if err := ConnectToDatabase(appCtx, "StockLongData"); err != nil {
+		return err
+	}
+	_, err := appCtx.Db.Exec(
+		"INSERT INTO BotState (state_key, state_value) VALUES (?, ?) "+
+			"ON DUPLICATE KEY UPDATE state_value = VALUES(state_value);",
+		key, value)
+	if err != nil {
+		return fmt.Errorf("upsert BotState(%s): %w", key, err)
+	}
+	return nil
 }
 
 func LowerPointDays(appCtx *app_context.AppContext, stockID string, today string) int {
-	err := ConnectToMariadb(appCtx) // 連接至 Mariadb Server
+	err := ConnectToMariadb(appCtx)
 	if err != nil {
 		appCtx.Log.Error("ConnectToMariadb 錯誤:")
 		return -1
 	}
-
-	err = ConnectToDatabase(appCtx, "StockLongData") // 嘗試使用資料庫 "StockLongData"
-	if err != nil {
+	if err := ConnectToDatabase(appCtx, "StockLongData"); err != nil {
 		appCtx.Log.Error("ConnectToDatabase 錯誤:")
 		return -1
 	}
 
-	// 準備 SQL 指令
-	// 查詢 StockHistory table 中，stock_id 為 stockID 的"當天收盤價"，並依照 date 由新到舊排序
 	SQL_cmd := "SELECT close_price FROM StockHistory WHERE stock_id = ? AND date <= ? ORDER BY date DESC;"
-	appCtx.Log.Info("SQL_cmd: ", fmt.Sprintf(SQL_cmd, stockID, today))
-
-	// 執行查詢
 	rows, err := appCtx.Db.Query(SQL_cmd, stockID, today)
 	if err != nil {
 		appCtx.Log.Error("appCtx.Db.Query 錯誤:")
@@ -327,45 +526,39 @@ func LowerPointDays(appCtx *app_context.AppContext, stockID string, today string
 	defer rows.Close()
 
 	stockHistoryPriceRecords := make([]float64, 0)
-	for rows.Next() { // 將查詢結果存入 stockHistoryPriceRecords 陣列
+	for rows.Next() {
 		var record float64
-		err := rows.Scan(&record)
-		if err != nil {
+		if err := rows.Scan(&record); err != nil {
 			appCtx.Log.Error("rows.Scan 錯誤:")
 			return -1
 		}
 		stockHistoryPriceRecords = append(stockHistoryPriceRecords, record)
 	}
 
-	todayPrice := stockHistoryPriceRecords[0]        // 取得當天價格
-	for i, price := range stockHistoryPriceRecords { // 比較當天價格與過去價格
-		if price < todayPrice { // 如果過去價格比當天價格低
-			return i // 回傳當天價格是近 i 天的低點
+	if len(stockHistoryPriceRecords) == 0 {
+		return 0
+	}
+	todayPrice := stockHistoryPriceRecords[0]
+	for i, price := range stockHistoryPriceRecords {
+		if price < todayPrice {
+			return i
 		}
 	}
-
 	return 36500
 }
 
 func UpperPointDays(appCtx *app_context.AppContext, stockID string, today string) int {
-	err := ConnectToMariadb(appCtx) // 連接至 Mariadb Server
+	err := ConnectToMariadb(appCtx)
 	if err != nil {
 		appCtx.Log.Error("ConnectToMariadb 錯誤:")
 		return -1
 	}
-
-	err = ConnectToDatabase(appCtx, "StockLongData") // 嘗試使用資料庫 "StockLongData"
-	if err != nil {
+	if err := ConnectToDatabase(appCtx, "StockLongData"); err != nil {
 		appCtx.Log.Error("ConnectToDatabase 錯誤:")
 		return -1
 	}
 
-	// 準備 SQL 指令
-	// 查詢 StockHistory table 中，stock_id 為 stockID 的"當天收盤價"，並依照 date 由新到舊排序
 	SQL_cmd := "SELECT close_price FROM StockHistory WHERE stock_id = ? AND date <= ? ORDER BY date DESC;"
-	appCtx.Log.Info("SQL_cmd: ", fmt.Sprintf(SQL_cmd, stockID, today))
-
-	// 執行查詢
 	rows, err := appCtx.Db.Query(SQL_cmd, stockID, today)
 	if err != nil {
 		appCtx.Log.Error("appCtx.Db.Query 錯誤:")
@@ -374,97 +567,71 @@ func UpperPointDays(appCtx *app_context.AppContext, stockID string, today string
 	defer rows.Close()
 
 	stockHistoryPriceRecords := make([]float64, 0)
-	for rows.Next() { // 將查詢結果存入 stockHistoryPriceRecords 陣列
+	for rows.Next() {
 		var record float64
-		err := rows.Scan(&record)
-		if err != nil {
+		if err := rows.Scan(&record); err != nil {
 			appCtx.Log.Error("rows.Scan 錯誤:")
 			return -1
 		}
 		stockHistoryPriceRecords = append(stockHistoryPriceRecords, record)
 	}
 
-	todayPrice := stockHistoryPriceRecords[0]        // 取得當天價格
-	for i, price := range stockHistoryPriceRecords { // 比較當天價格與過去價格
-		if price > todayPrice { // 如果過去價格比當天價格高
-			return i // 回傳當天價格是近 i 天的高點
+	if len(stockHistoryPriceRecords) == 0 {
+		return 0
+	}
+	todayPrice := stockHistoryPriceRecords[0]
+	for i, price := range stockHistoryPriceRecords {
+		if price > todayPrice {
+			return i
 		}
 	}
-
 	return 36500
-
 }
 
 func GetStockName(appCtx *app_context.AppContext, stockID string) (string, error) {
-	err := ConnectToMariadb(appCtx) // 連接至 Mariadb Server
+	err := ConnectToMariadb(appCtx)
 	if err != nil {
-		appCtx.Log.Error("ConnectToMariadb 錯誤:")
+		return "", err
+	}
+	if err := ConnectToDatabase(appCtx, "StockLongData"); err != nil {
 		return "", err
 	}
 
-	err = ConnectToDatabase(appCtx, "StockLongData") // 嘗試使用資料庫 "StockLongData"
-	if err != nil {
-		appCtx.Log.Error("ConnectToDatabase 錯誤:")
-		return "", err
-	}
-
-	// 準備 SQL 指令
 	SQL_cmd := "SELECT stock_name FROM StockHistory WHERE stock_id = ? ORDER BY date DESC LIMIT 1;"
-	appCtx.Log.Info("SQL_cmd: ", fmt.Sprintf(SQL_cmd, stockID))
-
-	// 執行查詢
 	rows, err := appCtx.Db.Query(SQL_cmd, stockID)
 	if err != nil {
-		appCtx.Log.Error("appCtx.Db.Query 錯誤:")
 		return "", err
 	}
 	defer rows.Close()
 
 	var stockName string
 	for rows.Next() {
-		err := rows.Scan(&stockName)
-		if err != nil {
-			appCtx.Log.Error("rows.Scan 錯誤:")
+		if err := rows.Scan(&stockName); err != nil {
 			return "", err
 		}
 	}
-
 	return stockName, nil
-
 }
 
 func GetAverageStockPrice(appCtx *app_context.AppContext, stockID string, today string, days int) (float64, error) {
-	err := ConnectToMariadb(appCtx) // 連接至 Mariadb Server
-	if err != nil {
-		appCtx.Log.Error("ConnectToMariadb 錯誤:")
+	if err := ConnectToMariadb(appCtx); err != nil {
+		return -1, err
+	}
+	if err := ConnectToDatabase(appCtx, "StockLongData"); err != nil {
 		return -1, err
 	}
 
-	err = ConnectToDatabase(appCtx, "StockLongData") // 嘗試使用資料庫 "StockLongData"
-	if err != nil {
-		appCtx.Log.Error("ConnectToDatabase 錯誤:")
-		return -1, err
-	}
-
-	// 準備 SQL 指令
-	// 查詢 StockHistory table 中，stock_id 為 stockID 的"當天最低價"，並依照 date 由新到舊排序
 	SQL_cmd := "SELECT close_price FROM StockHistory WHERE stock_id = ? AND date <= ? ORDER BY date DESC LIMIT ?;"
-	appCtx.Log.Info("SQL_cmd: ", fmt.Sprintf(SQL_cmd, stockID, today, days))
-
-	// 執行查詢
 	rows, err := appCtx.Db.Query(SQL_cmd, stockID, today, days)
 	if err != nil {
-		appCtx.Log.Error("appCtx.Db.Query 錯誤:")
 		return -1, err
 	}
 	defer rows.Close()
 
-	stockHistoryPriceRecords := make([]float64, 0)
-	for rows.Next() { // 將查詢結果存入 stockHistoryPriceRecords 陣列
+	stockHistoryPriceRecords := make([]float64, 0, days)
+	for rows.Next() {
 		var record float64
-		err := rows.Scan(&record)
-		if err != nil {
-			appCtx.Log.Error("rows.Scan 錯誤:")
+		if err := rows.Scan(&record); err != nil {
 			return -1, err
 		}
 		stockHistoryPriceRecords = append(stockHistoryPriceRecords, record)
@@ -478,232 +645,172 @@ func GetAverageStockPrice(appCtx *app_context.AppContext, stockID string, today 
 	for _, price := range stockHistoryPriceRecords {
 		sum += price
 	}
-
-	finalData := sum / float64(days)
-	appCtx.Log.Info(stockID, " 過去 ", days, " 天的平均股價: ", finalData)
-
-	return finalData, nil
+	return sum / float64(days), nil
 }
 
 func GetTodayStockPrice(appCtx *app_context.AppContext, stockID string, today string, priceType string) (float64, error) {
-	err := ConnectToMariadb(appCtx) // 連接至 Mariadb Server
-	if err != nil {
-		appCtx.Log.Error("ConnectToMariadb 錯誤:")
+	if err := ConnectToMariadb(appCtx); err != nil {
+		return -1, err
+	}
+	if err := ConnectToDatabase(appCtx, "StockLongData"); err != nil {
 		return -1, err
 	}
 
-	err = ConnectToDatabase(appCtx, "StockLongData") // 嘗試使用資料庫 "StockLongData"
-	if err != nil {
-		appCtx.Log.Error("ConnectToDatabase 錯誤:")
-		return -1, err
-	}
-
-	// 準備 SQL 指令
-	// 查詢 StockHistory table 中，stock_id 為 stockID 的"當天最低價"，並依照 date 由新到舊排序
 	SQL_cmd := "SELECT " + priceType + " FROM StockHistory WHERE stock_id = ? AND date <= ? ORDER BY date DESC LIMIT 1;"
-	appCtx.Log.Info("SQL_cmd: ", fmt.Sprintf(SQL_cmd, stockID, today))
-
-	// 執行查詢
 	rows, err := appCtx.Db.Query(SQL_cmd, stockID, today)
 	if err != nil {
-		appCtx.Log.Error("appCtx.Db.Query 錯誤:")
 		return -1, err
 	}
 	defer rows.Close()
 
 	var stockPrice float64
 	for rows.Next() {
-		err := rows.Scan(&stockPrice)
-		if err != nil {
-			appCtx.Log.Error("rows.Scan 錯誤:")
+		if err := rows.Scan(&stockPrice); err != nil {
 			return -1, err
 		}
 	}
-	appCtx.Log.Info(stockID, " 當天的 ", priceType, ": ", stockPrice)
-
 	return stockPrice, nil
 }
 
-func SQLBuyStock(appCtx *app_context.AppContext, stockID string, today string, buyAmount float64) error {
-	err := ConnectToMariadb(appCtx) // 連接至 Mariadb Server
-	if err != nil {
-		appCtx.Log.Error("ConnectToMariadb 錯誤:")
+// SQLBuyStock 以股數為單位寫入一筆買入紀錄。
+// purchasePrice = 買入當天收盤價 (亦是 DB 中 StockHistory 的 close_price)。
+// investmentCost = shares * purchasePrice。
+func SQLBuyStock(appCtx *app_context.AppContext, stockID string, today string, shares int) error {
+	if shares <= 0 {
+		return fmt.Errorf("shares 必須大於 0, got %d", shares)
+	}
+
+	if err := ConnectToMariadb(appCtx); err != nil {
+		return err
+	}
+	if err := ConnectToDatabase(appCtx, "StockLongData"); err != nil {
 		return err
 	}
 
-	err = ConnectToDatabase(appCtx, "StockLongData") // 嘗試使用資料庫 "StockLongData"
+	todayPrice, err := GetTodayStockPrice(appCtx, stockID, today, "close_price")
 	if err != nil {
-		appCtx.Log.Error("ConnectToDatabase 錯誤:")
 		return err
 	}
+	investmentCost := todayPrice * float64(shares)
 
-	// 準備 SQL 指令
-	SQL_cmd := "INSERT INTO UnrealizedGainsLosses (transaction_date, stock_id, stock_name, transaction_price, investment_cost) VALUES (?, ?, (SELECT stock_name FROM StockHistory WHERE stock_id = ? ORDER BY date DESC LIMIT 1), (SELECT close_price FROM StockHistory WHERE stock_id = ? AND date <= ? ORDER BY date DESC LIMIT 1), ?);"
-	appCtx.Log.Info("SQL_cmd: ", fmt.Sprintf(SQL_cmd, today, stockID, stockID, stockID, today, buyAmount))
-
-	// 執行 SQL 指令
-	_, err = appCtx.Db.Exec(SQL_cmd, today, stockID, stockID, stockID, today, buyAmount)
-	if err != nil {
-		appCtx.Log.Error("appCtx.Db.Exec 錯誤:")
+	SQL_cmd := `INSERT INTO UnrealizedGainsLosses (transaction_date, stock_id, stock_name, transaction_price, investment_cost, shares) VALUES (?, ?, (SELECT stock_name FROM StockHistory WHERE stock_id = ? ORDER BY date DESC LIMIT 1), ?, ?, ?);`
+	if _, err := appCtx.Db.Exec(SQL_cmd, today, stockID, stockID, todayPrice, investmentCost, shares); err != nil {
+		appCtx.Log.Error("appCtx.Db.Exec 錯誤:", err)
 		return err
 	}
-
 	return nil
 }
 
-func SQLSellStock(appCtx *app_context.AppContext, stockID string, today string, sellAmount float64) error {
-	err := ConnectToMariadb(appCtx) // 連接至 Mariadb Server
-	if err != nil {
-		appCtx.Log.Error("ConnectToMariadb 錯誤:")
+// SQLSellStock 以股數為目標賣出，從成本最低的未實現紀錄開始賣出，
+// 直到累計賣出股數達到 targetShares 為止。
+func SQLSellStock(appCtx *app_context.AppContext, stockID string, today string, targetShares int) error {
+	if targetShares <= 0 {
+		return nil
+	}
+
+	if err := ConnectToMariadb(appCtx); err != nil {
+		return err
+	}
+	if err := ConnectToDatabase(appCtx, "StockLongData"); err != nil {
 		return err
 	}
 
-	err = ConnectToDatabase(appCtx, "StockLongData") // 嘗試使用資料庫 "StockLongData"
+	todayClosePrice, err := GetTodayStockPrice(appCtx, stockID, today, "close_price")
 	if err != nil {
-		appCtx.Log.Error("ConnectToDatabase 錯誤:")
 		return err
 	}
 
-	// 取得關於該股票 transaction_date 最新的一筆未實現損益紀錄
-	// 若 revenue = sellAmount，則刪除該筆未實現損益紀錄，並離開迴圈
-	// 若 revenue < sellAmount，則刪除該筆未實現損益紀錄
-	// 若 revenue > sellAmount，則更新該筆未實現損益紀錄的 investment_cost = investment_cost - sellAmount*transaction_price/todayPrice，並離開迴圈
-	for {
-		record, err := GetLowestUnrealizedGainsLossesRecord(appCtx, stockID, today) // 取得關於該股票 transaction_price 最低的一筆未實現損益紀錄
+	remaining := targetShares
+	for remaining > 0 {
+		record, err := GetLowestUnrealizedGainsLossesRecord(appCtx, stockID, today)
 		if err != nil {
-			appCtx.Log.Error("GetLowestUnrealizedGainsLossesRecord 錯誤:")
-			return err
+			appCtx.Log.Warn("賣出時找不到持倉:", err)
+			return nil // 無庫存可賣，視為 no-op
 		}
-		appCtx.Log.Info("record: ", record)
 
-		todayClosePrice, err := GetTodayStockPrice(appCtx, stockID, today, "close_price") // 取得當天收盤價
-		if err != nil {
-			appCtx.Log.Error("GetTodayStockPrice 錯誤:")
-			return err
+		lotShares := record["shares"].(int)
+		lotCost := record["investment_cost"].(float64)
+		txPrice := record["transaction_price"].(float64)
+		txDate := record["transaction_date"].(string)
+		stockName := record["stock_name"].(string)
+
+		if lotShares <= 0 {
+			// 舊資料 shares=0，無法以股數為單位處理，直接刪除避免死迴圈。
+			if err := DeleteLowestUnrealizedGainsLossesRecord(appCtx, stockID, txDate); err != nil {
+				return err
+			}
+			continue
 		}
-		revenue := (todayClosePrice / record["transaction_price"].(float64)) * record["investment_cost"].(float64) // 計算這筆未實現損益紀錄全賣掉的總收益
-		appCtx.Log.Info("revenue: ", revenue)
 
-		if revenue == float64(sellAmount) { // 如果 revenue 剛好等於要賣的金額
-			appCtx.Log.Info("revenue == sellAmount")
-			err := DeleteLowestUnrealizedGainsLossesRecord(appCtx, stockID, record["transaction_date"].(string)) // 刪除該筆未實現損益紀錄 (全賣掉)
-			if err != nil {
-				appCtx.Log.Error("DeleteLowestUnrealizedGainsLossesRecord 錯誤:")
+		if lotShares <= remaining {
+			// 整筆 lot 賣掉
+			soldShares := lotShares
+			revenue := todayClosePrice * float64(soldShares)
+			profitLoss := revenue - lotCost
+			profitRate := 0.0
+			if lotCost > 0 {
+				profitRate = (profitLoss / lotCost) * 100
+			}
+			if err := DeleteLowestUnrealizedGainsLossesRecord(appCtx, stockID, txDate); err != nil {
 				return err
 			}
-
-			profit_loss := revenue - record["investment_cost"].(float64)                               // 計算損益
-			profit_rate := (float64(profit_loss) / float64(record["investment_cost"].(float64))) * 100 // 計算損益率
-			appCtx.Log.Info("profit_loss: ", profit_loss)
-			appCtx.Log.Info("profit_rate: ", profit_rate)
-
-			// 將新的一筆已實現損益加入 RealizedGainsLosses table
-			err = InsertToRealizedGainsLosses(appCtx, record["transaction_date"].(string), today, stockID, record["stock_name"].(string), record["transaction_price"].(float64), todayClosePrice, record["investment_cost"].(float64), revenue, profit_loss, profit_rate)
-			if err != nil {
-				appCtx.Log.Error("InsertToRealizedGainsLosses 錯誤:")
+			if err := InsertToRealizedGainsLosses(appCtx, txDate, today, stockID, stockName, txPrice, todayClosePrice, lotCost, revenue, profitLoss, profitRate, soldShares); err != nil {
 				return err
 			}
-			appCtx.Log.Info("真實賣出金額: ", revenue)
-			break // 離開迴圈
-		} else if revenue < float64(sellAmount) { // 如果 revenue 小於要賣的金額
-			appCtx.Log.Info("revenue < sellAmount")
-			err := DeleteLowestUnrealizedGainsLossesRecord(appCtx, stockID, record["transaction_date"].(string)) // 刪除該筆未實現損益紀錄 (全賣掉)
-			if err != nil {
-				appCtx.Log.Error("DeleteLowestUnrealizedGainsLossesRecord 錯誤:")
+			remaining -= soldShares
+		} else {
+			// 只賣 lot 的一部分
+			soldShares := remaining
+			revenue := todayClosePrice * float64(soldShares)
+			soldCost := txPrice * float64(soldShares)
+			profitLoss := revenue - soldCost
+			profitRate := 0.0
+			if soldCost > 0 {
+				profitRate = (profitLoss / soldCost) * 100
+			}
+			newShares := lotShares - soldShares
+			newCost := lotCost - soldCost
+			if err := UpdateLowestUnrealizedGainsLossesRecord(appCtx, stockID, newCost, newShares, txDate); err != nil {
 				return err
 			}
-			profit_loss := revenue - record["investment_cost"].(float64)                               // 計算損益
-			profit_rate := (float64(profit_loss) / float64(record["investment_cost"].(float64))) * 100 // 計算損益率
-			appCtx.Log.Info("profit_loss: ", profit_loss)
-			appCtx.Log.Info("profit_rate: ", profit_rate)
-
-			// 將新的一筆已實現損益加入 RealizedGainsLosses table
-			err = InsertToRealizedGainsLosses(appCtx, record["transaction_date"].(string), today, stockID, record["stock_name"].(string), record["transaction_price"].(float64), todayClosePrice, record["investment_cost"].(float64), revenue, profit_loss, profit_rate)
-			if err != nil {
-				appCtx.Log.Error("InsertToRealizedGainsLosses 錯誤:")
+			if err := InsertToRealizedGainsLosses(appCtx, txDate, today, stockID, stockName, txPrice, todayClosePrice, soldCost, revenue, profitLoss, profitRate, soldShares); err != nil {
 				return err
 			}
-
-			sellAmount -= float64(revenue) // 更新 sellAmount
-			appCtx.Log.Info("真實賣出金額: ", revenue)
-
-		} else if revenue > float64(sellAmount) { // 如果 revenue 大於要賣的金額
-			appCtx.Log.Info("revenue > sellAmount")
-			really_investment_cost := float64(float64(sellAmount) * record["transaction_price"].(float64) / todayClosePrice)                                                          // 計算 "其實只要投資多少，便能賣出 sellAmount 的價值"
-			err := UpdateLowestUnrealizedGainsLossesRecord(appCtx, stockID, record["investment_cost"].(float64)-float64(really_investment_cost), record["transaction_date"].(string)) // 更新該筆未實現損益紀錄的 investment_cost
-			if err != nil {
-				appCtx.Log.Error("UpdateLowestUnrealizedGainsLossesRecord 錯誤:")
-				return err
-			}
-
-			profit_loss := float64(sellAmount) - float64(really_investment_cost)          // 計算損益
-			profit_rate := (float64(profit_loss) / float64(really_investment_cost)) * 100 // 計算損益率
-			appCtx.Log.Info("profit_loss: ", profit_loss)
-			appCtx.Log.Info("profit_rate: ", profit_rate)
-
-			// 將新的一筆已實現損益加入 RealizedGainsLosses table
-			err = InsertToRealizedGainsLosses(appCtx, record["transaction_date"].(string), today, stockID, record["stock_name"].(string), record["transaction_price"].(float64), todayClosePrice, float64(really_investment_cost), float64(sellAmount), profit_loss, profit_rate)
-			if err != nil {
-				appCtx.Log.Error("InsertToRealizedGainsLosses 錯誤:")
-				return err
-			}
-			appCtx.Log.Info("真實賣出金額: ", sellAmount)
-			break // 離開迴圈
+			remaining = 0
 		}
 	}
-
 	return nil
 }
 
-func InsertToRealizedGainsLosses(appCtx *app_context.AppContext, buy_date string, sell_date string, stock_id string, stock_name string, purchase_price float64, sell_price float64, investment_cost float64, revenue float64, profit_loss float64, profit_rate float64) error {
-	err := ConnectToMariadb(appCtx) // 連接至 Mariadb Server
-	if err != nil {
-		appCtx.Log.Error("ConnectToMariadb 錯誤:")
+func InsertToRealizedGainsLosses(appCtx *app_context.AppContext, buy_date string, sell_date string, stock_id string, stock_name string, purchase_price float64, sell_price float64, investment_cost float64, revenue float64, profit_loss float64, profit_rate float64, shares int) error {
+	if err := ConnectToMariadb(appCtx); err != nil {
+		return err
+	}
+	if err := ConnectToDatabase(appCtx, "StockLongData"); err != nil {
 		return err
 	}
 
-	err = ConnectToDatabase(appCtx, "StockLongData") // 嘗試使用資料庫 "StockLongData"
-	if err != nil {
-		appCtx.Log.Error("ConnectToDatabase 錯誤:")
+	SQL_cmd := "INSERT INTO RealizedGainsLosses (buy_date, sell_date, stock_id, stock_name, purchase_price, sell_price, investment_cost, revenue, profit_loss, profit_rate, shares) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);"
+	if _, err := appCtx.Db.Exec(SQL_cmd, buy_date, sell_date, stock_id, stock_name, purchase_price, sell_price, investment_cost, revenue, profit_loss, profit_rate, shares); err != nil {
+		appCtx.Log.Error("appCtx.Db.Exec 錯誤:", err)
 		return err
 	}
-
-	// 準備 SQL 指令
-	SQL_cmd := "INSERT INTO RealizedGainsLosses (buy_date, sell_date, stock_id, stock_name, purchase_price, sell_price, investment_cost, revenue, profit_loss, profit_rate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);"
-	appCtx.Log.Info("SQL_cmd: ", fmt.Sprintf(SQL_cmd, buy_date, sell_date, stock_id, stock_name, purchase_price, sell_price, investment_cost, revenue, profit_loss, profit_rate))
-
-	// 執行 SQL 指令
-	_, err = appCtx.Db.Exec(SQL_cmd, buy_date, sell_date, stock_id, stock_name, purchase_price, sell_price, investment_cost, revenue, profit_loss, profit_rate)
-	if err != nil {
-		appCtx.Log.Error("appCtx.Db.Exec 錯誤:")
-		return err
-	}
-
 	return nil
-
 }
 
+// GetLowestUnrealizedGainsLossesRecord 回傳該股票中，交易價格最低的一筆未實現損益紀錄。
+// 回傳 map 包含 shares(int) 欄位。
 func GetLowestUnrealizedGainsLossesRecord(appCtx *app_context.AppContext, stockID string, today string) (map[string]interface{}, error) {
-	err := ConnectToMariadb(appCtx) // 連接至 Mariadb Server
-	if err != nil {
-		appCtx.Log.Error("ConnectToMariadb 錯誤:")
+	if err := ConnectToMariadb(appCtx); err != nil {
+		return nil, err
+	}
+	if err := ConnectToDatabase(appCtx, "StockLongData"); err != nil {
 		return nil, err
 	}
 
-	err = ConnectToDatabase(appCtx, "StockLongData") // 嘗試使用資料庫 "StockLongData"
+	SQL_cmd := "SELECT transaction_date, stock_id, stock_name, transaction_price, investment_cost, shares FROM UnrealizedGainsLosses WHERE stock_id = ? AND transaction_date <= ? ORDER BY transaction_price ASC, transaction_date ASC LIMIT 1;"
+	rows, err := appCtx.Db.Query(SQL_cmd, stockID, today)
 	if err != nil {
-		appCtx.Log.Error("ConnectToDatabase 錯誤:")
-		return nil, err
-	}
-
-	// 準備 SQL 指令
-	SQL_cmd := "SELECT transaction_date, stock_id, stock_name, transaction_price, investment_cost FROM UnrealizedGainsLosses WHERE stock_id = ? AND transaction_date <= ? AND transaction_price = ( SELECT MIN(transaction_price) FROM UnrealizedGainsLosses WHERE stock_id = ? AND transaction_date <= ?) ORDER BY transaction_date ASC LIMIT 1;"
-	appCtx.Log.Info("SQL_cmd: ", fmt.Sprintf(SQL_cmd, stockID, today, stockID, today))
-
-	// 執行查詢
-	rows, err := appCtx.Db.Query(SQL_cmd, stockID, today, stockID, today)
-	if err != nil {
-		appCtx.Log.Error("appCtx.Db.Query 錯誤:")
 		return nil, err
 	}
 	defer rows.Close()
@@ -713,126 +820,99 @@ func GetLowestUnrealizedGainsLossesRecord(appCtx *app_context.AppContext, stockI
 	stock_name := ""
 	transaction_price := 0.0
 	investment_cost := 0.0
+	shares := 0
+	found := false
 	for rows.Next() {
-		err := rows.Scan(&transaction_date, &stock_id, &stock_name, &transaction_price, &investment_cost)
-		if err != nil {
-			appCtx.Log.Error("rows.Scan 錯誤:")
+		if err := rows.Scan(&transaction_date, &stock_id, &stock_name, &transaction_price, &investment_cost, &shares); err != nil {
 			return nil, err
 		}
+		found = true
 	}
 
-	if transaction_date == "" {
-		appCtx.Log.Warn("GetLowestUnrealizedGainsLossesRecord Query 回傳結果為空")
+	if !found {
 		return nil, fmt.Errorf("在未實現損益紀錄中找不到 stock_id: %s 的資料", stockID)
 	}
 
-	returnValue := map[string]interface{}{
+	return map[string]interface{}{
 		"transaction_date":  transaction_date,
 		"stock_id":          stock_id,
 		"stock_name":        stock_name,
 		"transaction_price": transaction_price,
 		"investment_cost":   investment_cost,
-	}
-
-	return returnValue, nil
+		"shares":            shares,
+	}, nil
 }
 
 func DeleteLowestUnrealizedGainsLossesRecord(appCtx *app_context.AppContext, stockID string, transaction_date string) error {
-	err := ConnectToMariadb(appCtx) // 連接至 Mariadb Server
-	if err != nil {
-		appCtx.Log.Error("ConnectToMariadb 錯誤:")
+	if err := ConnectToMariadb(appCtx); err != nil {
 		return err
 	}
-
-	err = ConnectToDatabase(appCtx, "StockLongData") // 嘗試使用資料庫 "StockLongData"
-	if err != nil {
-		appCtx.Log.Error("ConnectToDatabase 錯誤:")
+	if err := ConnectToDatabase(appCtx, "StockLongData"); err != nil {
 		return err
 	}
-
-	// 準備 SQL 指令
 	SQL_cmd := "DELETE FROM UnrealizedGainsLosses WHERE stock_id = ? AND transaction_date = ?;"
-	appCtx.Log.Info("SQL_cmd: ", fmt.Sprintf(SQL_cmd, stockID, transaction_date))
-
-	// 執行 SQL 指令
-	_, err = appCtx.Db.Exec(SQL_cmd, stockID, transaction_date)
-	if err != nil {
-		appCtx.Log.Error("appCtx.Db.Exec 錯誤:")
+	if _, err := appCtx.Db.Exec(SQL_cmd, stockID, transaction_date); err != nil {
+		appCtx.Log.Error("appCtx.Db.Exec 錯誤:", err)
 		return err
 	}
-
 	return nil
 }
 
-func UpdateLowestUnrealizedGainsLossesRecord(appCtx *app_context.AppContext, stockID string, investment_cost float64, transaction_date string) error {
-	err := ConnectToMariadb(appCtx) // 連接至 Mariadb Server
-	if err != nil {
-		appCtx.Log.Error("ConnectToMariadb 錯誤:")
+func UpdateLowestUnrealizedGainsLossesRecord(appCtx *app_context.AppContext, stockID string, investment_cost float64, shares int, transaction_date string) error {
+	if err := ConnectToMariadb(appCtx); err != nil {
 		return err
 	}
-
-	err = ConnectToDatabase(appCtx, "StockLongData") // 嘗試使用資料庫 "StockLongData"
-	if err != nil {
-		appCtx.Log.Error("ConnectToDatabase 錯誤:")
+	if err := ConnectToDatabase(appCtx, "StockLongData"); err != nil {
 		return err
 	}
-
-	// 準備 SQL 指令
-	SQL_cmd := "UPDATE UnrealizedGainsLosses SET investment_cost = ? WHERE stock_id = ? AND transaction_date = ?;"
-	appCtx.Log.Info("SQL_cmd: ", fmt.Sprintf(SQL_cmd, investment_cost, stockID, transaction_date))
-
-	// 執行 SQL 指令
-	_, err = appCtx.Db.Exec(SQL_cmd, investment_cost, stockID, transaction_date)
-	if err != nil {
-		appCtx.Log.Error("appCtx.Db.Exec 錯誤:")
+	SQL_cmd := "UPDATE UnrealizedGainsLosses SET investment_cost = ?, shares = ? WHERE stock_id = ? AND transaction_date = ?;"
+	if _, err := appCtx.Db.Exec(SQL_cmd, investment_cost, shares, stockID, transaction_date); err != nil {
+		appCtx.Log.Error("appCtx.Db.Exec 錯誤:", err)
 		return err
 	}
-
 	return nil
 }
 
 func GetAllUnrealizedGainsLosses(appCtx *app_context.AppContext) ([]map[string]interface{}, error) {
-	err := ConnectToMariadb(appCtx) // 連接至 Mariadb Server
-	if err != nil {
-		appCtx.Log.Error("ConnectToMariadb 錯誤:")
+	if err := ConnectToMariadb(appCtx); err != nil {
+		return nil, err
+	}
+	if err := ConnectToDatabase(appCtx, "StockLongData"); err != nil {
 		return nil, err
 	}
 
-	err = ConnectToDatabase(appCtx, "StockLongData") // 嘗試使用資料庫 "StockLongData"
-	if err != nil {
-		appCtx.Log.Error("ConnectToDatabase 錯誤:")
-		return nil, err
-	}
-
-	// 準備 SQL 指令
-	SQL_cmd := "SELECT transaction_date, stock_id, stock_name, transaction_price, investment_cost FROM UnrealizedGainsLosses ORDER BY transaction_date DESC LIMIT 500;"
-	appCtx.Log.Info("SQL_cmd: ", SQL_cmd)
-
-	// 執行查詢
+	SQL_cmd := "SELECT transaction_date, stock_id, stock_name, transaction_price, investment_cost, shares FROM UnrealizedGainsLosses ORDER BY transaction_date DESC LIMIT 500;"
 	rows, err := appCtx.Db.Query(SQL_cmd)
 	if err != nil {
-		appCtx.Log.Error("appCtx.Db.Query 錯誤:")
 		return nil, err
 	}
 	defer rows.Close()
 
 	returnValue := make([]map[string]interface{}, 0)
 	for rows.Next() {
-		transaction_date := ""   // 交易日期
-		stock_id := ""           // 股票代號
-		stock_name := ""         // 股票名稱
-		transaction_price := 0.0 // 買入價格
-		investment_cost := 0.0   // 投資成本
-		err := rows.Scan(&transaction_date, &stock_id, &stock_name, &transaction_price, &investment_cost)
-		if err != nil {
-			appCtx.Log.Error("rows.Scan 錯誤:")
+		transaction_date := ""
+		stock_id := ""
+		stock_name := ""
+		transaction_price := 0.0
+		investment_cost := 0.0
+		shares := 0
+		if err := rows.Scan(&transaction_date, &stock_id, &stock_name, &transaction_price, &investment_cost, &shares); err != nil {
 			return nil, err
 		}
 
-		todayClosePrice, err := GetTodayStockPrice(appCtx, stock_id, time.Now().Format("2006-01-02"), "close_price") // 現價
-		now_value := (todayClosePrice / transaction_price) * investment_cost                                         // 現值
-		predict_profit_loss := now_value - investment_cost                                                           // 預估損益
-		predict_profit_rate := (predict_profit_loss / investment_cost) * 100                                         // 預估損益率
+		todayClosePrice, err := GetTodayStockPrice(appCtx, stock_id, time.Now().Format("2006-01-02"), "close_price")
+		if err != nil {
+			todayClosePrice = 0
+		}
+		now_value := todayClosePrice * float64(shares)
+		if shares == 0 && transaction_price > 0 { // 相容舊資料 (未記錄股數者)
+			now_value = (todayClosePrice / transaction_price) * investment_cost
+		}
+		predict_profit_loss := now_value - investment_cost
+		predict_profit_rate := 0.0
+		if investment_cost > 0 {
+			predict_profit_rate = (predict_profit_loss / investment_cost) * 100
+		}
 
 		returnValue = append(returnValue, map[string]interface{}{
 			"transaction_date":    transaction_date,
@@ -840,56 +920,45 @@ func GetAllUnrealizedGainsLosses(appCtx *app_context.AppContext) ([]map[string]i
 			"stock_name":          stock_name,
 			"transaction_price":   transaction_price,
 			"investment_cost":     investment_cost,
+			"shares":              shares,
 			"todayClosePrice":     todayClosePrice,
 			"now_value":           math.Round(now_value*100) / 100,
 			"predict_profit_loss": math.Round(predict_profit_loss*100) / 100,
 			"predict_profit_rate": math.Round(predict_profit_rate*100) / 100,
 		})
 	}
-
 	return returnValue, nil
 }
 
 func GetAllRealizedGainsLosses(appCtx *app_context.AppContext) ([]map[string]interface{}, error) {
-	err := ConnectToMariadb(appCtx) // 連接至 Mariadb Server
-	if err != nil {
-		appCtx.Log.Error("ConnectToMariadb 錯誤:")
+	if err := ConnectToMariadb(appCtx); err != nil {
+		return nil, err
+	}
+	if err := ConnectToDatabase(appCtx, "StockLongData"); err != nil {
 		return nil, err
 	}
 
-	err = ConnectToDatabase(appCtx, "StockLongData") // 嘗試使用資料庫 "StockLongData"
-	if err != nil {
-		appCtx.Log.Error("ConnectToDatabase 錯誤:")
-		return nil, err
-	}
-
-	// 準備 SQL 指令
-	SQL_cmd := "SELECT buy_date, sell_date, stock_id, stock_name, purchase_price, sell_price, investment_cost, revenue, profit_loss, profit_rate FROM RealizedGainsLosses ORDER BY sell_date DESC LIMIT 500;"
-	appCtx.Log.Info("SQL_cmd: ", SQL_cmd)
-
-	// 執行查詢
+	SQL_cmd := "SELECT buy_date, sell_date, stock_id, stock_name, purchase_price, sell_price, investment_cost, revenue, profit_loss, profit_rate, shares FROM RealizedGainsLosses ORDER BY sell_date DESC LIMIT 500;"
 	rows, err := appCtx.Db.Query(SQL_cmd)
 	if err != nil {
-		appCtx.Log.Error("appCtx.Db.Query 錯誤:")
 		return nil, err
 	}
 	defer rows.Close()
 
 	returnValue := make([]map[string]interface{}, 0)
 	for rows.Next() {
-		buy_date := ""         // 買入日期
-		sell_date := ""        // 賣出日期
-		stock_id := ""         // 股票代號
-		stock_name := ""       // 股票名稱
-		purchase_price := 0.0  // 買入價格
-		sell_price := 0.0      // 賣出價格
-		investment_cost := 0.0 // 投資成本
-		revenue := 0.0         // 總收益
-		profit_loss := 0.0     // 損益
-		profit_rate := 0.0     // 損益率
-		err := rows.Scan(&buy_date, &sell_date, &stock_id, &stock_name, &purchase_price, &sell_price, &investment_cost, &revenue, &profit_loss, &profit_rate)
-		if err != nil {
-			appCtx.Log.Error("rows.Scan 錯誤:")
+		buy_date := ""
+		sell_date := ""
+		stock_id := ""
+		stock_name := ""
+		purchase_price := 0.0
+		sell_price := 0.0
+		investment_cost := 0.0
+		revenue := 0.0
+		profit_loss := 0.0
+		profit_rate := 0.0
+		shares := 0
+		if err := rows.Scan(&buy_date, &sell_date, &stock_id, &stock_name, &purchase_price, &sell_price, &investment_cost, &revenue, &profit_loss, &profit_rate, &shares); err != nil {
 			return nil, err
 		}
 
@@ -904,43 +973,31 @@ func GetAllRealizedGainsLosses(appCtx *app_context.AppContext) ([]map[string]int
 			"revenue":         math.Round(revenue*100) / 100,
 			"profit_loss":     math.Round(profit_loss*100) / 100,
 			"profit_rate":     math.Round(profit_rate*100) / 100,
+			"shares":          shares,
 		})
 	}
-
 	return returnValue, nil
 }
 
 func GetStockStatisticData(appCtx *app_context.AppContext) ([]map[string]interface{}, error) {
-	trackStocks_market_array := strings.Split(os.Getenv("TrackStocks_Market"), "&")
-	trackStocks_highDividend_array := strings.Split(os.Getenv("TrackStocks_HighDividend"), "&")
-	trackStocksArray := append(trackStocks_market_array, trackStocks_highDividend_array...)
-
 	returnValue := make([]map[string]interface{}, 0)
-	for _, stockID := range trackStocksArray {
+	for _, stockID := range appCtx.Cfg.TrackStocks {
 		stockName, err := GetStockName(appCtx, stockID)
 		if err != nil {
-			appCtx.Log.Error("GetStockName 錯誤:")
 			return nil, err
 		}
 
-		// 取得當天收盤價
 		todayPrice, err := GetTodayStockPrice(appCtx, stockID, time.Now().Format("2006-01-02"), "close_price")
 		if err != nil {
-			appCtx.Log.Error("GetTodayStockPrice 錯誤:")
 			return nil, err
 		}
 
-		// 取得當天價格是近 i 天的高點
 		upperPointDays := UpperPointDays(appCtx, stockID, time.Now().Format("2006-01-02"))
 		if upperPointDays == -1 {
-			appCtx.Log.Error("UpperPointDays 錯誤:")
 			return nil, nil
 		}
-
-		// 取得當天價格是近 i 天的低點
 		lowerPointDays := LowerPointDays(appCtx, stockID, time.Now().Format("2006-01-02"))
 		if lowerPointDays == -1 {
-			appCtx.Log.Error("LowerPointDays 錯誤:")
 			return nil, nil
 		}
 
@@ -952,111 +1009,62 @@ func GetStockStatisticData(appCtx *app_context.AppContext) ([]map[string]interfa
 			"upper_point_days": upperPointDays,
 		})
 	}
-
 	return returnValue, nil
 }
 
 func GetStockHistoryData(appCtx *app_context.AppContext, stockId string) ([]map[string]interface{}, error) {
-	err := ConnectToMariadb(appCtx) // 連接至 Mariadb Server
-	if err != nil {
-		appCtx.Log.Error("ConnectToMariadb 錯誤:")
+	if err := ConnectToMariadb(appCtx); err != nil {
+		return nil, err
+	}
+	if err := ConnectToDatabase(appCtx, "StockLongData"); err != nil {
 		return nil, err
 	}
 
-	err = ConnectToDatabase(appCtx, "StockLongData") // 嘗試使用資料庫 "StockLongData"
-	if err != nil {
-		appCtx.Log.Error("ConnectToDatabase 錯誤:")
-		return nil, err
-	}
-
-	// 準備 SQL 指令
 	SQL_cmd := "SELECT date, close_price FROM StockHistory WHERE stock_id = ? ORDER BY date ASC;"
-	appCtx.Log.Info("SQL_cmd: ", fmt.Sprintf(SQL_cmd, stockId))
-
-	// 執行查詢
 	rows, err := appCtx.Db.Query(SQL_cmd, stockId)
 	if err != nil {
-		appCtx.Log.Error("appCtx.Db.Query 錯誤:")
 		return nil, err
 	}
 	defer rows.Close()
 
 	returnValue := make([]map[string]interface{}, 0)
 	for rows.Next() {
-		date := ""   // 日期
-		price := 0.0 // 收盤價
-		err := rows.Scan(&date, &price)
-		if err != nil {
-			appCtx.Log.Error("rows.Scan 錯誤:")
+		date := ""
+		price := 0.0
+		if err := rows.Scan(&date, &price); err != nil {
 			return nil, err
 		}
-
 		returnValue = append(returnValue, map[string]interface{}{
 			"date":  date,
 			"price": price,
 		})
 	}
-
 	return returnValue, nil
 }
 
-// 取得未實現損益中，某支股票的最高或最低交易價格，若無資料則回傳 -1
+// GetTransactionPriceOfUnrealizedGainsLosses 取得未實現損益中，某支股票的最高或最低交易價格，
+// 若無資料則回傳 -1。
 func GetTransactionPriceOfUnrealizedGainsLosses(appCtx *app_context.AppContext, stockID string, today string, types string) (float64, error) {
-	err := ConnectToMariadb(appCtx) // 連接至 Mariadb Server
-	if err != nil {
-		appCtx.Log.Error("ConnectToMariadb 錯誤:")
+	if err := ConnectToMariadb(appCtx); err != nil {
+		return -1, err
+	}
+	if err := ConnectToDatabase(appCtx, "StockLongData"); err != nil {
 		return -1, err
 	}
 
-	err = ConnectToDatabase(appCtx, "StockLongData") // 嘗試使用資料庫 "StockLongData"
-	if err != nil {
-		appCtx.Log.Error("ConnectToDatabase 錯誤:")
-		return -1, err
-	}
-
-	// 準備 SQL 指令
-	SQL_cmd := "SELECT transaction_price FROM UnrealizedGainsLosses WHERE stock_id = ? AND transaction_date <= ?;"
-	appCtx.Log.Info("SQL_cmd: ", fmt.Sprintf(SQL_cmd, stockID, today))
-
-	// 執行查詢
-	rows, err := appCtx.Db.Query(SQL_cmd, stockID, today)
-	if err != nil {
-		appCtx.Log.Error("appCtx.Db.Query 錯誤:")
-		return -1, err
-	}
-	defer rows.Close()
-
-	UnrealizedGainsLosses := make([]map[string]interface{}, 0)
-	for rows.Next() {
-		transaction_price := 0.0
-		err := rows.Scan(&transaction_price)
-		if err != nil {
-			appCtx.Log.Error("rows.Scan 錯誤:")
-			return -1, err
-		}
-		UnrealizedGainsLosses = append(UnrealizedGainsLosses, map[string]interface{}{
-			"transaction_price": transaction_price,
-		})
-	}
-
-	returnValue := 0.0
+	var SQL_cmd string
 	if types == "Highest" {
-		returnValue = -1
-	} else if types == "Lowest" {
-		returnValue = 1000000000
+		SQL_cmd = "SELECT MAX(transaction_price) FROM UnrealizedGainsLosses WHERE stock_id = ? AND transaction_date <= ?;"
+	} else {
+		SQL_cmd = "SELECT MIN(transaction_price) FROM UnrealizedGainsLosses WHERE stock_id = ? AND transaction_date <= ?;"
 	}
-
-	for _, record := range UnrealizedGainsLosses {
-		if types == "Highest" {
-			returnValue = max(returnValue, record["transaction_price"].(float64))
-		} else if types == "Lowest" {
-			returnValue = min(returnValue, record["transaction_price"].(float64))
-		}
+	row := appCtx.Db.QueryRow(SQL_cmd, stockID, today)
+	var price sql.NullFloat64
+	if err := row.Scan(&price); err != nil {
+		return -1, err
 	}
-
-	if returnValue == 1000000000 {
-		returnValue = -1
+	if !price.Valid {
+		return -1, nil
 	}
-
-	return returnValue, nil
+	return price.Float64, nil
 }
