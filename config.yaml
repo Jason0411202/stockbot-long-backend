@@ -25,6 +25,8 @@ cooldown_days: 14
 
 # Baseline 策略的加碼級距 (依序檢查，第一個符合條件的 tier 決定買入金額)
 # 判斷值 = (今日股價 - 當前持有最高買入價) / 當前持有最高買入價
+# ⚠️ 下方 amount 與 fallback 在「幾何加碼曲線」啟用時 (buy_base_amount + buy_tier_ratio>0)
+#    會被覆寫,只剩 above 邊界仍有效 (見檔案下方的 buy_tier_ratio 區塊)。
 baseline_buy_tiers:
   - { above: -0.1, amount: 500 }
   - { above: -0.2, amount: 750 }
@@ -37,6 +39,22 @@ baseline_buy_fallback_amount: 3000
 # 賣出目標金額即為 baseline_sell_amount (套用 buy_and_sell_multiplier)。
 baseline_sell_threshold: 1.0
 baseline_sell_amount: 10000
+
+# ── 優化旋鈕 (由 cmd/optimize 自主掃描採納;預設關閉的旋鈕全部省略不寫即可) ──
+# RSI 出場 gate:獲利達標後,僅在 RSI(14) >= sell_rsi_min (超買、賣在強勢) 時才出場。
+# 來源:walk-forward 掃描 (objective=calmar) 的唯一穩健勝者 — 中位 Calmar 1.01→1.08、
+# Calmar 勝率 57%→62%,且報酬與回撤幾乎不變 (70~75 為穩定高原,非單點僥倖)。詳見 docs/optimization/RESULTS.md。
+sell_rsi_period: 14
+sell_rsi_min: 75
+
+# 幾何加碼曲線 (#9/#79):啟用後各 tier 金額 = buy_base_amount × buy_tier_ratio^i
+#   (i = 命中的 tier 索引;跌破最深 tier 用 ratio^4 當 fallback)，沿用上方 tier 的 above 邊界。
+# 採用值 base=500 / ratio=2.0 → 實際加碼金額曲線:
+#   -10%內:500、-20%內:1000、-30%內:2000、-40%內:4000、跌超過40%:8000 (再乘 buy_and_sell_multiplier)。
+# 來源:walk-forward 掃描 — 「跌越深買越多」方向正確但現行曲線太淺;加陡到 ~2.0 使
+#   中位 Calmar 1.08→1.10、CAGR 也上升 (1.75~2.5 為高原)。代價:中位 MaxDD -13.5%→-15.3%。
+buy_base_amount: 500
+buy_tier_ratio: 2.0
 
 # 回測起始現金 (只影響回測最終「持有現金」指標)
 initial_cash: 100000

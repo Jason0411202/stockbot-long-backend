@@ -151,9 +151,9 @@ func TestDecideSell_NoPositions_Skipped(t *testing.T) {
 // Engine 的現金夾取 — 即使 DecideBuy 想買很多,執行層也只能買得起的部分。
 func TestEngine_CashClampPreventsNegativeCash(t *testing.T) {
 	cfg := decisionCfg()
-	cfg.InitialCash = 1500          // 只夠買 15 股@100
+	cfg.InitialCash = 1500                  // 只夠買 15 股@100
 	cfg.BaselineBuyFallbackAmount = 100_000 // 策略想買 1000 股@100 → 應被夾取到 15
-	cfg.BaselineBuyTiers = nil      // 強制走 fallback
+	cfg.BaselineBuyTiers = nil              // 強制走 fallback
 
 	// 30 天序列,價格全 100,MA20 在 i>=19 後有效
 	series := map[string]*stockSeries{
