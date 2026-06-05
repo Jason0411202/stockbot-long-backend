@@ -16,20 +16,18 @@ type lot struct {
 	price  float64
 }
 
-// stockSeries 為單一股票經整理後的歷史資料,供引擎查價與 MA20。
+// stockSeries 為單一股票經整理後的歷史資料,供引擎查價與均線。
 type stockSeries struct {
 	dates       []time.Time // asc
 	dateIndex   map[string]int
 	closePrices []float64
 	ma20        []float64 // ma20[i] = 截至 dates[i] 的 20 日均價;不足 20 日以 NaN 表示
 
-	// 以下為選用欄位 (DB 路徑僅填 prefixClose;CSV 快取路徑會填 OHLCV)。
-	// 供優化旋鈕計算指標用;預設路徑 (旋鈕全關) 完全不讀這些欄位。
+	// 選用欄位:DB 路徑僅填 prefixClose;CSV 快取路徑另填 OHLCV。供旋鈕計算指標用。
 	highs       []float64         // 最高價 (可為 nil)
 	lows        []float64         // 最低價 (可為 nil)
 	volumes     []float64         // 成交量 (可為 nil)
 	prefixClose []float64         // 收盤價前綴和,供任意視窗 O(1) 均線查詢
-	rsiCache    map[int][]float64 // period -> 整條 RSI 陣列 (lazy)
 	peakCache   map[int][]float64 // lookback -> 近 lookback 日 (含當日) 最高收盤 (lazy)
 }
 
@@ -85,14 +83,12 @@ type Engine struct {
 	positions     map[string][]lot
 	lastBuy       map[string]time.Time
 	peakSinceHold map[string]float64 // 持倉期間最高收盤 (移動停利用);全出後歸零
-	sellTierIdx   map[string]int     // 賣出階梯:下一個要觸發的級數;全出後歸零
 
 	totalBuys   int
 	totalSells  int
 	skippedBuys int
 
 	trailSells  int // 移動停利觸發的賣出次數
-	stopSells   int // 停損觸發的賣出次數
 	profitSells int // 獲利了結觸發的賣出次數
 
 	rec *DayRecorder // 選用觀測者;nil 表示不收集 (上線模式)。
@@ -104,7 +100,6 @@ type EngineStats struct {
 	TotalSells  int
 	SkippedBuys int
 	TrailSells  int // 移動停利觸發次數
-	StopSells   int // 停損觸發次數
 	ProfitSells int // 獲利了結觸發次數
 }
 
@@ -116,7 +111,6 @@ func NewEngine(cfg *config.Config) *Engine {
 		positions:     make(map[string][]lot, len(cfg.TrackStocks)),
 		lastBuy:       make(map[string]time.Time, len(cfg.TrackStocks)),
 		peakSinceHold: make(map[string]float64, len(cfg.TrackStocks)),
-		sellTierIdx:   make(map[string]int, len(cfg.TrackStocks)),
 	}
 }
 
@@ -149,7 +143,6 @@ func (e *Engine) Stats() EngineStats {
 		TotalSells:  e.totalSells,
 		SkippedBuys: e.skippedBuys,
 		TrailSells:  e.trailSells,
-		StopSells:   e.stopSells,
 		ProfitSells: e.profitSells,
 	}
 }
@@ -231,9 +224,16 @@ func (e *Engine) ProcessDay(today time.Time, series map[string]*stockSeries, exe
 			entryMA = s.maAt(idx, e.cfg.MAWindow)
 		}
 
+		// 牛熊判定 (一天一次);套到買賣兩個 snapshot。
+		isBullToday := false
+		if e.cfg.RegimeMethod != "" {
+			isBullToday = e.regimeBull(s, idx)
+		}
+
 		// === 買入 ===
 		snap := e.buildSnapshot(stockID, today, todayPrice, entryMA)
 		e.applyGateInputs(&snap, s, idx)
+		snap.IsBull = isBullToday
 		if dynSizing {
 			snap.Cash = e.cash
 			snap.Equity = eqToday
@@ -252,22 +252,9 @@ func (e *Engine) ProcessDay(today time.Time, series map[string]*stockSeries, exe
 		// === 賣出 (重新組 Snapshot:剛買的 lot 也可能影響 lowest / highest) ===
 		snap = e.buildSnapshot(stockID, today, todayPrice, entryMA)
 		e.applyGateInputs(&snap, s, idx)
+		snap.IsBull = isBullToday
 		if sell := DecideSell(e.cfg, snap); sell.Should {
 			if err := e.applySell(stockID, today, sell, exec); err != nil {
-				return err
-			}
-		}
-
-		// === 賣出階梯 (引擎層,金字塔/倒金字塔;啟用時取代固定獲利了結) ===
-		if e.cfg.SellLadderMode != "" {
-			if err := e.applySellLadder(stockID, today, todayPrice, exec); err != nil {
-				return err
-			}
-		}
-
-		// === 砍倉 / 停損 (引擎層,可 per-lot / bear-only) ===
-		if e.cfg.CutLossPct > 0 {
-			if err := e.applyCuts(stockID, today, snap.IsBull, todayPrice, exec); err != nil {
 				return err
 			}
 		}
@@ -327,43 +314,14 @@ func (e *Engine) buildSnapshot(stockID string, today time.Time, todayPrice, ma20
 		LastBuyDate:      lb,
 		HeldShares:       heldShares,
 		PeakSinceHold:    e.peakSinceHold[stockID],
-		// 選用 gate 欄位預設 NaN/false,由 applyGateInputs 依旗標填入。
-		LongMA:      math.NaN(),
-		LongMASlope: math.NaN(),
-		RSIForBuy:   math.NaN(),
-		RSIForSell:  math.NaN(),
 	}
 }
 
-// applyGateInputs 依 cfg 旗標「按需」把優化 gate 所需的指標填入 snapshot。
-// 旗標全關時不做任何計算 (零成本),snapshot 維持 NaN/false,決策函式不讀取 → 行為不變。
+// applyGateInputs 依 cfg 旗標「按需」把選用指標填入 snapshot (目前僅 peak 深度基準需要的近期高點)。
+// IsBull / Cash / Equity 由 ProcessDay 設定。
 func (e *Engine) applyGateInputs(snap *Snapshot, s *stockSeries, idx int) {
-	c := e.cfg
-	if c.BuyLongMAWindow > 0 {
-		snap.LongMA = s.maAt(idx, c.BuyLongMAWindow)
-		if c.BuyRequireLongMASlopeUp {
-			lb := c.LongMASlopeLookbackOrDefault()
-			prev := s.maAt(idx-lb, c.BuyLongMAWindow)
-			if !math.IsNaN(snap.LongMA) && !math.IsNaN(prev) {
-				snap.LongMASlope = snap.LongMA - prev
-			}
-		}
-	}
-	if c.BuyRSIPeriod > 0 {
-		snap.RSIForBuy = s.rsiAt(idx, c.BuyRSIPeriod)
-	}
-	if c.SellRSIPeriod > 0 {
-		snap.RSIForSell = s.rsiAt(idx, c.SellRSIPeriod)
-	}
-	if c.BuyConfirmUp && idx > 0 {
-		snap.PrevClose = s.closePrices[idx-1]
-		snap.HasPrevClose = true
-	}
-	if c.RegimeMethod != "" {
-		snap.IsBull = e.regimeBull(s, idx)
-	}
-	if c.BuyDepthBasis == "peak" {
-		lb := c.BuyPeakLookback
+	if e.cfg.BuyDepthBasis == "peak" {
+		lb := e.cfg.BuyPeakLookback
 		if lb <= 0 {
 			lb = 252
 		}
@@ -403,130 +361,12 @@ func (e *Engine) regimeBull(s *stockSeries, idx int) bool {
 	return false
 }
 
-// applySellLadder 是引擎層的「賣出階梯」(金字塔/倒金字塔):依相對均價的獲利分級,
-// 每跨過一級就賣掉當前持股的一個比例 (每級只觸發一次,由 sellTierIdx 記錄進度)。
-func (e *Engine) applySellLadder(stockID string, today time.Time, todayPrice float64, exec Executor) error {
-	mode := e.cfg.SellLadderMode
-	if mode == "" || todayPrice <= 0 {
-		return nil
-	}
-	pos := e.positions[stockID]
-	if len(pos) == 0 {
-		return nil
-	}
-	costSum, sh := 0.0, 0
-	for _, l := range pos {
-		costSum += float64(l.shares) * l.price
-		sh += l.shares
-	}
-	if sh == 0 || costSum <= 0 {
-		return nil
-	}
-	gain := todayPrice/(costSum/float64(sh)) - 1
-	thresholds := []float64{0.5, 1.0, 1.5, 2.0}
-	fracs := []float64{0.10, 0.20, 0.35, 0.50} // pyramid:越漲越賣多
-	if mode == "inverse" {
-		fracs = []float64{0.50, 0.30, 0.20, 0.15} // 倒金字塔:越早賣越多
-	}
-	idx := e.sellTierIdx[stockID]
-	for idx < len(thresholds) && gain >= thresholds[idx] {
-		held := 0
-		for _, l := range e.positions[stockID] {
-			held += l.shares
-		}
-		if held <= 0 {
-			break
-		}
-		toSell := int(math.Round(fracs[idx] * float64(held)))
-		if toSell < 1 {
-			toSell = 1
-		}
-		if err := e.applySell(stockID, today, SellIntent{Should: true, TargetShares: toSell, Price: todayPrice, Reason: "profit"}, exec); err != nil {
-			return err
-		}
-		idx++
-	}
-	if len(e.positions[stockID]) > 0 {
-		e.sellTierIdx[stockID] = idx
-	}
-	return nil
-}
-
-// applyCuts 是引擎層的「砍倉 / 停損」(多形態),在純函式 DecideSell 之外處理,因為要對個別 lot 操作。
-//   - CutBearOnly 且當前多頭 → 不砍。
-//   - CutPerLot=true :只砍「該筆相對自己買價虧損 >= CutLossPct」的 lot,留住便宜的好倉。
-//   - CutPerLot=false:整倉相對加權平均成本虧損 >= CutLossPct 時全數出場。
-//
-// 砍倉以當日收盤價成交;只看當下,無未來資訊。
-func (e *Engine) applyCuts(stockID string, today time.Time, isBull bool, todayPrice float64, exec Executor) error {
-	c := e.cfg
-	if c.CutLossPct <= 0 || todayPrice <= 0 {
-		return nil
-	}
-	if c.CutBearOnly && isBull {
-		return nil
-	}
-	pos := e.positions[stockID]
-	if len(pos) == 0 {
-		return nil
-	}
-
-	soldShares := 0
-	if c.CutPerLot {
-		newPos := make([]lot, 0, len(pos))
-		for _, l := range pos {
-			if l.shares > 0 && todayPrice <= l.price*(1-c.CutLossPct) {
-				e.cash += float64(l.shares) * todayPrice
-				soldShares += l.shares
-				e.totalSells++
-			} else {
-				newPos = append(newPos, l)
-			}
-		}
-		e.positions[stockID] = newPos
-	} else {
-		costSum, sh := 0.0, 0
-		for _, l := range pos {
-			costSum += float64(l.shares) * l.price
-			sh += l.shares
-		}
-		if sh > 0 && todayPrice <= (costSum/float64(sh))*(1-c.CutLossPct) {
-			for _, l := range pos {
-				e.cash += float64(l.shares) * todayPrice
-				soldShares += l.shares
-				e.totalSells++
-			}
-			e.positions[stockID] = nil
-		}
-	}
-
-	if soldShares > 0 {
-		e.stopSells++
-		if len(e.positions[stockID]) == 0 {
-			e.peakSinceHold[stockID] = 0
-			e.sellTierIdx[stockID] = 0
-		}
-		if e.rec != nil && e.rec.OnCashflow != nil {
-			e.rec.OnCashflow(today, float64(soldShares)*todayPrice)
-		}
-		return exec.OnSellApplied(stockID, today, soldShares, todayPrice, e.cash)
-	}
-	return nil
-}
-
 func (e *Engine) applyBuy(stockID string, today time.Time, intent BuyIntent, exec Executor) error {
 	shares := intent.Shares
 	// === 防作弊現金夾取:可利用資金僅為當前持有現金,不得借錢 ===
-	// 選用旗標 CashFloorFrac>0 時,額外保留 CashFloorFrac×InitialCash 不部署 (dry powder, #22)。
 	maxAffordable := 0
 	if intent.Price > 0 {
-		avail := e.cash
-		if e.cfg.CashFloorFrac > 0 {
-			avail = e.cash - e.cfg.CashFloorFrac*e.cfg.InitialCash
-		}
-		if avail > 0 {
-			maxAffordable = int(math.Floor(avail / intent.Price))
-		}
+		maxAffordable = int(math.Floor(e.cash / intent.Price))
 	}
 	if shares > maxAffordable {
 		shares = maxAffordable
@@ -593,15 +433,11 @@ func (e *Engine) applySell(stockID string, today time.Time, intent SellIntent, e
 	e.positions[stockID] = newPos
 	if len(newPos) == 0 {
 		e.peakSinceHold[stockID] = 0 // 全數出場 → 峰值歸零,下次建倉重新追蹤
-		e.sellTierIdx[stockID] = 0   // 賣出階梯也重置
 	}
 	if soldShares > 0 {
-		switch intent.Reason {
-		case "trail":
+		if intent.Reason == "trail" {
 			e.trailSells++
-		case "stop":
-			e.stopSells++
-		default:
+		} else {
 			e.profitSells++
 		}
 		if e.rec != nil && e.rec.OnCashflow != nil {
