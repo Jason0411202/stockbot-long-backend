@@ -102,7 +102,7 @@ func TestDecideBuy_ExactlyAtCooldownBoundary_Triggers(t *testing.T) {
 	}
 }
 
-// 已有持倉、最低成本不夠高時,DecideSell 不應觸發。
+// 已有持倉、最低成本不夠高時,DecideSell 不應觸發 (多頭下測門檻路徑)。
 func TestDecideSell_GainBelowThreshold_Skipped(t *testing.T) {
 	cfg := decisionCfg() // baseline_sell_threshold = 1.0 (gain 必須 > 100%)
 	snap := Snapshot{
@@ -110,13 +110,14 @@ func TestDecideSell_GainBelowThreshold_Skipped(t *testing.T) {
 		Today:           mustDate(t, "2024-06-01"),
 		TodayPrice:      150, // (150-100)/100 = 0.5,未達 1.0
 		LowestHeldPrice: 100,
+		IsBull:          true, // 獲利了結僅多頭觸發
 	}
 	if got := DecideSell(cfg, snap); got.Should {
 		t.Fatalf("expected no sell when gain < threshold, got %+v", got)
 	}
 }
 
-// 達到獲利門檻時,DecideSell 應觸發。
+// 達到獲利門檻時 (且多頭),DecideSell 應觸發。
 func TestDecideSell_GainMeetsThreshold_Triggers(t *testing.T) {
 	cfg := decisionCfg()
 	snap := Snapshot{
@@ -124,6 +125,7 @@ func TestDecideSell_GainMeetsThreshold_Triggers(t *testing.T) {
 		Today:           mustDate(t, "2024-06-01"),
 		TodayPrice:      210, // (210-100)/100 = 1.10 > 1.0
 		LowestHeldPrice: 100,
+		IsBull:          true, // 獲利了結僅多頭觸發
 	}
 	got := DecideSell(cfg, snap)
 	if !got.Should {
@@ -131,6 +133,21 @@ func TestDecideSell_GainMeetsThreshold_Triggers(t *testing.T) {
 	}
 	if got.TargetShares <= 0 {
 		t.Fatalf("expected positive target shares, got %d", got.TargetShares)
+	}
+}
+
+// 獲利已達門檻但處於空頭時,獲利了結不應觸發 (僅多頭適用)。
+func TestDecideSell_ProfitInBear_Skipped(t *testing.T) {
+	cfg := decisionCfg()
+	snap := Snapshot{
+		StockID:         "TEST",
+		Today:           mustDate(t, "2024-06-01"),
+		TodayPrice:      210, // gain 1.10 >= 1.0,但空頭
+		LowestHeldPrice: 100,
+		IsBull:          false,
+	}
+	if got := DecideSell(cfg, snap); got.Should {
+		t.Fatalf("expected no profit-take in bear regime, got %+v", got)
 	}
 }
 

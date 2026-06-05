@@ -82,7 +82,8 @@ type Engine struct {
 	cash          float64
 	positions     map[string][]lot
 	lastBuy       map[string]time.Time
-	peakSinceHold map[string]float64 // 持倉期間最高收盤 (移動停利用);全出後歸零
+	peakSinceHold map[string]float64     // 持倉期間最高收盤 (移動停利用);全出後歸零
+	breakDates    map[string][]time.Time // 每檔歷次「動用打破冷卻額度」的日期 (滾動視窗計數用)
 
 	totalBuys   int
 	totalSells  int
@@ -98,7 +99,7 @@ type Engine struct {
 type EngineStats struct {
 	TotalBuys   int
 	TotalSells  int
-	SkippedBuys int
+	SkippedBuys int // 想買但可動用現金連 1 股都不夠 → 完全沒買成
 	TrailSells  int // 移動停利觸發次數
 	ProfitSells int // 獲利了結觸發次數
 }
@@ -111,6 +112,7 @@ func NewEngine(cfg *config.Config) *Engine {
 		positions:     make(map[string][]lot, len(cfg.TrackStocks)),
 		lastBuy:       make(map[string]time.Time, len(cfg.TrackStocks)),
 		peakSinceHold: make(map[string]float64, len(cfg.TrackStocks)),
+		breakDates:    make(map[string][]time.Time, len(cfg.TrackStocks)),
 	}
 }
 
@@ -198,10 +200,11 @@ func (e *Engine) FinalHoldingValue(series map[string]*stockSeries) float64 {
 //  4. 通知 Executor (上線:寫 DB / 發 Discord;回測:no-op)
 func (e *Engine) ProcessDay(today time.Time, series map[string]*stockSeries, exec Executor) error {
 	todayStr := today.Format("2006-01-02")
-	// 動態部位大小啟用時,先算當日總權益 (含未來資訊?無 — 用今日收盤,即決策價);否則零成本略過。
+	// 動態部位大小 / 牛市權益比例買入 啟用時,先算當日總權益 (用今日收盤即決策價,無未來資訊);否則零成本略過。
 	dynSizing := e.cfg.BuySizeMode == "cash" || e.cfg.BuySizeMode == "equity"
+	needEquity := dynSizing || e.cfg.BuyFracBasis == "equity"
 	eqToday := 0.0
-	if dynSizing {
+	if needEquity {
 		eqToday = e.cash + e.HoldingValueAsOf(series, today)
 	}
 	for _, stockID := range e.cfg.TrackStocks {
@@ -234,9 +237,12 @@ func (e *Engine) ProcessDay(today time.Time, series map[string]*stockSeries, exe
 		snap := e.buildSnapshot(stockID, today, todayPrice, entryMA)
 		e.applyGateInputs(&snap, s, idx)
 		snap.IsBull = isBullToday
-		if dynSizing {
-			snap.Cash = e.cash
+		snap.Cash = e.cash
+		if needEquity {
 			snap.Equity = eqToday
+		}
+		if e.cfg.CooldownBreakBudget > 0 {
+			snap.CooldownBreaksLeft = e.cfg.CooldownBreakBudget - e.breaksInWindow(stockID, today)
 		}
 		if buy := DecideBuy(e.cfg, snap); buy.Should {
 			if err := e.applyBuy(stockID, today, buy, exec); err != nil {
@@ -317,8 +323,24 @@ func (e *Engine) buildSnapshot(stockID string, today time.Time, todayPrice, ma20
 	}
 }
 
-// applyGateInputs 依 cfg 旗標「按需」把選用指標填入 snapshot (目前僅 peak 深度基準需要的近期高點)。
-// IsBull / Cash / Equity 由 ProcessDay 設定。
+// breaksInWindow 回傳近 CooldownBreakWindowDays 日曆日內 (不含界外) 同一檔已動用的「打破冷卻」次數。
+func (e *Engine) breaksInWindow(stockID string, today time.Time) int {
+	w := e.cfg.CooldownBreakWindowDays
+	if w <= 0 {
+		w = 365 // ≈252 交易日≈1 年
+	}
+	cutoff := today.Add(-time.Duration(w) * 24 * time.Hour)
+	n := 0
+	for _, d := range e.breakDates[stockID] {
+		if d.After(cutoff) {
+			n++
+		}
+	}
+	return n
+}
+
+// applyGateInputs 依 cfg 旗標「按需」把選用指標填入 snapshot (近期高點 RecentPeak,供 peak 深度基準 /
+// 熊市現金比例的深度權重使用)。IsBull / Cash / Equity / CooldownBreaksLeft 由 ProcessDay 設定。
 func (e *Engine) applyGateInputs(snap *Snapshot, s *stockSeries, idx int) {
 	if e.cfg.BuyDepthBasis == "peak" {
 		lb := e.cfg.BuyPeakLookback
@@ -387,6 +409,9 @@ func (e *Engine) applyBuy(stockID string, today time.Time, intent BuyIntent, exe
 		price:  intent.Price,
 	})
 	e.lastBuy[stockID] = today
+	if intent.BrokeCooldown {
+		e.breakDates[stockID] = append(e.breakDates[stockID], today) // 記錄一次「打破冷卻」(滾動視窗計數)
+	}
 	e.totalBuys++
 	// 觀測者記錄夾取後的真實成交額 (買入為負現金流)。被夾取到 0 股的情況已在上面提前 return。
 	if e.rec != nil && e.rec.OnCashflow != nil {

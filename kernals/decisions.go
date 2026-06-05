@@ -12,6 +12,9 @@ type BuyIntent struct {
 	Should bool
 	Shares int
 	Price  float64 // = 當日收盤價
+
+	// BrokeCooldown:本次買入是靠「打破冷卻額度」放行的 → 執行層套用後需扣 1 次額度。
+	BrokeCooldown bool
 }
 
 // SellIntent 是 DecideSell 的純函式輸出。
@@ -37,19 +40,22 @@ type Snapshot struct {
 
 	// 以下由引擎依 cfg 旗標「按需」填入;旗標關閉時維持零值/NaN,決策函式不讀取 → 行為與原始 Baseline 相同。
 	IsBull        bool    // 牛熊判定 (RegimeMethod 關閉時恆為 false = bear/中性)
-	RecentPeak    float64 // 近期高點 (peak 深度基準用);未啟用為 NaN
+	RecentPeak    float64 // 近期高點 (peak 深度基準 / 深跌判斷用);未啟用為 NaN
 	Cash          float64 // 當前現金 (動態部位大小用)
 	Equity        float64 // 當前總權益 = 現金 + 持股市值 (動態部位大小用)
 	PeakSinceHold float64 // 持倉期間 (含今日) 的最高收盤;移動停利用。無持倉/未追蹤為 0
 	HeldShares    int     // 目前持有總股數;移動停利全出時用
+
+	// idea-2「打破冷卻額度」用 (engine 依 cfg 按需填入;CooldownBreakBudget 關閉時維持 0,決策不讀取)。
+	CooldownBreaksLeft int // 尚餘的「打破冷卻」額度
 }
 
 // DecideBuy 是買入判斷,純函式,不產生任何副作用。
 // 規則:
 //  1. 當日有正常價格、有進場均線。
 //  2. 觸發:今價 < 進場均線×(1+band);bull 用 BullBuyBand 放寬,bear 嚴格 (band=0)。
-//  3. 不在冷卻期 (bull 可用 BullCooldownDays)。
-//  4. 金額:bull 用固定大額 (BullBuyAmount),bear 走 depth 表 (越深越大);可按帳戶大小動態縮放。
+//  3. 冷卻 (passesCooldown):固定冷卻;CooldownBreakBudget>0 時可動用額度提前買 (撿回被錯過的深跌點)。
+//  4. 金額 (buyAmount):bull 用 idea-1「現金/權益比例」(BuyFracBasis+BullBuyFrac) 或固定大額;bear 走 depth 表;可按帳戶大小縮放。
 func DecideBuy(cfg *config.Config, snap Snapshot) BuyIntent {
 	if snap.TodayPrice <= 0 || math.IsNaN(snap.MA20) {
 		return BuyIntent{}
@@ -61,17 +67,55 @@ func DecideBuy(cfg *config.Config, snap Snapshot) BuyIntent {
 	if snap.TodayPrice >= snap.MA20*(1+band) {
 		return BuyIntent{}
 	}
-	if snap.HasLastBuy {
-		cdDays := cfg.CooldownDays
-		if snap.IsBull && cfg.BullCooldownDays > 0 {
-			cdDays = cfg.BullCooldownDays
-		}
-		if snap.Today.Sub(snap.LastBuyDate) < time.Duration(cdDays)*24*time.Hour {
-			return BuyIntent{}
+
+	ok, broke := passesCooldown(cfg, snap)
+	if !ok {
+		return BuyIntent{}
+	}
+
+	shares := amountToShares(buyAmount(cfg, snap), snap.TodayPrice)
+	if shares <= 0 {
+		return BuyIntent{}
+	}
+	return BuyIntent{Should: true, Shares: shares, Price: snap.TodayPrice, BrokeCooldown: broke}
+}
+
+// passesCooldown 判斷是否通過冷卻,並回報是否動用了一次「打破冷卻」額度。
+//   - 無上次買入,或已過冷卻天數 (bull 可用 BullCooldownDays) → 通過。
+//   - 仍在冷卻內:若 CooldownBreakBudget 尚有額度則放行並標記耗用;否則擋下。
+func passesCooldown(cfg *config.Config, snap Snapshot) (ok, broke bool) {
+	if !snap.HasLastBuy {
+		return true, false
+	}
+	cdDays := cfg.CooldownDays
+	if snap.IsBull && cfg.BullCooldownDays > 0 {
+		cdDays = cfg.BullCooldownDays
+	}
+	if snap.Today.Sub(snap.LastBuyDate) >= time.Duration(cdDays)*24*time.Hour {
+		return true, false
+	}
+	if cfg.CooldownBreakBudget > 0 && snap.CooldownBreaksLeft > 0 {
+		return true, true // 動用一次「打破冷卻」額度,撿回被冷卻錯過的深跌買點 (牛熊皆可;實測限定單一 regime 反而較差)
+	}
+	return false, false
+}
+
+// buyAmount 回傳本次買入的目標金額 (現金夾取前)。
+// idea-1:BuyFracBasis 啟用時,像「賣固定比例持股」那樣買固定比例的現金/權益 —
+// 牛市 = 基準×BullBuyFrac;熊市 (BearBuyFrac>0) = 基準×BearBuyFrac×幾何深度權重 (永遠留現金尾巴 → 深跌仍有錢)。
+// 否則維持原 fixed/tier + buy_size_mode 縮放。
+func buyAmount(cfg *config.Config, snap Snapshot) float64 {
+	if cfg.BuyFracBasis != "" {
+		if basis := fracBasis(cfg, snap); basis > 0 {
+			if snap.IsBull && cfg.BullBuyFrac > 0 {
+				return basis * cfg.BullBuyFrac
+			}
+			if !snap.IsBull && cfg.BearBuyFrac > 0 {
+				return basis * cfg.BearBuyFrac * bearDepthWeight(cfg, buyDepthPct(cfg, snap))
+			}
 		}
 	}
 
-	// 買入金額:bull 固定大額 (少次大額);否則 depth 表 (越深越大)。
 	var amount float64
 	if snap.IsBull && cfg.BullBuyAmount > 0 {
 		amount = cfg.BullBuyAmount * cfg.BuyAndSellMultiplier
@@ -91,14 +135,40 @@ func DecideBuy(cfg *config.Config, snap Snapshot) BuyIntent {
 			}
 		}
 	}
-	shares := amountToShares(amount, snap.TodayPrice)
-	if shares <= 0 {
-		return BuyIntent{}
-	}
-	return BuyIntent{Should: true, Shares: shares, Price: snap.TodayPrice}
+	return amount
 }
 
-// DecideSell 是賣出判斷,純函式。先檢查熊市移動停利 (保護式全出),再檢查獲利了結 (可分批)。
+// fracBasis 回傳比例買入的基準金額 (現金或權益)。
+func fracBasis(cfg *config.Config, snap Snapshot) float64 {
+	switch cfg.BuyFracBasis {
+	case "cash":
+		return snap.Cash
+	case "equity":
+		return snap.Equity
+	}
+	return 0
+}
+
+// bearDepthWeight 回傳熊市「跌越深買越多」的幾何權重 (ratio^命中tier索引),供比例買入縮放。
+func bearDepthWeight(cfg *config.Config, depthPct float64) float64 {
+	ratio := cfg.BuyTierRatio
+	if ratio <= 0 {
+		ratio = 1
+	}
+	for i, tier := range cfg.BaselineBuyTiers {
+		if depthPct > tier.Above {
+			return math.Pow(ratio, float64(i))
+		}
+	}
+	return math.Pow(ratio, float64(len(cfg.BaselineBuyTiers)))
+}
+
+// DecideSell 是賣出判斷,純函式。
+//   - 熊市🔴:只走移動停利 (保護式全出)。
+//   - 多頭🟢:只走 +100% 獲利了結 (可分批)。
+//
+// 獲利了結僅限多頭:要「相對最低成本翻倍」價格幾乎必已站上 200MA (= 多頭),
+// 實測連續 7 年回測空頭觸發 0 次,故明確限定多頭,讓程式碼與實際行為一致。
 func DecideSell(cfg *config.Config, snap Snapshot) SellIntent {
 	if snap.TodayPrice <= 0 || snap.LowestHeldPrice <= 0 {
 		return SellIntent{}
@@ -113,7 +183,10 @@ func DecideSell(cfg *config.Config, snap Snapshot) SellIntent {
 		}
 	}
 
-	// ── 獲利了結:持倉最低成本獲利 >= 門檻時賣出 ──
+	// ── 獲利了結 (僅多頭):持倉最低成本獲利 >= 門檻時賣出 ──
+	if !snap.IsBull {
+		return SellIntent{}
+	}
 	gain := (snap.TodayPrice - snap.LowestHeldPrice) / snap.LowestHeldPrice
 	if gain < cfg.BaselineSellThreshold {
 		return SellIntent{}

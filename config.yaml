@@ -31,25 +31,32 @@ regime_ma_window: 200     # 200 日均線為牛熊分界 (掃描證實最佳;不
 cooldown_days: 14         # 空頭冷卻
 bull_cooldown_days: 14    # 牛市冷卻
 
-# ── 牛市:放寬進場 + 固定大額 (解決多頭抱現金) ──
+# ── 部位大小:全程「現金比例」買入 (idea-1;買剩餘現金的一定比例,不是固定金額) ──
+# 花現金的某個 % 在數學上永遠歸不了零 → 每個更深更便宜的跌點都還有錢買;
+# 也讓買入隨現金遞減自然減速,是把回撤壓在 ~21% 的主煞車,並根治「深跌沒銀彈」(深跌沒錢 79→0)。
 bull_buy_band: 0.05       # 牛市:收盤 < 10MA×1.05 即可買 (熊市維持嚴格 <10MA)
-bull_buy_amount: 2000     # 牛市每次固定買 2000 (×multiplier=3 → 實買 6000)
+buy_frac_basis: cash      # 買入基準 = 當前剩餘現金
+bull_buy_frac: 0.10       # 牛市每次買「現金的 10%」
+bear_buy_frac: 0.02       # 熊市每次買「現金的 2% × 跌幅深度權重」(取代固定幾何 tier 金額)
+bull_buy_amount: 2000     # 固定大額後備值 (buy_frac_basis 啟用時不使用)
 
-# ── 熊市:分級加碼 (幾何曲線,依「距一年高點回撤」越深買越多) ──
-buy_depth_basis: peak     # 加碼深度基準:距近 252 日最高點的回撤 (比相對自己成本更客觀)
-buy_base_amount: 500      # 幾何曲線基底
-buy_tier_ratio: 2.0       # 各 tier = base×ratio^i → 500/1000/2000/4000/8000 (×multiplier)
-baseline_buy_tiers:       # 只用 above 邊界 (金額由幾何曲線覆寫)
+# ── 冷卻:打破冷卻額度 (idea-2;滾動視窗;撿回被 14 天冷卻錯過的深跌買點) ──
+cooldown_break_budget: 2        # 每檔「近 365 日內最多 2 次」可無視冷卻提前買入
+cooldown_break_window_days: 365 # 滾動視窗 (日曆日≈252 交易日≈1 年);回測/連續/上線三模式語意一致
+
+# ── 熊市加碼深度:決定「跌越深買越大比例」的權重曲線 ──
+buy_depth_basis: peak     # 深度基準:距近 252 日最高點的回撤 (比相對自己成本更客觀)
+buy_tier_ratio: 2.5       # 深度權重 = ratio^命中tier索引 → 1/2.5/6.25/15.6/39 (跌越深、現金比例放越大)
+baseline_buy_tiers:       # 深度分界 (-10%/-20%/-30%/-40%)
   - { above: -0.1 }
   - { above: -0.2 }
   - { above: -0.3 }
   - { above: -0.4 }
-
-# ── 動態部位大小:買入金額隨總權益等比放大 (長線複利) ──
-buy_size_mode: equity
+buy_base_amount: 500      # (僅 bear_buy_frac 關閉、走固定幾何 tier 時使用;現行未使用)
+buy_size_mode: equity     # (僅固定金額路徑用;現行牛熊皆走現金比例,不使用)
 
 # ── 賣出:獲利了結 (分批) + 熊市移動停利 ──
-baseline_sell_threshold: 1.0   # 持倉最低成本獲利 ≥ 100% 觸發獲利了結
+baseline_sell_threshold: 1.0   # 持倉最低成本獲利 ≥ 100% 觸發獲利了結 (僅多頭;實測空頭從未達成翻倍)
 sell_frac_of_position: 0.33    # 獲利了結改賣「當前持股的 33%」(分批出場,取代固定金額)
 trail_stop_bear: 0.08          # 熊市移動停利:從持有期間峰值回落 8% 全數出場
 trail_min_gain: 0.20           # 移動停利僅在曾獲利 ≥ 20% 後才武裝 (不停損逢低買進)

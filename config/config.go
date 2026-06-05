@@ -75,6 +75,25 @@ type Config struct {
 	SellFracOfPosition float64 `yaml:"sell_frac_of_position"`
 	TrailStopBear      float64 `yaml:"trail_stop_bear"`
 	TrailMinGain       float64 `yaml:"trail_min_gain"`
+
+	// ── Idea 1 (採納):牛市買入改用「現金 / 權益比例」而非固定金額 (像獲利了結賣固定比例那樣) ──
+	//   BuyFracBasis: "" = 關閉 (走原 fixed/tier 邏輯);"cash" = 比例基準為現金;"equity" = 比例基準為總權益。
+	//   BullBuyFrac>0:牛市買入金額 = BuyFracBasis 基準 × BullBuyFrac (取代 BullBuyAmount;不再額外套 buy_size_mode)。
+	//   定版用 cash + 0.10;此「現金比例」會隨現金遞減而自然減速,是把回撤壓在預算內的關鍵煞車。
+	//   熊市不受影響 (仍走幾何 tier + buy_size_mode 複利)。
+	BuyFracBasis string  `yaml:"buy_frac_basis"`
+	BullBuyFrac  float64 `yaml:"bull_buy_frac"`
+
+	// ── Idea 2 (採納):打破冷卻額度 (滾動視窗) ──
+	//   每檔在「近 CooldownBreakWindowDays 日曆日」內,最多可動用 CooldownBreakBudget 次「無視冷卻」提前買入,
+	//   撿回被冷卻期錯過的深跌買點。改用滾動視窗 (取代舊的「每 engine 生命週期 N 次」),讓回測/連續/上線三模式語意一致。
+	CooldownBreakBudget     int `yaml:"cooldown_break_budget"`
+	CooldownBreakWindowDays int `yaml:"cooldown_break_window_days"` // 滾動視窗 (日曆日);<=0 視為 365 (≈252 交易日≈1 年)
+
+	// ── 採納:熊市也用「現金比例」買入,根治「深跌時沒現金」(實測把深跌沒錢 79→0) ──
+	//   BearBuyFrac>0:熊市買入 = 現金 × BearBuyFrac × 幾何深度權重 (ratio^i)。需搭配 BuyFracBasis。
+	//   花現金的固定比例在數學上永遠歸不了零 → 每個更深更便宜的跌點都還有錢買 (vs 固定 tier 會把現金抄光)。
+	BearBuyFrac float64 `yaml:"bear_buy_frac"`
 }
 
 // MAWindowOrDefault 回傳實際使用的進場均線長度 (<=0 時為 20)。
