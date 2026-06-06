@@ -1,56 +1,21 @@
-package kernals
+package trading
 
 import (
 	"fmt"
-	"github.com/Jason0411202/stockbot-long-backend/app_context"
 	"github.com/Jason0411202/stockbot-long-backend/internal/config"
 	"math"
 	"sort"
 	"time"
 )
 
-// lot 為記憶體中的單筆未實現持倉。
-type lot struct {
-	date   time.Time
-	shares int
-	price  float64
-}
-
-// stockSeries 為單一股票經整理後的歷史資料,供引擎查價與均線。
-type stockSeries struct {
-	dates       []time.Time // asc
-	dateIndex   map[string]int
-	closePrices []float64
-	ma20        []float64 // ma20[i] = 截至 dates[i] 的 20 日均價;不足 20 日以 NaN 表示
-
-	// 選用欄位:DB 路徑僅填 prefixClose;CSV 快取路徑另填 OHLCV。供旋鈕計算指標用。
-	highs       []float64         // 最高價 (可為 nil)
-	lows        []float64         // 最低價 (可為 nil)
-	volumes     []float64         // 成交量 (可為 nil)
-	prefixClose []float64         // 收盤價前綴和,供任意視窗 O(1) 均線查詢
-	peakCache   map[int][]float64 // lookback -> 近 lookback 日 (含當日) 最高收盤 (lazy)
-}
-
-// closeAsOf 回傳「在 day 當天或之前最近一個交易日」的收盤價 (as-of 查價)。
-// 用於在「聯集日期」上替某檔沒交易的股票估值 (例如某檔放假、或尚未上市)。
-//   - day 早於該股第一筆資料 (尚未上市) -> (0, false)。
-//   - 其餘 -> 最近一個 <= day 的收盤價, true。
-//
-// 只看過去資料,絕無未來資訊洩漏;O(log n) 走既有已排序的 dates。
-// 注意:不可用 dateIndex (只含精確交易日),也不可用 closePrices[len-1] (那是全序列最後價)。
-func (s *stockSeries) closeAsOf(day time.Time) (float64, bool) {
-	i := sort.Search(len(s.dates), func(i int) bool { return s.dates[i].After(day) })
-	if i == 0 {
-		return 0, false
-	}
-	return s.closePrices[i-1], true
-}
+// engine.go 為上線與回測共用的純 in-memory 模擬器。零 I/O 依賴 (無 DB / Discord / app_context);
+// 價格來源一律走呼叫端傳入的 StockSeries。資料載入 (DB / CSV) 由外層套件負責。
 
 // DayRecorder 為「選用」的觀測回呼,讓回測/評估可在不改變引擎決策的前提下,
 // 收集每日權益曲線與對外現金流。上線模式不掛 recorder (rec == nil),故行為完全不變。
 //
 // 設計成「struct of callbacks 的可空指標 field」而非擴充 Executor 介面 —— 因為 Executor
-// 有兩個既有實作 (noopExecutor / dbExecutor) 且只在成交時被呼叫,無法觀測「無成交日」的權益點。
+// 有兩個既有實作 (NoopExecutor / dbExecutor) 且只在成交時被呼叫,無法觀測「無成交日」的權益點。
 type DayRecorder struct {
 	// OnCashflow 在每次實際成交後觸發。買入為負、賣出為正 (金額為夾取後的真實成交額)。
 	OnCashflow func(day time.Time, amount float64)
@@ -59,7 +24,7 @@ type DayRecorder struct {
 }
 
 // Executor 是引擎將 Intent 套用後通知副作用的回呼介面。
-//   - 回測模式:使用 noopExecutor,不產生任何 DB / Discord 副作用。
+//   - 回測模式:使用 NoopExecutor,不產生任何 DB / Discord 副作用。
 //   - 上線模式:寫入 UnrealizedGainsLosses / RealizedGainsLosses,並可選擇是否發 Discord。
 //
 // 引擎內部的「決策 + 現金 / 持倉變動」對兩種模式完全相同;Executor 只負責持久化與通知。
@@ -68,11 +33,11 @@ type Executor interface {
 	OnSellApplied(stockID string, day time.Time, shares int, price float64, cashAfter float64) error
 }
 
-// noopExecutor 是回測用,什麼副作用都不做。
-type noopExecutor struct{}
+// NoopExecutor 是回測用,什麼副作用都不做。
+type NoopExecutor struct{}
 
-func (noopExecutor) OnBuyApplied(string, time.Time, int, float64, float64) error  { return nil }
-func (noopExecutor) OnSellApplied(string, time.Time, int, float64, float64) error { return nil }
+func (NoopExecutor) OnBuyApplied(string, time.Time, int, float64, float64) error  { return nil }
+func (NoopExecutor) OnSellApplied(string, time.Time, int, float64, float64) error { return nil }
 
 // Engine 是上線與回測共用的 in-memory 模擬器。
 // 它持有「策略觀點下的真實狀態」:現金、未實現持倉、每檔股票最後買入日。
@@ -146,6 +111,15 @@ func (e *Engine) SeedLastBuy(stockID string, date time.Time) {
 // Cash 回傳當前現金。
 func (e *Engine) Cash() float64 { return e.cash }
 
+// PositionCount 回傳某檔目前持有的 lot 筆數 (供跨套件測試在不暴露內部結構下檢視持倉狀態)。
+func (e *Engine) PositionCount(stockID string) int { return len(e.positions[stockID]) }
+
+// LastBuy 回傳某檔最後買入日 (供跨套件測試檢視冷卻基準);無紀錄時 ok=false。
+func (e *Engine) LastBuy(stockID string) (time.Time, bool) {
+	d, ok := e.lastBuy[stockID]
+	return d, ok
+}
+
 // Stats 回傳累計統計。
 func (e *Engine) Stats() EngineStats {
 	return EngineStats{
@@ -159,8 +133,8 @@ func (e *Engine) Stats() EngineStats {
 
 // HoldingValueAsOf 以「day 當天或之前最近收盤價」結算所有持股市值 (as-of 估值)。
 // 用於建立每日權益曲線,以及替「結束日 < 全序列最後日」的視窗正確收尾。
-// 尚未上市 (closeAsOf 回傳 false) 的股票貢獻 0,符合事實。
-func (e *Engine) HoldingValueAsOf(series map[string]*stockSeries, day time.Time) float64 {
+// 尚未上市 (CloseAsOf 回傳 false) 的股票貢獻 0,符合事實。
+func (e *Engine) HoldingValueAsOf(series map[string]*StockSeries, day time.Time) float64 {
 	total := 0.0
 	for stockID, pos := range e.positions {
 		if len(pos) == 0 {
@@ -170,7 +144,7 @@ func (e *Engine) HoldingValueAsOf(series map[string]*stockSeries, day time.Time)
 		if !ok {
 			continue
 		}
-		price, ok := s.closeAsOf(day)
+		price, ok := s.CloseAsOf(day)
 		if !ok {
 			continue
 		}
@@ -187,7 +161,7 @@ func (e *Engine) HoldingValueAsOf(series map[string]*stockSeries, day time.Time)
 //  2. DecideBuy → 套用 (帶現金夾取)
 //  3. 重新組 Snapshot → DecideSell → 套用
 //  4. 通知 Executor (上線:寫 DB / 發 Discord;回測:no-op)
-func (e *Engine) ProcessDay(today time.Time, series map[string]*stockSeries, exec Executor) error {
+func (e *Engine) ProcessDay(today time.Time, series map[string]*StockSeries, exec Executor) error {
 	todayStr := today.Format("2006-01-02")
 	// BuyFracBasis=="equity" 時,先算當日總權益 (用今日收盤即決策價,無未來資訊);cash 基準則零成本略過。
 	needEquity := e.cfg.BuyFracBasis == "equity"
@@ -200,11 +174,11 @@ func (e *Engine) ProcessDay(today time.Time, series map[string]*stockSeries, exe
 		if !ok {
 			continue
 		}
-		idx, ok := s.dateIndex[todayStr]
+		idx, ok := s.DateIndex[todayStr]
 		if !ok {
 			continue
 		}
-		todayPrice := s.closePrices[idx]
+		todayPrice := s.ClosePrices[idx]
 		if todayPrice <= 0 {
 			continue
 		}
@@ -212,8 +186,8 @@ func (e *Engine) ProcessDay(today time.Time, series map[string]*stockSeries, exe
 		// 套用該股 per-stock override (無 override 時 == 共用 cfg,零成本)。其後該股決策一律用 eff。
 		eff := e.cfg.ForStock(stockID)
 
-		// 進場均線:預設用預先算好的 20MA;若 eff.MAWindow 指定其他長度則用 prefixClose O(1) 重算。
-		entryMA := s.ma20[idx]
+		// 進場均線:預設用預先算好的 20MA;若 eff.MAWindow 指定其他長度則用 PrefixClose O(1) 重算。
+		entryMA := s.MA20[idx]
 		if eff.MAWindow > 0 && eff.MAWindow != 20 {
 			entryMA = s.maAt(idx, eff.MAWindow)
 		}
@@ -269,7 +243,7 @@ func (e *Engine) ProcessDay(today time.Time, series map[string]*stockSeries, exe
 }
 
 // ProcessDates 對升冪日期序列連續呼叫 ProcessDay。
-func (e *Engine) ProcessDates(dates []time.Time, series map[string]*stockSeries, exec Executor) error {
+func (e *Engine) ProcessDates(dates []time.Time, series map[string]*StockSeries, exec Executor) error {
 	for _, d := range dates {
 		if err := e.ProcessDay(d, series, exec); err != nil {
 			return err
@@ -333,7 +307,7 @@ func (e *Engine) breaksInWindow(cfg *config.Config, stockID string, today time.T
 
 // applyGateInputs 依 cfg 旗標「按需」把選用指標填入 snapshot (近期高點 RecentPeak,供 peak 深度基準 /
 // 熊市現金比例的深度權重使用)。IsBull / Cash / Equity / CooldownBreaksLeft 由 ProcessDay 設定。
-func (e *Engine) applyGateInputs(snap *Snapshot, s *stockSeries, idx int) {
+func (e *Engine) applyGateInputs(snap *Snapshot, s *StockSeries, idx int) {
 	if e.cfg.BuyDepthBasis == "peak" {
 		lb := e.cfg.BuyPeakLookback
 		if lb <= 0 {
@@ -345,7 +319,7 @@ func (e *Engine) applyGateInputs(snap *Snapshot, s *stockSeries, idx int) {
 
 // regimeBull 依 c.RegimeMethod 判定 (stock, idx) 當日是否為多頭。free function 以支援 per-stock override。
 // 資料不足 (NaN / 回看越界) 一律回 false (= bear/中性,維持嚴格逢低買的保守行為)。
-func regimeBull(c *config.Config, s *stockSeries, idx int) bool {
+func regimeBull(c *config.Config, s *StockSeries, idx int) bool {
 	w := c.RegimeMAWindow
 	if w <= 0 {
 		w = 200
@@ -354,7 +328,7 @@ func regimeBull(c *config.Config, s *stockSeries, idx int) bool {
 	switch c.RegimeMethod {
 	case "ma_pos":
 		ma := s.maAt(idx, w)
-		return !math.IsNaN(ma) && s.closePrices[idx] > ma
+		return !math.IsNaN(ma) && s.ClosePrices[idx] > ma
 	case "ma_slope":
 		if lb <= 0 {
 			lb = 200
@@ -369,7 +343,7 @@ func regimeBull(c *config.Config, s *stockSeries, idx int) bool {
 		if idx-lb < 0 {
 			return false
 		}
-		return s.closePrices[idx] > s.closePrices[idx-lb]
+		return s.ClosePrices[idx] > s.ClosePrices[idx-lb]
 	}
 	return false
 }
@@ -462,97 +436,4 @@ func (e *Engine) applySell(stockID string, today time.Time, intent SellIntent, e
 		return exec.OnSellApplied(stockID, today, soldShares, intent.Price, e.cash)
 	}
 	return nil
-}
-
-// loadStockSeries 從 DB 一次讀入所有追蹤股票的歷史資料並預先計算 20MA。
-// 上線與回測都使用同一份 series — 引擎處理單日決策時,所有讀價皆走 series,而非額外 DB query,
-// 因此兩種模式的「策略觀點」完全一致。
-func loadStockSeries(appCtx *app_context.AppContext) (map[string]*stockSeries, error) {
-	series := make(map[string]*stockSeries, len(appCtx.Cfg.TrackStocks))
-
-	for _, stockID := range appCtx.Cfg.TrackStocks {
-		rows, err := appCtx.Db.Query("SELECT date, close_price FROM StockHistory WHERE stock_id = ? ORDER BY date ASC;", stockID)
-		if err != nil {
-			return nil, fmt.Errorf("load %s history: %w", stockID, err)
-		}
-
-		dates := make([]time.Time, 0, 2048)
-		prices := make([]float64, 0, 2048)
-		for rows.Next() {
-			var dateStr string
-			var price float64
-			if err := rows.Scan(&dateStr, &price); err != nil {
-				rows.Close()
-				return nil, err
-			}
-			t, err := time.Parse("2006-01-02", dateStr)
-			if err != nil {
-				t, err = time.Parse("2006-01-02 15:04:05", dateStr)
-				if err != nil {
-					continue
-				}
-			}
-			dates = append(dates, t)
-			prices = append(prices, price)
-		}
-		rows.Close()
-
-		if len(dates) == 0 {
-			appCtx.Log.Warn("無歷史資料 stockID=", stockID)
-			continue
-		}
-
-		// 還原股票分割 (split):使價格序列連續,再計算 MA / 前綴和。
-		applySplitAdjust(prices)
-
-		idx := make(map[string]int, len(dates))
-		for i, d := range dates {
-			idx[d.Format("2006-01-02")] = i
-		}
-
-		ma20 := make([]float64, len(dates))
-		const window = 20
-		sum := 0.0
-		for i, p := range prices {
-			sum += p
-			if i >= window {
-				sum -= prices[i-window]
-			}
-			if i >= window-1 {
-				ma20[i] = sum / float64(window)
-			} else {
-				ma20[i] = math.NaN()
-			}
-		}
-
-		series[stockID] = &stockSeries{
-			dates:       dates,
-			dateIndex:   idx,
-			closePrices: prices,
-			ma20:        ma20,
-			prefixClose: buildPrefixClose(prices),
-		}
-	}
-
-	return series, nil
-}
-
-// collectDateUnion 回傳所有股票日期的聯集,升冪排序。
-func collectDateUnion(series map[string]*stockSeries) []time.Time {
-	seen := make(map[string]struct{}, 2048)
-	for _, s := range series {
-		for _, d := range s.dates {
-			seen[d.Format("2006-01-02")] = struct{}{}
-		}
-	}
-	out := make([]time.Time, 0, len(seen))
-	for k := range seen {
-		t, err := time.Parse("2006-01-02", k)
-		if err != nil {
-			continue
-		}
-		out = append(out, t)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Before(out[j]) })
-	return out
 }

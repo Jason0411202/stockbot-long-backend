@@ -1,9 +1,9 @@
-package kernals
+package backtest
 
 import (
 	"fmt"
-	"github.com/Jason0411202/stockbot-long-backend/app_context"
 	"github.com/Jason0411202/stockbot-long-backend/internal/config"
+	"github.com/Jason0411202/stockbot-long-backend/internal/service/trading"
 	"math"
 	"sort"
 	"time"
@@ -99,20 +99,8 @@ type AggregateReport struct {
 	OverallPass        bool // G1 && G2 && G3 && G4 (核心主張 + 真擇時)
 }
 
-// RunWalkForward 載入 DB series 後執行 walk-forward 評估 (appCtx 版,供 cmd 呼叫)。
-func RunWalkForward(appCtx *app_context.AppContext, p WalkForwardParams) ([]WindowReport, AggregateReport, error) {
-	series, err := loadStockSeries(appCtx)
-	if err != nil {
-		return nil, AggregateReport{}, err
-	}
-	if len(series) == 0 {
-		return nil, AggregateReport{}, fmt.Errorf("無任何股票歷史資料可供回測")
-	}
-	return walkForwardOnSeries(appCtx.Cfg, series, p)
-}
-
 // walkForwardOnSeries 為不依賴 DB 的核心,方便單元測試。
-func walkForwardOnSeries(cfg *config.Config, series map[string]*stockSeries, p WalkForwardParams) ([]WindowReport, AggregateReport, error) {
+func walkForwardOnSeries(cfg *config.Config, series map[string]*trading.StockSeries, p WalkForwardParams) ([]WindowReport, AggregateReport, error) {
 	if cfg.ScalingStrategy != "Baseline" {
 		return nil, AggregateReport{}, fmt.Errorf("評估目前僅支援 Scaling_Strategy=Baseline")
 	}
@@ -126,7 +114,7 @@ func walkForwardOnSeries(cfg *config.Config, series map[string]*stockSeries, p W
 		p.MinTradeDays = 200
 	}
 
-	allDates := collectDateUnion(series)
+	allDates := trading.CollectDateUnion(series)
 	if len(allDates) == 0 {
 		return nil, AggregateReport{}, fmt.Errorf("無任何日期可供評估")
 	}
@@ -150,8 +138,8 @@ func walkForwardOnSeries(cfg *config.Config, series map[string]*stockSeries, p W
 
 // EvaluateFullSpan 在「共同有效資料期 ~ 最後資料日」的單一連續區間跑一次注資情境評估,
 // 回傳一份 WindowReport (策略 vs B&H vs Blend)。注資動態 (現金累積) 在長區間最明顯,故作為 headline。
-func EvaluateFullSpan(cfg *config.Config, series map[string]*stockSeries) (WindowReport, error) {
-	allDates := collectDateUnion(series)
+func EvaluateFullSpan(cfg *config.Config, series map[string]*trading.StockSeries) (WindowReport, error) {
+	allDates := trading.CollectDateUnion(series)
 	if len(allDates) == 0 {
 		return WindowReport{}, fmt.Errorf("無任何日期可供評估")
 	}
@@ -162,17 +150,17 @@ func EvaluateFullSpan(cfg *config.Config, series map[string]*stockSeries) (Windo
 	return evaluateWindow(cfg, series, allDates, start, allDates[len(allDates)-1])
 }
 
-// commonIssuanceStart 回傳「所有追蹤股票都已發行 (都有資料)」的最早日期 = 各股票第一筆資料日的最大值。
+// CommonIssuanceStart 回傳「所有追蹤股票都已發行 (都有資料)」的最早日期 = 各股票第一筆資料日的最大值。
 // 回測 / 上線都從此日起算,確保整段期間每檔追蹤股票都存在 (不在某檔尚未上市的空窗期做決策)。
-func commonIssuanceStart(cfg *config.Config, series map[string]*stockSeries) (time.Time, bool) {
+func CommonIssuanceStart(cfg *config.Config, series map[string]*trading.StockSeries) (time.Time, bool) {
 	var latest time.Time
 	found := false
 	for _, id := range cfg.TrackStocks {
 		s, ok := series[id]
-		if !ok || len(s.dates) == 0 {
+		if !ok || len(s.Dates) == 0 {
 			continue
 		}
-		if d := s.dates[0]; !found || d.After(latest) {
+		if d := s.Dates[0]; !found || d.After(latest) {
 			latest = d
 			found = true
 		}
@@ -181,16 +169,16 @@ func commonIssuanceStart(cfg *config.Config, series map[string]*stockSeries) (ti
 }
 
 // commonSupportStart 回傳「所有追蹤股票皆已具備有效 MA20」的最早日期。
-// = 各追蹤股票第 20 個交易日 (dates[19]) 的最大值。確保每個視窗起點都無 MA20 暖身空轉。
-func commonSupportStart(cfg *config.Config, series map[string]*stockSeries) (time.Time, bool) {
+// = 各追蹤股票第 20 個交易日 (Dates[19]) 的最大值。確保每個視窗起點都無 MA20 暖身空轉。
+func commonSupportStart(cfg *config.Config, series map[string]*trading.StockSeries) (time.Time, bool) {
 	var latest time.Time
 	found := false
 	for _, id := range cfg.TrackStocks {
 		s, ok := series[id]
-		if !ok || len(s.dates) < 20 {
+		if !ok || len(s.Dates) < 20 {
 			continue
 		}
-		d := s.dates[19]
+		d := s.Dates[19]
 		if !found || d.After(latest) {
 			latest = d
 			found = true
@@ -200,7 +188,7 @@ func commonSupportStart(cfg *config.Config, series map[string]*stockSeries) (tim
 }
 
 // generateWindows 以日曆月為步進,在 [commonSupportStart, 最後資料日] 內產生完整 windowMonths 視窗。
-func generateWindows(cfg *config.Config, series map[string]*stockSeries, allDates []time.Time, p WalkForwardParams) [][2]time.Time {
+func generateWindows(cfg *config.Config, series map[string]*trading.StockSeries, allDates []time.Time, p WalkForwardParams) [][2]time.Time {
 	csStart, ok := commonSupportStart(cfg, series)
 	if !ok {
 		return nil
@@ -219,9 +207,9 @@ func generateWindows(cfg *config.Config, series map[string]*stockSeries, allDate
 	return windows
 }
 
-// contributionAmounts 回傳與 windowDates 對齊的「每日注資額」:每個日曆月的第一個交易日 (視窗起始月除外)
+// ContributionAmounts 回傳與 windowDates 對齊的「每日注資額」:每個日曆月的第一個交易日 (視窗起始月除外)
 // 注入 monthly,其餘為 0。monthly<=0 時全為 0 (退化回無注資)。
-func contributionAmounts(windowDates []time.Time, monthly float64) []float64 {
+func ContributionAmounts(windowDates []time.Time, monthly float64) []float64 {
 	out := make([]float64, len(windowDates))
 	if monthly <= 0 || len(windowDates) == 0 {
 		return out
@@ -238,7 +226,7 @@ func contributionAmounts(windowDates []time.Time, monthly float64) []float64 {
 }
 
 // evaluateWindow 對單一 [start, end] 視窗同時跑策略與兩對照組 (含每月注資),算出所有指標。
-func evaluateWindow(cfg *config.Config, series map[string]*stockSeries, allDates []time.Time, start, end time.Time) (WindowReport, error) {
+func evaluateWindow(cfg *config.Config, series map[string]*trading.StockSeries, allDates []time.Time, start, end time.Time) (WindowReport, error) {
 	lo := sort.Search(len(allDates), func(i int) bool { return !allDates[i].Before(start) })
 	hi := sort.Search(len(allDates), func(i int) bool { return allDates[i].After(end) })
 	if lo >= hi {
@@ -248,7 +236,7 @@ func evaluateWindow(cfg *config.Config, series map[string]*stockSeries, allDates
 	initial := cfg.InitialCash
 	years := yearsBetween(windowDates[0], windowDates[len(windowDates)-1])
 	tradable := tradableAt(cfg, series, windowDates[0])
-	contribOnDay := contributionAmounts(windowDates, cfg.MonthlyContribution)
+	contribOnDay := ContributionAmounts(windowDates, cfg.MonthlyContribution)
 
 	// --- 策略 ---
 	stratArm, err := runStratArm(cfg, series, windowDates, contribOnDay)
@@ -286,11 +274,11 @@ func evaluateWindow(cfg *config.Config, series map[string]*stockSeries, allDates
 }
 
 // runStratArm 以掛了 recorder 的 fresh engine 跑單一視窗 (含每月注資),回傳完整 armResult。
-func runStratArm(cfg *config.Config, series map[string]*stockSeries, windowDates []time.Time, contribOnDay []float64) (armResult, error) {
-	engine := NewEngine(cfg)
+func runStratArm(cfg *config.Config, series map[string]*trading.StockSeries, windowDates []time.Time, contribOnDay []float64) (armResult, error) {
+	engine := trading.NewEngine(cfg)
 	var curve []float64
 	expSum, expN := 0.0, 0
-	engine.SetRecorder(&DayRecorder{
+	engine.SetRecorder(&trading.DayRecorder{
 		OnEquity: func(_ time.Time, equity, _, holdings float64) {
 			curve = append(curve, equity)
 			if equity > 0 {
@@ -308,7 +296,7 @@ func runStratArm(cfg *config.Config, series map[string]*stockSeries, windowDates
 			flows = append(flows, Cashflow{Date: d, Amount: -contribOnDay[i]})
 			totalIn += contribOnDay[i]
 		}
-		if err := engine.ProcessDay(d, series, noopExecutor{}); err != nil {
+		if err := engine.ProcessDay(d, series, trading.NoopExecutor{}); err != nil {
 			return armResult{}, err
 		}
 	}

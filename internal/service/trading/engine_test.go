@@ -1,25 +1,25 @@
-package kernals
+package trading
 
 import (
-	"github.com/Jason0411202/stockbot-long-backend/internal/config"
 	"testing"
 	"time"
 )
 
 // engine_test.go 為 Engine 的整合測試 (金字塔中層):驗證「決策 → 套用 → 狀態變動」這條鏈
-// (現金夾取、持倉增減、峰值追蹤、打破冷卻計數、狀態還原、as-of 估值、per-stock 隔離)。
+// (現金夾取、持倉增減、峰值追蹤、打破冷卻計數、狀態還原、as-of 估值)。
+// per-stock 隔離測試因依賴 backtest 視窗核心,移至 backtest 套件。
 
 func TestEngine_BuysInBullNeverGoesNegative(t *testing.T) {
 	// Arrange — 現金很少但 BullBuyFrac 誇張 (想買遠超現金),測現金夾取與 skipped。
 	cfg := baseCfg("TEST")
 	cfg.InitialCash = 1000
 	cfg.BullBuyFrac = 10 // 想買 1000% 現金 → 必被夾取
-	series := map[string]*stockSeries{"TEST": risingSeries(mustDate(t, "2020-01-01"), 120)}
+	series := map[string]*StockSeries{"TEST": risingSeries(mustDate(t, "2020-01-01"), 120)}
 	engine := NewEngine(cfg)
 
 	// Act
-	for _, d := range series["TEST"].dates {
-		if err := engine.ProcessDay(d, series, noopExecutor{}); err != nil {
+	for _, d := range series["TEST"].Dates {
+		if err := engine.ProcessDay(d, series, NoopExecutor{}); err != nil {
 			t.Fatalf("ProcessDay(%s): %v", d.Format("2006-01-02"), err)
 		}
 	}
@@ -41,16 +41,16 @@ func TestEngine_ProcessDay_SkipsUntradeableInputs(t *testing.T) {
 	// Arrange — 未追蹤的股票 / 非交易日 / 非正價格都不可成交。
 	cfg := baseCfg("TEST")
 	s := seriesFrom(mustDate(t, "2020-01-01"), append(constPrices(30, 100), 0)) // 最後一天價格 0
-	series := map[string]*stockSeries{"TEST": s}
+	series := map[string]*StockSeries{"TEST": s}
 	engine := NewEngine(cfg)
 
 	// Act — 非交易日 (序列沒有的日期)。
-	if err := engine.ProcessDay(mustDate(t, "1999-01-01"), series, noopExecutor{}); err != nil {
+	if err := engine.ProcessDay(mustDate(t, "1999-01-01"), series, NoopExecutor{}); err != nil {
 		t.Fatalf("non-trading day should be no-op, got %v", err)
 	}
 	// Act — 價格為 0 的交易日。
-	zeroDay := s.dates[len(s.dates)-1]
-	if err := engine.ProcessDay(zeroDay, series, noopExecutor{}); err != nil {
+	zeroDay := s.Dates[len(s.Dates)-1]
+	if err := engine.ProcessDay(zeroDay, series, NoopExecutor{}); err != nil {
 		t.Fatalf("zero-price day should be no-op, got %v", err)
 	}
 
@@ -65,12 +65,12 @@ func TestEngine_TrailStopExitsInBearAfterPeak(t *testing.T) {
 	cfg := baseCfg("TEST")
 	cfg.RegimeMAWindow = 20
 	prices := append(linRamp(80, 50, 200), linRamp(40, 200, 120)...) // 漲到 200 再崩到 120
-	series := map[string]*stockSeries{"TEST": seriesFrom(mustDate(t, "2020-01-01"), prices)}
+	series := map[string]*StockSeries{"TEST": seriesFrom(mustDate(t, "2020-01-01"), prices)}
 	engine := NewEngine(cfg)
 
 	// Act
-	for _, d := range series["TEST"].dates {
-		if err := engine.ProcessDay(d, series, noopExecutor{}); err != nil {
+	for _, d := range series["TEST"].Dates {
+		if err := engine.ProcessDay(d, series, NoopExecutor{}); err != nil {
 			t.Fatalf("ProcessDay: %v", err)
 		}
 	}
@@ -100,7 +100,7 @@ func TestEngine_AddCashOnlyPositive(t *testing.T) {
 func TestEngine_SeedRestoresState(t *testing.T) {
 	// Arrange — 模擬上線重啟:從 DB 還原現金 / 持倉 / 最後買入日。
 	cfg := baseCfg("TEST")
-	series := map[string]*stockSeries{"TEST": seriesFrom(mustDate(t, "2020-01-01"), constPrices(10, 50))}
+	series := map[string]*StockSeries{"TEST": seriesFrom(mustDate(t, "2020-01-01"), constPrices(10, 50))}
 	engine := NewEngine(cfg)
 
 	// Act
@@ -121,7 +121,7 @@ func TestEngine_SeedRestoresState(t *testing.T) {
 func TestEngine_HoldingValueAsOf_PreListingIsZero(t *testing.T) {
 	// Arrange — 持倉估值在「該股尚未上市」的日期應貢獻 0 (無未來資訊)。
 	cfg := baseCfg("TEST")
-	series := map[string]*stockSeries{"TEST": seriesFrom(mustDate(t, "2020-06-01"), constPrices(10, 50))}
+	series := map[string]*StockSeries{"TEST": seriesFrom(mustDate(t, "2020-06-01"), constPrices(10, 50))}
 	engine := NewEngine(cfg)
 	engine.SeedPosition("TEST", mustDate(t, "2020-06-01"), 10, 50)
 
@@ -152,40 +152,20 @@ func TestEngine_BreaksInWindow_RollingCount(t *testing.T) {
 	}
 }
 
-func TestEngine_PerStockOverride_Isolates(t *testing.T) {
-	// Arrange — A、B 同資料;把 A 的 MAWindow override 到極大 (永遠算不出均線 → A 不買)。
-	start := mustDate(t, "2020-01-01")
-	series := map[string]*stockSeries{
-		"A": risingSeries(start, 300),
-		"B": risingSeries(start, 300),
-	}
-	end := series["A"].dates[299]
+func TestRegimeBull_MaSlope(t *testing.T) {
+	// Arrange — 上升序列;ma_slope:當前 MA > lb 日前 MA → bull。
+	up := seriesFrom(mustDate(t, "2020-01-01"), linRamp(160, 50, 200))
+	cfg := decideCfg()
+	cfg.RegimeMethod = "ma_slope"
+	cfg.RegimeMAWindow = 20
+	cfg.RegimeLookback = 60
 
-	base := baseCfg("A", "B")
-	r0, err := runBacktestWindow(base, series, series["A"].dates[0], end)
-	if err != nil {
-		t.Fatalf("r0: %v", err)
+	// Act + Assert
+	if !regimeBull(cfg, up, 159) {
+		t.Fatalf("rising series should be bull under ma_slope")
 	}
-
-	ov := baseCfg("A", "B")
-	ov.StockOverrides = map[string]config.StockParams{"A": {MAWindow: iptr(9999)}}
-	r1, err := runBacktestWindow(ov, series, series["A"].dates[0], end)
-	if err != nil {
-		t.Fatalf("r1: %v", err)
-	}
-
-	bOnly := baseCfg("B")
-	rB, err := runBacktestWindow(bOnly, series, series["B"].dates[0], end)
-	if err != nil {
-		t.Fatalf("rB: %v", err)
-	}
-
-	// Assert — 停用 A 後買入下降;且「A+B 但停用 A」的投組 == 「只有 B」(A 不買不佔現金)。
-	if r0.TotalBuys <= r1.TotalBuys {
-		t.Fatalf("disabling A should reduce buys: r0=%d r1=%d", r0.TotalBuys, r1.TotalBuys)
-	}
-	if r1.TotalBuys != rB.TotalBuys || r1.FinalTotal != rB.FinalTotal {
-		t.Fatalf("portfolio with A disabled should equal B-only: r1(buys=%d total=%.2f) vs B(buys=%d total=%.2f)",
-			r1.TotalBuys, r1.FinalTotal, rB.TotalBuys, rB.FinalTotal)
+	// 回看越界 (idx-lb<0 → prev MA NaN) → false。
+	if regimeBull(cfg, up, 5) {
+		t.Fatalf("insufficient lookback should be bear (false)")
 	}
 }

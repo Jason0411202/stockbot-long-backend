@@ -1,4 +1,4 @@
-package kernals
+package trading
 
 import (
 	"github.com/Jason0411202/stockbot-long-backend/internal/config"
@@ -101,8 +101,10 @@ func passesCooldown(cfg *config.Config, snap Snapshot) (ok, broke bool) {
 }
 
 // buyAmount 回傳本次買入的目標金額 (現金夾取前):買「現金/權益基準的固定比例」。
-//   牛市 = 基準 × BullBuyFrac。
-//   熊市 = 基準 × BearBuyFrac × 幾何深度權重 (跌越深買越大比例;永遠留現金尾巴 → 深跌仍有錢)。
+//
+//	牛市 = 基準 × BullBuyFrac。
+//	熊市 = 基準 × BearBuyFrac × 幾何深度權重 (跌越深買越大比例;永遠留現金尾巴 → 深跌仍有錢)。
+//
 // 基準 (cash/equity) 由 BuyFracBasis 決定;基準 <= 0 (沒錢) 回傳 0 → 不買。
 func buyAmount(cfg *config.Config, snap Snapshot) float64 {
 	basis := fracBasis(cfg, snap)

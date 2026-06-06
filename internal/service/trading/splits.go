@@ -1,4 +1,4 @@
-package kernals
+package trading
 
 // splits.go 處理股票分割 (split):TWSE STOCK_DAY 提供「未還原」原始價,分割會在價格序列造成大幅隔日跳空
 // (例如 00631L 於 2026-03 約 1:23 分割,443 → 19)。若不還原,200MA、+100% 獲利了結、8% 移動停利、
@@ -33,9 +33,9 @@ func splitAdjustFactors(closes []float64) []float64 {
 	return factors
 }
 
-// applySplitAdjust 就地把 closes (必填) 與其他同長度價格序列 (highs/lows…) 依分割因子 back-adjust。
+// ApplySplitAdjust 就地把 closes (必填) 與其他同長度價格序列 (highs/lows…) 依分割因子 back-adjust。
 // 須在「日期升冪」且「計算 MA / 前綴和之前」呼叫。
-func applySplitAdjust(closes []float64, others ...[]float64) {
+func ApplySplitAdjust(closes []float64, others ...[]float64) {
 	f := splitAdjustFactors(closes)
 	for i := range closes {
 		closes[i] *= f[i]

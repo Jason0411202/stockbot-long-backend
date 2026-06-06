@@ -1,4 +1,4 @@
-package kernals
+package backtest
 
 // isoos.go 提供「滾動式 walk-forward 樣本外驗證 (rolling / anchored walk-forward OOS)」:
 // 錨定一段初始樣本內 (IS,前段) 後,其後「每一個視窗都只用它之前的資料判斷 → 視為樣本外 (OOS)」,
@@ -12,6 +12,7 @@ package kernals
 import (
 	"fmt"
 	"github.com/Jason0411202/stockbot-long-backend/internal/config"
+	"github.com/Jason0411202/stockbot-long-backend/internal/service/trading"
 	"time"
 )
 
@@ -41,7 +42,7 @@ type RollingOOSReport struct {
 //	OOS = 視窗起點 >= 錨定日 (held-out 未來;每窗都只用其之前資料 → 樣本外),整體彙整 + 依 foldMonths 分折。
 //
 // isMonths<=0 預設 36;foldMonths<=0 預設 12。
-func EvaluateRollingOOS(cfg *config.Config, series map[string]*stockSeries, p WalkForwardParams, isMonths, foldMonths int) (RollingOOSReport, error) {
+func EvaluateRollingOOS(cfg *config.Config, series map[string]*trading.StockSeries, p WalkForwardParams, isMonths, foldMonths int) (RollingOOSReport, error) {
 	if cfg.ScalingStrategy != "Baseline" {
 		return RollingOOSReport{}, fmt.Errorf("評估目前僅支援 Scaling_Strategy=Baseline")
 	}
@@ -61,7 +62,7 @@ func EvaluateRollingOOS(cfg *config.Config, series map[string]*stockSeries, p Wa
 		foldMonths = 12
 	}
 
-	allDates := collectDateUnion(series)
+	allDates := trading.CollectDateUnion(series)
 	if len(allDates) == 0 {
 		return RollingOOSReport{}, fmt.Errorf("無任何日期可供評估")
 	}
@@ -126,7 +127,7 @@ func EvaluateRollingOOS(cfg *config.Config, series map[string]*stockSeries, p Wa
 	return rep, nil
 }
 
-func evalWindowSet(cfg *config.Config, series map[string]*stockSeries, allDates []time.Time, ws [][2]time.Time) ([]WindowReport, error) {
+func evalWindowSet(cfg *config.Config, series map[string]*trading.StockSeries, allDates []time.Time, ws [][2]time.Time) ([]WindowReport, error) {
 	out := make([]WindowReport, 0, len(ws))
 	for _, w := range ws {
 		rep, err := evaluateWindow(cfg, series, allDates, w[0], w[1])

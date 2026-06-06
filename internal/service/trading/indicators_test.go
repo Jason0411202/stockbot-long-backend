@@ -1,4 +1,4 @@
-package kernals
+package trading
 
 import (
 	"math"
@@ -6,14 +6,14 @@ import (
 )
 
 // indicators_test.go 為技術指標純函式的單元測試 (金字塔最底層):
-// buildPrefixClose / maAt / peakAt / rollingMax / rollingMA。皆只看過去資料、無未來洩漏。
+// BuildPrefixClose / maAt / peakAt / rollingMax / RollingMA。皆只看過去資料、無未來洩漏。
 
 func TestBuildPrefixClose(t *testing.T) {
 	// Arrange
 	close := []float64{10, 20, 30}
 
 	// Act
-	p := buildPrefixClose(close)
+	p := BuildPrefixClose(close)
 
 	// Assert — 長度 = n+1、prefix[0]=0、prefix[i] = 前 i 項和。
 	if len(p) != len(close)+1 {
@@ -28,7 +28,7 @@ func TestBuildPrefixClose(t *testing.T) {
 }
 
 func TestMaAt(t *testing.T) {
-	// Arrange — prefixClose 必須建立,maAt 才能 O(1) 查任意視窗均線。
+	// Arrange — PrefixClose 必須建立,maAt 才能 O(1) 查任意視窗均線。
 	s := seriesFrom(mustDate(t, "2020-01-01"), []float64{10, 12, 14, 16, 18})
 
 	cases := []struct {
@@ -64,12 +64,12 @@ func TestMaAt(t *testing.T) {
 }
 
 func TestMaAt_NoPrefixClose_NaN(t *testing.T) {
-	// Arrange — 缺 prefixClose (長度不符) 時 maAt 必須安全回 NaN,不可 panic。
-	s := &stockSeries{closePrices: []float64{1, 2, 3}}
+	// Arrange — 缺 PrefixClose (長度不符) 時 maAt 必須安全回 NaN,不可 panic。
+	s := &StockSeries{ClosePrices: []float64{1, 2, 3}}
 
 	// Act + Assert
 	if got := s.maAt(2, 2); !math.IsNaN(got) {
-		t.Fatalf("maAt without prefixClose = %g, want NaN", got)
+		t.Fatalf("maAt without PrefixClose = %g, want NaN", got)
 	}
 }
 
@@ -78,16 +78,16 @@ func TestRollingMA(t *testing.T) {
 	prices := []float64{1, 2, 3, 4, 5}
 
 	// Act — window 3。
-	out := rollingMA(prices, 3)
+	out := RollingMA(prices, 3)
 
 	// Assert — 前 2 格資料不足為 NaN,其後為視窗均值。
 	if !math.IsNaN(out[0]) || !math.IsNaN(out[1]) {
-		t.Fatalf("rollingMA warm-up should be NaN, got %v", out[:2])
+		t.Fatalf("RollingMA warm-up should be NaN, got %v", out[:2])
 	}
 	wants := map[int]float64{2: 2, 3: 3, 4: 4}
 	for i, w := range wants {
 		if math.Abs(out[i]-w) > 1e-9 {
-			t.Fatalf("rollingMA[%d] = %g, want %g", i, out[i], w)
+			t.Fatalf("RollingMA[%d] = %g, want %g", i, out[i], w)
 		}
 	}
 }

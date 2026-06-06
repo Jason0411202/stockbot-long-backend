@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Jason0411202/stockbot-long-backend/app_context"
+	"github.com/Jason0411202/stockbot-long-backend/internal/service/trading"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/sirupsen/logrus"
@@ -48,7 +49,7 @@ func TestLoadStockSeries(t *testing.T) {
 		t.Fatalf("loadStockSeries: %v", err)
 	}
 	s := series["AAA"]
-	if s == nil || len(s.dates) != 3 || s.closePrices[2] != 52.0 {
+	if s == nil || len(s.Dates) != 3 || s.ClosePrices[2] != 52.0 {
 		t.Fatalf("series misbuilt: %+v", s)
 	}
 }
@@ -64,7 +65,7 @@ func TestSeedEngineFromDB(t *testing.T) {
 	mock.ExpectQuery("SELECT MAX").WithArgs("AAA", "AAA").
 		WillReturnRows(sqlmock.NewRows([]string{"d"}).AddRow("2024-01-02"))
 
-	engine := NewEngine(appCtx.Cfg)
+	engine := trading.NewEngine(appCtx.Cfg)
 
 	// Act
 	if err := seedEngineFromDB(appCtx, engine); err != nil {
@@ -75,11 +76,11 @@ func TestSeedEngineFromDB(t *testing.T) {
 	if engine.Cash() != 54321 {
 		t.Fatalf("cash not seeded: %.2f", engine.Cash())
 	}
-	if lb, ok := engine.lastBuy["AAA"]; !ok || lb.Format("2006-01-02") != "2024-01-02" {
+	if lb, ok := engine.LastBuy("AAA"); !ok || lb.Format("2006-01-02") != "2024-01-02" {
 		t.Fatalf("lastBuy not seeded: %v %v", lb, ok)
 	}
-	if len(engine.positions["AAA"]) != 1 {
-		t.Fatalf("position not seeded: %+v", engine.positions["AAA"])
+	if engine.PositionCount("AAA") != 1 {
+		t.Fatalf("position not seeded: count=%d", engine.PositionCount("AAA"))
 	}
 }
 
@@ -91,8 +92,8 @@ func TestRunCatchUp_FlatSeriesNoTrades(t *testing.T) {
 	mock.ExpectExec("INSERT INTO BotState").WillReturnResult(sqlmock.NewResult(1, 1)) // SaveWatermark
 	mock.ExpectExec("INSERT INTO BotState").WillReturnResult(sqlmock.NewResult(1, 1)) // SaveCash
 
-	engine := NewEngine(appCtx.Cfg)
-	series := map[string]*stockSeries{"AAA": seriesFrom(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC), constPrices(60, 100))}
+	engine := trading.NewEngine(appCtx.Cfg)
+	series := map[string]*trading.StockSeries{"AAA": seriesFrom(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC), constPrices(60, 100))}
 
 	// Act + Assert
 	if err := runCatchUp(appCtx, engine, series); err != nil {
@@ -229,7 +230,7 @@ func TestSeedEngineFromDB_NoCashFallbackAndDatetimeLot(t *testing.T) {
 	mock.ExpectQuery("SELECT MAX").WithArgs("AAA", "AAA").
 		WillReturnRows(sqlmock.NewRows([]string{"d"}).AddRow(nil))
 
-	engine := NewEngine(appCtx.Cfg)
+	engine := trading.NewEngine(appCtx.Cfg)
 
 	// Act
 	if err := seedEngineFromDB(appCtx, engine); err != nil {
@@ -240,8 +241,8 @@ func TestSeedEngineFromDB_NoCashFallbackAndDatetimeLot(t *testing.T) {
 	if engine.Cash() != appCtx.Cfg.InitialCash {
 		t.Fatalf("cash should fall back to InitialCash, got %.2f", engine.Cash())
 	}
-	if len(engine.positions["AAA"]) != 1 {
-		t.Fatalf("datetime-format lot not seeded: %+v", engine.positions["AAA"])
+	if engine.PositionCount("AAA") != 1 {
+		t.Fatalf("datetime-format lot not seeded: count=%d", engine.PositionCount("AAA"))
 	}
 }
 
@@ -253,8 +254,8 @@ func TestRunCatchUp_ResumesFromWatermark(t *testing.T) {
 	mock.ExpectExec("INSERT INTO BotState").WillReturnResult(sqlmock.NewResult(1, 1)) // SaveWatermark
 	mock.ExpectExec("INSERT INTO BotState").WillReturnResult(sqlmock.NewResult(1, 1)) // SaveCash
 
-	engine := NewEngine(appCtx.Cfg)
-	series := map[string]*stockSeries{"AAA": seriesFrom(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC), constPrices(60, 100))}
+	engine := trading.NewEngine(appCtx.Cfg)
+	series := map[string]*trading.StockSeries{"AAA": seriesFrom(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC), constPrices(60, 100))}
 
 	// Act + Assert — watermark 之後仍有日期,平盤無成交。
 	if err := runCatchUp(appCtx, engine, series); err != nil {

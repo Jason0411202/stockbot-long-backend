@@ -1,6 +1,7 @@
-package kernals
+package backtest
 
 import (
+	"github.com/Jason0411202/stockbot-long-backend/internal/service/trading"
 	"testing"
 	"time"
 )
@@ -8,7 +9,7 @@ import (
 // EvaluateRollingOOS 應依錨定日把視窗切成 IS (錨定前) / OOS (錨定後),兩段皆有視窗,且 OOS 分成多折。
 func TestEvaluateRollingOOS_AnchorsAndFolds(t *testing.T) {
 	start := time.Date(2019, 1, 1, 0, 0, 0, 0, time.UTC)
-	series := map[string]*stockSeries{
+	series := map[string]*trading.StockSeries{
 		"A": seriesFrom(start, constPrices(1500, 100)),
 		"B": seriesFrom(start, constPrices(1500, 100)),
 	}

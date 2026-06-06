@@ -1,4 +1,4 @@
-package kernals
+package backtest
 
 import (
 	"math"
@@ -6,7 +6,7 @@ import (
 )
 
 // misc_test.go 補齊小型純函式的邊界分支 (safeMean/safeDiv 的零除、cagr 的退化情形、
-// dailyReturns、regime ma_slope、monthsBetween、sortInts)。
+// dailyReturns、monthsBetween、sortInts)。regime ma_slope 的測試屬於 trading 層,留在該套件。
 
 func TestSafeMeanDiv(t *testing.T) {
 	if safeMean(0, 0) != 0 {
@@ -44,24 +44,6 @@ func TestDailyReturns(t *testing.T) {
 	got := dailyReturns([]float64{0, 50, 100})
 	if len(got) != 2 || got[0] != 0 || math.Abs(got[1]-1.0) > 1e-12 {
 		t.Fatalf("dailyReturns = %v, want [0, 1.0]", got)
-	}
-}
-
-func TestRegimeBull_MaSlope(t *testing.T) {
-	// Arrange — 上升序列;ma_slope:當前 MA > lb 日前 MA → bull。
-	up := seriesFrom(mustDate(t, "2020-01-01"), linRamp(160, 50, 200))
-	cfg := decideCfg()
-	cfg.RegimeMethod = "ma_slope"
-	cfg.RegimeMAWindow = 20
-	cfg.RegimeLookback = 60
-
-	// Act + Assert
-	if !regimeBull(cfg, up, 159) {
-		t.Fatalf("rising series should be bull under ma_slope")
-	}
-	// 回看越界 (idx-lb<0 → prev MA NaN) → false。
-	if regimeBull(cfg, up, 5) {
-		t.Fatalf("insufficient lookback should be bear (false)")
 	}
 }
 

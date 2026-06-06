@@ -1,7 +1,8 @@
-package kernals
+package backtest
 
 import (
 	"github.com/Jason0411202/stockbot-long-backend/internal/config"
+	"github.com/Jason0411202/stockbot-long-backend/internal/service/trading"
 	"math"
 	"time"
 )
@@ -36,16 +37,16 @@ type armResult struct {
 	profitSells  int // 獲利了結觸發的賣出次數 (策略才有意義)
 }
 
-// tradableAt 回傳在 day 當天「已上市可交易」的追蹤股票 (closeAsOf ok)。
+// tradableAt 回傳在 day 當天「已上市可交易」的追蹤股票 (CloseAsOf ok)。
 // B&H 等權只能分配給當天已存在的股票,不得替「之後才上市」的股票預留現金 (那是未來資訊洩漏)。
-func tradableAt(cfg *config.Config, series map[string]*stockSeries, day time.Time) []string {
+func tradableAt(cfg *config.Config, series map[string]*trading.StockSeries, day time.Time) []string {
 	out := make([]string, 0, len(cfg.TrackStocks))
 	for _, id := range cfg.TrackStocks {
 		s, ok := series[id]
 		if !ok {
 			continue
 		}
-		if _, ok := s.closeAsOf(day); ok {
+		if _, ok := s.CloseAsOf(day); ok {
 			out = append(out, id)
 		}
 	}
@@ -53,13 +54,13 @@ func tradableAt(cfg *config.Config, series map[string]*stockSeries, day time.Tim
 }
 
 // holdingValue 以 as-of 收盤價結算固定持股在 day 的市值。
-func holdingValue(series map[string]*stockSeries, positions map[string]int, day time.Time) float64 {
+func holdingValue(series map[string]*trading.StockSeries, positions map[string]int, day time.Time) float64 {
 	total := 0.0
 	for id, sh := range positions {
 		if sh == 0 {
 			continue
 		}
-		if px, ok := series[id].closeAsOf(day); ok {
+		if px, ok := series[id].CloseAsOf(day); ok {
 			total += float64(sh) * px
 		}
 	}
@@ -68,7 +69,7 @@ func holdingValue(series map[string]*stockSeries, positions map[string]int, day 
 
 // bhImmediateArm:期初把期初資金等權買滿,其後每個注資日把當前所有現金 (新注入 + 整股餘額)
 // 立刻等權買滿,持有到底、永不賣 —— 即「資金一解鎖就立刻買」的 Buy & Hold。
-func bhImmediateArm(cfg *config.Config, series map[string]*stockSeries, windowDates []time.Time, contribOnDay []float64) armResult {
+func bhImmediateArm(cfg *config.Config, series map[string]*trading.StockSeries, windowDates []time.Time, contribOnDay []float64) armResult {
 	positions := make(map[string]int, len(cfg.TrackStocks))
 	cash := cfg.InitialCash
 	totalIn := cfg.InitialCash
@@ -110,7 +111,7 @@ func bhImmediateArm(cfg *config.Config, series map[string]*stockSeries, windowDa
 
 // deployAllCash 把 *cash 等權買滿 day 當天可交易的追蹤股票 (整股,餘額留 *cash);永不借錢。
 // 回傳是否至少買進 1 股。
-func deployAllCash(cfg *config.Config, series map[string]*stockSeries, day time.Time, positions map[string]int, cash *float64) bool {
+func deployAllCash(cfg *config.Config, series map[string]*trading.StockSeries, day time.Time, positions map[string]int, cash *float64) bool {
 	trad := tradableAt(cfg, series, day)
 	if len(trad) == 0 || *cash <= 0 {
 		return false
@@ -118,7 +119,7 @@ func deployAllCash(cfg *config.Config, series map[string]*stockSeries, day time.
 	per := *cash / float64(len(trad))
 	bought := false
 	for _, id := range trad {
-		px, ok := series[id].closeAsOf(day)
+		px, ok := series[id].CloseAsOf(day)
 		if !ok || px <= 0 {
 			continue
 		}

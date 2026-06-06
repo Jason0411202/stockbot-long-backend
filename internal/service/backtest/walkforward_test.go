@@ -1,6 +1,7 @@
-package kernals
+package backtest
 
 import (
+	"github.com/Jason0411202/stockbot-long-backend/internal/service/trading"
 	"math"
 	"testing"
 	"time"
@@ -11,11 +12,11 @@ import (
 
 func TestCloseAsOf(t *testing.T) {
 	// Arrange — 含非交易日空隙。
-	s := &stockSeries{
-		dates: []time.Time{
+	s := &trading.StockSeries{
+		Dates: []time.Time{
 			mustDate(t, "2019-05-03"), mustDate(t, "2019-05-06"), mustDate(t, "2019-05-08"),
 		},
-		closePrices: []float64{30, 31, 32},
+		ClosePrices: []float64{30, 31, 32},
 	}
 	cases := []struct {
 		name string
@@ -29,9 +30,9 @@ func TestCloseAsOf(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			px, ok := s.closeAsOf(mustDate(t, c.day))
+			px, ok := s.CloseAsOf(mustDate(t, c.day))
 			if px != c.px || ok != c.ok {
-				t.Fatalf("closeAsOf(%s) = (%v,%v), want (%v,%v)", c.day, px, ok, c.px, c.ok)
+				t.Fatalf("CloseAsOf(%s) = (%v,%v), want (%v,%v)", c.day, px, ok, c.px, c.ok)
 			}
 		})
 	}
@@ -39,7 +40,7 @@ func TestCloseAsOf(t *testing.T) {
 
 func TestCommonSupportStart(t *testing.T) {
 	// Arrange — B 較晚上市,其第 20 個交易日決定共同有效起點。
-	series := map[string]*stockSeries{
+	series := map[string]*trading.StockSeries{
 		"A": seriesFrom(mustDate(t, "2019-01-01"), constPrices(50, 100)),
 		"B": seriesFrom(mustDate(t, "2019-02-01"), constPrices(50, 100)),
 	}
@@ -48,7 +49,7 @@ func TestCommonSupportStart(t *testing.T) {
 	// Act
 	got, ok := commonSupportStart(cfg, series)
 
-	// Assert — B 的 dates[19] = 2019-02-20。
+	// Assert — B 的 Dates[19] = 2019-02-20。
 	want := time.Date(2019, 2, 20, 0, 0, 0, 0, time.UTC)
 	if !ok || !got.Equal(want) {
 		t.Fatalf("commonSupportStart = (%s,%v), want (%s,true)", got.Format("2006-01-02"), ok, want.Format("2006-01-02"))
@@ -58,7 +59,7 @@ func TestCommonSupportStart(t *testing.T) {
 func TestGenerateWindows_UniverseAndStep(t *testing.T) {
 	// Arrange
 	start := mustDate(t, "2019-01-01")
-	series := map[string]*stockSeries{
+	series := map[string]*trading.StockSeries{
 		"A": seriesFrom(start, constPrices(800, 100)),
 		"B": seriesFrom(start, constPrices(800, 100)),
 	}
@@ -66,9 +67,9 @@ func TestGenerateWindows_UniverseAndStep(t *testing.T) {
 	p := WalkForwardParams{WindowMonths: 12, StepMonths: 3, MinTradeDays: 100}
 
 	// Act
-	windows := generateWindows(cfg, series, collectDateUnion(series), p)
+	windows := generateWindows(cfg, series, trading.CollectDateUnion(series), p)
 
-	// Assert — 多個視窗、起點皆 2 檔可交易、長度約 12 月、起點嚴格遞增。
+	// Assert — 多個視窗、起點皆  2 檔可交易、長度約 12 月、起點嚴格遞增。
 	if len(windows) < 3 {
 		t.Fatalf("expected >=3 windows, got %d", len(windows))
 	}
@@ -87,7 +88,7 @@ func TestGenerateWindows_UniverseAndStep(t *testing.T) {
 
 func TestTradableAt_OnlyListedStocks(t *testing.T) {
 	// Arrange — A 已上市、B 之後才上市。
-	series := map[string]*stockSeries{
+	series := map[string]*trading.StockSeries{
 		"A": seriesFrom(mustDate(t, "2020-01-01"), constPrices(10, 100)),
 		"B": seriesFrom(mustDate(t, "2020-06-01"), constPrices(10, 100)),
 	}
@@ -101,7 +102,7 @@ func TestTradableAt_OnlyListedStocks(t *testing.T) {
 
 func TestDeployAllCash_EqualWeightWholeShares(t *testing.T) {
 	// Arrange — 兩檔等權買滿;整股、餘額留現金。
-	series := map[string]*stockSeries{
+	series := map[string]*trading.StockSeries{
 		"A": seriesFrom(mustDate(t, "2020-01-01"), constPrices(5, 100)),
 		"B": seriesFrom(mustDate(t, "2020-01-01"), constPrices(5, 50)),
 	}
@@ -121,8 +122,8 @@ func TestDeployAllCash_EqualWeightWholeShares(t *testing.T) {
 func TestBHImmediateArm_NoContribEqualsLumpSum(t *testing.T) {
 	// Arrange — 升勢股 100→200,無注資。
 	start := mustDate(t, "2020-01-01")
-	series := map[string]*stockSeries{"A": seriesFrom(start, linRamp(366, 100, 200))}
-	windowDates := series["A"].dates
+	series := map[string]*trading.StockSeries{"A": seriesFrom(start, linRamp(366, 100, 200))}
+	windowDates := series["A"].Dates
 	cfg := baseCfg("A")
 	contribOnDay := make([]float64, len(windowDates))
 
@@ -283,13 +284,13 @@ func TestAggregate_EmptyReports(t *testing.T) {
 func TestEvaluateWindow_StrategyVsBenchmarks(t *testing.T) {
 	// Arrange — 升勢雙標的、含每月注資。
 	start := mustDate(t, "2019-01-01")
-	series := map[string]*stockSeries{
+	series := map[string]*trading.StockSeries{
 		"A": seriesFrom(start, linRamp(500, 50, 150)),
 		"B": seriesFrom(start, linRamp(500, 30, 90)),
 	}
 	cfg := baseCfg("A", "B")
 	cfg.MonthlyContribution = 2500
-	allDates := collectDateUnion(series)
+	allDates := trading.CollectDateUnion(series)
 
 	// Act
 	rep, err := evaluateWindow(cfg, series, allDates, allDates[0], allDates[len(allDates)-1])
@@ -315,7 +316,7 @@ func TestEvaluateWindow_StrategyVsBenchmarks(t *testing.T) {
 func TestEvaluateFullSpan(t *testing.T) {
 	// Arrange
 	start := mustDate(t, "2019-01-01")
-	series := map[string]*stockSeries{
+	series := map[string]*trading.StockSeries{
 		"A": seriesFrom(start, linRamp(400, 50, 150)),
 		"B": seriesFrom(start, linRamp(400, 30, 90)),
 	}
@@ -337,7 +338,7 @@ func TestEvaluateFullSpan(t *testing.T) {
 func TestWalkForwardOnSeries_FlatSeriesNoTrades(t *testing.T) {
 	// Arrange — 全平盤:策略零成交。
 	start := mustDate(t, "2019-01-01")
-	series := map[string]*stockSeries{
+	series := map[string]*trading.StockSeries{
 		"A": seriesFrom(start, constPrices(800, 100)),
 		"B": seriesFrom(start, constPrices(800, 100)),
 	}
@@ -364,7 +365,7 @@ func TestWalkForwardOnSeries_FlatSeriesNoTrades(t *testing.T) {
 func TestWalkForwardOnSeries_AppliesDefaultParams(t *testing.T) {
 	// Arrange — 傳零值參數,應套用預設 (24 月 / 3 月 / 200 日)。
 	start := mustDate(t, "2019-01-01")
-	series := map[string]*stockSeries{
+	series := map[string]*trading.StockSeries{
 		"A": seriesFrom(start, constPrices(900, 100)),
 		"B": seriesFrom(start, constPrices(900, 100)),
 	}
@@ -382,7 +383,7 @@ func TestWalkForwardOnSeries_AppliesDefaultParams(t *testing.T) {
 func TestWalkForwardOnSeries_InsufficientDataErrors(t *testing.T) {
 	// Arrange — 資料過短,湊不出任何視窗。
 	cfg := baseCfg("A")
-	series := map[string]*stockSeries{"A": seriesFrom(mustDate(t, "2019-01-01"), constPrices(60, 100))}
+	series := map[string]*trading.StockSeries{"A": seriesFrom(mustDate(t, "2019-01-01"), constPrices(60, 100))}
 
 	// Act + Assert
 	if _, _, err := walkForwardOnSeries(cfg, series, WalkForwardParams{WindowMonths: 24, StepMonths: 3, MinTradeDays: 200}); err == nil {
@@ -394,7 +395,7 @@ func TestWalkForwardOnSeries_RejectsNonBaseline(t *testing.T) {
 	// Arrange
 	cfg := baseCfg("A")
 	cfg.ScalingStrategy = "X"
-	series := map[string]*stockSeries{"A": seriesFrom(mustDate(t, "2019-01-01"), constPrices(400, 100))}
+	series := map[string]*trading.StockSeries{"A": seriesFrom(mustDate(t, "2019-01-01"), constPrices(400, 100))}
 
 	// Act + Assert
 	if _, _, err := walkForwardOnSeries(cfg, series, WalkForwardParams{}); err == nil {

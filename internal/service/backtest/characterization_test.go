@@ -1,7 +1,8 @@
-package kernals
+package backtest
 
 import (
 	"github.com/Jason0411202/stockbot-long-backend/internal/config"
+	"github.com/Jason0411202/stockbot-long-backend/internal/service/trading"
 	"math"
 	"math/rand"
 	"testing"
@@ -53,7 +54,7 @@ func liveStrategyCfg() *config.Config {
 
 // charSeries 產生確定性 (固定 seed) 的幾何隨機漫步價格序列,並在兩個區間注入崩盤,
 // 確保牛熊翻轉 + 深跌加碼 + 移動停利 + 獲利了結都會被觸發。
-func charSeries(seed int64, n int, startPx, drift, vol float64) *stockSeries {
+func charSeries(seed int64, n int, startPx, drift, vol float64) *trading.StockSeries {
 	r := rand.New(rand.NewSource(seed))
 	prices := make([]float64, n)
 	px := startPx
@@ -74,19 +75,10 @@ func charSeries(seed int64, n int, startPx, drift, vol float64) *stockSeries {
 
 	start := time.Date(2019, 1, 1, 0, 0, 0, 0, time.UTC)
 	dates := make([]time.Time, n)
-	idx := make(map[string]int, n)
 	for i := 0; i < n; i++ {
-		d := start.AddDate(0, 0, i)
-		dates[i] = d
-		idx[d.Format("2006-01-02")] = i
+		dates[i] = start.AddDate(0, 0, i)
 	}
-	return &stockSeries{
-		dates:       dates,
-		dateIndex:   idx,
-		closePrices: prices,
-		ma20:        rollingMA(prices, 20),
-		prefixClose: buildPrefixClose(prices),
-	}
+	return trading.NewStockSeries(dates, prices, nil, nil, nil)
 }
 
 // TestCharacterization_LiveStrategyFingerprint 鎖定 live 策略的端到端指紋。
@@ -94,15 +86,15 @@ func charSeries(seed int64, n int, startPx, drift, vol float64) *stockSeries {
 func TestCharacterization_LiveStrategyFingerprint(t *testing.T) {
 	// Arrange — live 設定 + 確定性雙標的資料 (一檔較波動模擬 2x 槓桿)。
 	cfg := liveStrategyCfg()
-	series := map[string]*stockSeries{
+	series := map[string]*trading.StockSeries{
 		"00631L": charSeries(1, 700, 20, 0.0045, 0.028),
 		"00830":  charSeries(2, 700, 30, 0.0035, 0.014),
 	}
 
-	// Act — 以 common issuance 為起點、每月注資,跑完整引擎 (與 runBacktestWindow 同路徑,額外取 trail/profit 拆解)。
-	allDates := collectDateUnion(series)
+	// Act — 以 common issuance 為起點、每月注資,跑完整引擎 (與 RunBacktestWindow 同路徑,額外取 trail/profit 拆解)。
+	allDates := trading.CollectDateUnion(series)
 	start := allDates[0]
-	if ci, ok := commonIssuanceStart(cfg, series); ok && ci.After(start) {
+	if ci, ok := CommonIssuanceStart(cfg, series); ok && ci.After(start) {
 		start = ci
 	}
 	end := allDates[len(allDates)-1]
@@ -111,14 +103,14 @@ func TestCharacterization_LiveStrategyFingerprint(t *testing.T) {
 		lo++
 	}
 	windowDates := allDates[lo:]
-	contribOnDay := contributionAmounts(windowDates, cfg.MonthlyContribution)
+	contribOnDay := ContributionAmounts(windowDates, cfg.MonthlyContribution)
 
-	engine := NewEngine(cfg)
+	engine := trading.NewEngine(cfg)
 	for i, d := range windowDates {
 		if contribOnDay[i] > 0 {
 			engine.AddCash(contribOnDay[i])
 		}
-		if err := engine.ProcessDay(d, series, noopExecutor{}); err != nil {
+		if err := engine.ProcessDay(d, series, trading.NoopExecutor{}); err != nil {
 			t.Fatalf("ProcessDay(%s): %v", d.Format("2006-01-02"), err)
 		}
 	}

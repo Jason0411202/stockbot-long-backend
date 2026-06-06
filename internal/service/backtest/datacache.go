@@ -1,10 +1,10 @@
-package kernals
+package backtest
 
 import (
 	"bufio"
 	"fmt"
 	"github.com/Jason0411202/stockbot-long-backend/internal/config"
-	"math"
+	"github.com/Jason0411202/stockbot-long-backend/internal/service/trading"
 	"os"
 	"path/filepath"
 	"sort"
@@ -16,19 +16,19 @@ import (
 // datacache.go 提供「從本機 CSV 快取載入歷史資料」的離線路徑,讓 walk-forward 回測 / 參數掃描
 // 完全不依賴 MariaDB 與 docker。CSV 由 cmd/fetch_data 產生,欄位: date,open,high,low,close,volume。
 //
-// 與 loadStockSeries (DB 路徑) 等價地建立 *stockSeries,額外填入 OHLCV 供指標旗標使用。
+// 與 loadStockSeries (DB 路徑) 等價地建立 *trading.StockSeries,額外填入 OHLCV 供指標旗標使用。
 
 // LoadSeriesFromCSV 從 dir 下的 <stockID>.csv 讀入所有 stocks 的歷史資料,建立 series map。
 // 任一檔缺檔即回錯;單列解析失敗則略過該列。
-func LoadSeriesFromCSV(dir string, stocks []string) (map[string]*stockSeries, error) {
-	series := make(map[string]*stockSeries, len(stocks))
+func LoadSeriesFromCSV(dir string, stocks []string) (map[string]*trading.StockSeries, error) {
+	series := make(map[string]*trading.StockSeries, len(stocks))
 	for _, stockID := range stocks {
 		path := filepath.Join(dir, stockID+".csv")
 		s, err := loadOneCSV(path)
 		if err != nil {
 			return nil, fmt.Errorf("載入 %s: %w", path, err)
 		}
-		if len(s.dates) == 0 {
+		if len(s.Dates) == 0 {
 			return nil, fmt.Errorf("%s 無有效資料列", path)
 		}
 		series[stockID] = s
@@ -36,7 +36,7 @@ func LoadSeriesFromCSV(dir string, stocks []string) (map[string]*stockSeries, er
 	return series, nil
 }
 
-func loadOneCSV(path string) (*stockSeries, error) {
+func loadOneCSV(path string) (*trading.StockSeries, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -100,40 +100,9 @@ func loadOneCSV(path string) (*stockSeries, error) {
 	}
 
 	// 還原股票分割 (split):使價格序列連續,再計算 MA / 前綴和 / peak。
-	applySplitAdjust(closes, highs, lows)
+	trading.ApplySplitAdjust(closes, highs, lows)
 
-	idx := make(map[string]int, len(dates))
-	for i, d := range dates {
-		idx[d.Format("2006-01-02")] = i
-	}
-	return &stockSeries{
-		dates:       dates,
-		dateIndex:   idx,
-		closePrices: closes,
-		highs:       highs,
-		lows:        lows,
-		volumes:     vols,
-		ma20:        rollingMA(closes, 20),
-		prefixClose: buildPrefixClose(closes),
-	}, nil
-}
-
-// rollingMA 回傳 window 日簡單移動平均;不足 window 日的位置為 NaN。
-func rollingMA(prices []float64, window int) []float64 {
-	out := make([]float64, len(prices))
-	sum := 0.0
-	for i, p := range prices {
-		sum += p
-		if i >= window {
-			sum -= prices[i-window]
-		}
-		if i >= window-1 {
-			out[i] = sum / float64(window)
-		} else {
-			out[i] = math.NaN()
-		}
-	}
-	return out
+	return trading.NewStockSeries(dates, closes, highs, lows, vols), nil
 }
 
 func parseFloat(s string) float64 {
@@ -162,6 +131,6 @@ func reorderTime(src []time.Time, idxs []int) []time.Time {
 
 // EvaluateWalkForward 是 walkForwardOnSeries 的匯出包裝,供 cmd 對給定 cfg 取得 scorecard。
 // 回傳跨視窗彙整 (AggregateReport) 與每視窗明細。
-func EvaluateWalkForward(cfg *config.Config, series map[string]*stockSeries, p WalkForwardParams) ([]WindowReport, AggregateReport, error) {
+func EvaluateWalkForward(cfg *config.Config, series map[string]*trading.StockSeries, p WalkForwardParams) ([]WindowReport, AggregateReport, error) {
 	return walkForwardOnSeries(cfg, series, p)
 }

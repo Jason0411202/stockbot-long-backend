@@ -1,4 +1,4 @@
-package kernals
+package trading
 
 import (
 	"math"

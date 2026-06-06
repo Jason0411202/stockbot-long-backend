@@ -4,46 +4,31 @@ import (
 	"fmt"
 	"github.com/Jason0411202/stockbot-long-backend/app_context"
 	"github.com/Jason0411202/stockbot-long-backend/discord"
+	"github.com/Jason0411202/stockbot-long-backend/internal/service/backtest"
+	"github.com/Jason0411202/stockbot-long-backend/internal/service/trading"
 	"github.com/Jason0411202/stockbot-long-backend/sqls"
 	"sort"
 	"time"
 )
 
-// DailyCheck 是 main 啟動後的進入點。
-// 行為:
-//   - back_testing_months > 0:跑一次回測,結束並回報結果 (不進入每日 loop)。
-//   - 否則:進入上線模式 — 啟動時 catch-up 回放歷史交易,接著每日 14:00 觸發決策。
+// kernals 套件現為「相容層 (compatibility shim)」:對外維持與重構前完全相同的 API
+// (DailyCheck / RunBacktest / RunWalkForward / Load*/Evaluate* 與各型別),
+// 內部則委派給純引擎 internal/service/trading 與純回測 internal/service/backtest。
+//
+// 唯一保留在此層的 I/O:
+//   - loadStockSeries:從 DB 讀 StockHistory 並組成 trading.StockSeries (唯一 DB 讀)。
+//   - 上線模式 (runOnlineMode / seedEngineFromDB / runCatchUp / runDailyLoop / runOneDay):
+//     sqls (DB) + discord (通知) + app_context (DI)。
+//   - dbExecutor:實作 trading.Executor,寫 DB + 發 Discord。
+
+// DailyCheck 是 main 啟動後的進入點:進入上線模式 —— 啟動時 catch-up 回放歷史交易,
+// 接著每日 14:00 觸發決策。
 func DailyCheck(appCtx *app_context.AppContext) {
 	appCtx.Log.Info("DailyCheck 開始執行")
 
-	if appCtx.Cfg.BackTestingMonths > 0 {
-		runBacktestMode(appCtx)
-		return
-	}
 	if err := runOnlineMode(appCtx); err != nil {
 		appCtx.Log.Fatal("上線模式啟動失敗:", err)
 	}
-}
-
-// runBacktestMode 跑一次 in-memory 回測並把結果發到 Discord。
-// 與上線唯一差別:沒有副作用 (noopExecutor) 且跑完即停。
-func runBacktestMode(appCtx *app_context.AppContext) {
-	appCtx.Log.Info("進入回測模式 (in-memory), months=", appCtx.Cfg.BackTestingMonths)
-	if err := sqls.UpdataDatebase(appCtx); err != nil {
-		appCtx.Log.Error("回測模式出錯,UpdataDatebase 錯誤:", err)
-		return
-	}
-	result, err := RunBacktest(appCtx)
-	if err != nil {
-		appCtx.Log.Error("回測執行錯誤:", err)
-		return
-	}
-	appCtx.Log.Infof("=== 回測結果 === 起始現金: %.2f, 每月注資合計: %.2f, 期末現金: %.2f, 期末持股市值: %.2f, 合計: %.2f",
-		result.InitialCash, result.TotalContributed, result.FinalCash, result.FinalHoldingValue, result.FinalTotal)
-	_ = discord.SendEmbedDiscordMessage(appCtx, "📊 回測結果",
-		fmt.Sprintf("起始現金: %.2f\n每月注資合計: %.2f\n期末現金: %.2f\n期末持股市值: %.2f\n合計: %.2f",
-			result.InitialCash, result.TotalContributed, result.FinalCash, result.FinalHoldingValue, result.FinalTotal),
-		0x2196F3)
 }
 
 // runOnlineMode 啟動上線模式。
@@ -72,7 +57,7 @@ func runOnlineMode(appCtx *app_context.AppContext) error {
 		return fmt.Errorf("無任何股票歷史資料")
 	}
 
-	engine := NewEngine(appCtx.Cfg)
+	engine := trading.NewEngine(appCtx.Cfg)
 	if err := seedEngineFromDB(appCtx, engine); err != nil {
 		return fmt.Errorf("seedEngineFromDB: %w", err)
 	}
@@ -87,7 +72,7 @@ func runOnlineMode(appCtx *app_context.AppContext) error {
 // seedEngineFromDB 從 DB 還原 engine 的現金、持倉、冷卻基準。
 // 順序很重要:cash 優先用 BotState (持久化過的真實餘額);如果沒有 (第一次啟動),
 // 則維持 NewEngine 預設的 cfg.InitialCash。
-func seedEngineFromDB(appCtx *app_context.AppContext, engine *Engine) error {
+func seedEngineFromDB(appCtx *app_context.AppContext, engine *trading.Engine) error {
 	cash, hasCash, err := sqls.LoadCash(appCtx)
 	if err != nil {
 		return fmt.Errorf("LoadCash: %w", err)
@@ -130,13 +115,13 @@ func seedEngineFromDB(appCtx *app_context.AppContext, engine *Engine) error {
 
 // runCatchUp 把 [watermark+1, latest series date] 透過引擎跑一遍。
 // 使用 silent executor:寫 DB 但不發 Discord (避免歷史回放灌爆通知)。
-func runCatchUp(appCtx *app_context.AppContext, engine *Engine, series map[string]*stockSeries) error {
+func runCatchUp(appCtx *app_context.AppContext, engine *trading.Engine, series map[string]*trading.StockSeries) error {
 	watermark, err := sqls.LoadWatermark(appCtx)
 	if err != nil {
 		return fmt.Errorf("LoadWatermark: %w", err)
 	}
 
-	allDates := collectDateUnion(series)
+	allDates := trading.CollectDateUnion(series)
 	if len(allDates) == 0 {
 		appCtx.Log.Warn("series 為空,跳過 catch-up")
 		return nil
@@ -146,7 +131,7 @@ func runCatchUp(appCtx *app_context.AppContext, engine *Engine, series map[strin
 	if watermark.IsZero() {
 		// 首次啟動:從「所有追蹤股票都已發行」的那一天起 catch-up (不在某檔尚未上市的空窗期做決策)。
 		startFloor := allDates[0]
-		if ci, ok := commonIssuanceStart(appCtx.Cfg, series); ok && ci.After(startFloor) {
+		if ci, ok := backtest.CommonIssuanceStart(appCtx.Cfg, series); ok && ci.After(startFloor) {
 			startFloor = ci
 		}
 		lo := sort.Search(len(allDates), func(i int) bool { return !allDates[i].Before(startFloor) })
@@ -188,7 +173,7 @@ func runCatchUp(appCtx *app_context.AppContext, engine *Engine, series map[strin
 
 // runDailyLoop 是上線模式的本體:每天 Taipei 時間 14:00 觸發一次當日決策。
 // 處理流程與 catch-up 相同,只差在會發 Discord per-trade。
-func runDailyLoop(appCtx *app_context.AppContext, engine *Engine) error {
+func runDailyLoop(appCtx *app_context.AppContext, engine *trading.Engine) error {
 	taiwanTimeZone, err := time.LoadLocation("Asia/Taipei")
 	if err != nil {
 		return fmt.Errorf("LoadLocation Asia/Taipei: %w", err)
@@ -208,7 +193,7 @@ func runDailyLoop(appCtx *app_context.AppContext, engine *Engine) error {
 }
 
 // runOneDay 抓今日 TWSE → reload series → 引擎處理一日 → 持久化 watermark/cash。
-func runOneDay(appCtx *app_context.AppContext, engine *Engine, exec Executor, now time.Time) error {
+func runOneDay(appCtx *app_context.AppContext, engine *trading.Engine, exec trading.Executor, now time.Time) error {
 	if err := sqls.UpdataDatebase(appCtx); err != nil {
 		return fmt.Errorf("UpdataDatebase: %w", err)
 	}
@@ -227,6 +212,55 @@ func runOneDay(appCtx *app_context.AppContext, engine *Engine, exec Executor, no
 		appCtx.Log.Warn("SaveCash 失敗 (不致命):", err)
 	}
 	return nil
+}
+
+// loadStockSeries 從 DB 一次讀入所有追蹤股票的歷史資料並預先計算 20MA。
+// 上線與回測都使用同一份 series — 引擎處理單日決策時,所有讀價皆走 series,而非額外 DB query,
+// 因此兩種模式的「策略觀點」完全一致。
+//
+// 此函式是引擎相關程式碼中唯一的 DB 讀取;MA / 前綴和 / split 還原邏輯則委派給純套件
+// trading.ApplySplitAdjust + trading.NewStockSeries,確保與回測 / CSV 路徑行為一致。
+func loadStockSeries(appCtx *app_context.AppContext) (map[string]*trading.StockSeries, error) {
+	series := make(map[string]*trading.StockSeries, len(appCtx.Cfg.TrackStocks))
+
+	for _, stockID := range appCtx.Cfg.TrackStocks {
+		rows, err := appCtx.Db.Query("SELECT date, close_price FROM StockHistory WHERE stock_id = ? ORDER BY date ASC;", stockID)
+		if err != nil {
+			return nil, fmt.Errorf("load %s history: %w", stockID, err)
+		}
+
+		dates := make([]time.Time, 0, 2048)
+		prices := make([]float64, 0, 2048)
+		for rows.Next() {
+			var dateStr string
+			var price float64
+			if err := rows.Scan(&dateStr, &price); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			t, err := time.Parse("2006-01-02", dateStr)
+			if err != nil {
+				t, err = time.Parse("2006-01-02 15:04:05", dateStr)
+				if err != nil {
+					continue
+				}
+			}
+			dates = append(dates, t)
+			prices = append(prices, price)
+		}
+		rows.Close()
+
+		if len(dates) == 0 {
+			appCtx.Log.Warn("無歷史資料 stockID=", stockID)
+			continue
+		}
+
+		// 還原股票分割 (split):使價格序列連續,再由 NewStockSeries 計算 MA / 前綴和。
+		trading.ApplySplitAdjust(prices)
+		series[stockID] = trading.NewStockSeries(dates, prices, nil, nil, nil)
+	}
+
+	return series, nil
 }
 
 // dbExecutor 是上線模式的 Executor 實作:寫入 UnrealizedGainsLosses /

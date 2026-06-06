@@ -1,6 +1,8 @@
-package kernals
+package backtest
 
 import (
+	"github.com/Jason0411202/stockbot-long-backend/internal/config"
+	"github.com/Jason0411202/stockbot-long-backend/internal/service/trading"
 	"testing"
 	"time"
 )
@@ -10,38 +12,38 @@ import (
 
 func TestCommonIssuanceStart_LatestListing(t *testing.T) {
 	// Arrange — A 早上市、B 晚上市;common issuance = 較晚者第一天。
-	series := map[string]*stockSeries{
+	series := map[string]*trading.StockSeries{
 		"A": flatSeries(300, 2019, time.January, 100),
 		"B": flatSeries(300, 2019, time.March, 100),
 	}
 	cfg := baseCfg("A", "B")
 
 	// Act
-	got, ok := commonIssuanceStart(cfg, series)
+	got, ok := CommonIssuanceStart(cfg, series)
 
 	// Assert
 	want := time.Date(2019, 3, 1, 0, 0, 0, 0, time.UTC)
 	if !ok || !got.Equal(want) {
-		t.Fatalf("commonIssuanceStart = (%s,%v), want (%s,true)", got.Format("2006-01-02"), ok, want.Format("2006-01-02"))
+		t.Fatalf("CommonIssuanceStart = (%s,%v), want (%s,true)", got.Format("2006-01-02"), ok, want.Format("2006-01-02"))
 	}
 }
 
 func TestRunBacktestOnSeries_StartsAtCommonIssuance(t *testing.T) {
 	// Arrange
-	series := map[string]*stockSeries{
+	series := map[string]*trading.StockSeries{
 		"A": flatSeries(400, 2019, time.January, 100),
 		"B": flatSeries(400, 2019, time.March, 100),
 	}
 	cfg := baseCfg("A", "B")
 
-	// Act — runBacktestOnSeries 應等於「從 common issuance 起算的視窗」。
-	ci, _ := commonIssuanceStart(cfg, series)
-	end := collectDateUnion(series)
-	want, err := runBacktestWindow(cfg, series, ci, end[len(end)-1])
+	// Act — RunBacktestOnSeries 應等於「從 common issuance 起算的視窗」。
+	ci, _ := CommonIssuanceStart(cfg, series)
+	end := trading.CollectDateUnion(series)
+	want, err := RunBacktestWindow(cfg, series, ci, end[len(end)-1])
 	if err != nil {
 		t.Fatalf("window: %v", err)
 	}
-	got, err := runBacktestOnSeries(cfg, series)
+	got, err := RunBacktestOnSeries(cfg, series)
 	if err != nil {
 		t.Fatalf("onSeries: %v", err)
 	}
@@ -57,11 +59,11 @@ func TestRunBacktestWindow_TracksContributions(t *testing.T) {
 	// Arrange — 90 連續日從 2020-01-01 (跨 1~3 月),每月注資 2500 → 起始月 (Jan) 不注、Feb/Mar 各注一次。
 	cfg := baseCfg("TEST")
 	cfg.MonthlyContribution = 2500
-	series := map[string]*stockSeries{"TEST": flatSeries(90, 2020, time.January, 100)}
-	dates := series["TEST"].dates
+	series := map[string]*trading.StockSeries{"TEST": flatSeries(90, 2020, time.January, 100)}
+	dates := series["TEST"].Dates
 
 	// Act
-	res, err := runBacktestWindow(cfg, series, dates[0], dates[len(dates)-1])
+	res, err := RunBacktestWindow(cfg, series, dates[0], dates[len(dates)-1])
 	if err != nil {
 		t.Fatalf("window: %v", err)
 	}
@@ -82,11 +84,11 @@ func TestRunBacktestWindow_RejectsNonBaseline(t *testing.T) {
 	// Arrange
 	cfg := baseCfg("TEST")
 	cfg.ScalingStrategy = "SomethingElse"
-	series := map[string]*stockSeries{"TEST": flatSeries(30, 2020, time.January, 100)}
-	dates := series["TEST"].dates
+	series := map[string]*trading.StockSeries{"TEST": flatSeries(30, 2020, time.January, 100)}
+	dates := series["TEST"].Dates
 
 	// Act + Assert
-	if _, err := runBacktestWindow(cfg, series, dates[0], dates[len(dates)-1]); err == nil {
+	if _, err := RunBacktestWindow(cfg, series, dates[0], dates[len(dates)-1]); err == nil {
 		t.Fatalf("expected error for non-Baseline strategy")
 	}
 }
@@ -94,21 +96,21 @@ func TestRunBacktestWindow_RejectsNonBaseline(t *testing.T) {
 func TestRunBacktestWindow_EmptyWindowErrors(t *testing.T) {
 	// Arrange — start 在所有資料之後 → 視窗內無交易日。
 	cfg := baseCfg("TEST")
-	series := map[string]*stockSeries{"TEST": flatSeries(30, 2020, time.January, 100)}
+	series := map[string]*trading.StockSeries{"TEST": flatSeries(30, 2020, time.January, 100)}
 
 	// Act + Assert
 	future := time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC)
-	if _, err := runBacktestWindow(cfg, series, future, future.AddDate(0, 1, 0)); err == nil {
+	if _, err := RunBacktestWindow(cfg, series, future, future.AddDate(0, 1, 0)); err == nil {
 		t.Fatalf("expected error for empty window")
 	}
 }
 
 func TestContributionAmounts(t *testing.T) {
 	// Arrange — 90 連續日從 2020-01-01。
-	dates := flatSeries(90, 2020, time.January, 100).dates
+	dates := flatSeries(90, 2020, time.January, 100).Dates
 
 	// Act
-	got := contributionAmounts(dates, 2500)
+	got := ContributionAmounts(dates, 2500)
 
 	// Assert — out[0]=0;每逢月份切換注一次;合計 = 2500×2 (Feb/Mar)。
 	if got[0] != 0 {
@@ -126,7 +128,7 @@ func TestContributionAmounts(t *testing.T) {
 	}
 
 	// monthly<=0 → 全 0 (退化回無注資)。
-	for _, v := range contributionAmounts(dates, 0) {
+	for _, v := range ContributionAmounts(dates, 0) {
 		if v != 0 {
 			t.Fatalf("monthly=0 should disable contributions")
 		}
@@ -135,13 +137,13 @@ func TestContributionAmounts(t *testing.T) {
 
 func TestCollectDateUnion_SortedDedup(t *testing.T) {
 	// Arrange — 兩檔部分重疊的日期。
-	series := map[string]*stockSeries{
+	series := map[string]*trading.StockSeries{
 		"A": seriesFrom(mustDate(t, "2020-01-01"), constPrices(3, 1)),
 		"B": seriesFrom(mustDate(t, "2020-01-02"), constPrices(3, 1)),
 	}
 
 	// Act
-	union := collectDateUnion(series)
+	union := trading.CollectDateUnion(series)
 
 	// Assert — 去重 + 升冪:01-01..01-04 共 4 天。
 	if len(union) != 4 {
@@ -151,5 +153,44 @@ func TestCollectDateUnion_SortedDedup(t *testing.T) {
 		if !union[i].After(union[i-1]) {
 			t.Fatalf("union not strictly increasing at %d", i)
 		}
+	}
+}
+
+// TestEngine_PerStockOverride_Isolates 由 engine_test.go 移來:依賴 backtest 視窗核心 RunBacktestWindow。
+func TestEngine_PerStockOverride_Isolates(t *testing.T) {
+	// Arrange — A、B 同資料;把 A 的 MAWindow override 到極大 (永遠算不出均線 → A 不買)。
+	start := mustDate(t, "2020-01-01")
+	series := map[string]*trading.StockSeries{
+		"A": risingSeries(start, 300),
+		"B": risingSeries(start, 300),
+	}
+	end := series["A"].Dates[299]
+
+	base := baseCfg("A", "B")
+	r0, err := RunBacktestWindow(base, series, series["A"].Dates[0], end)
+	if err != nil {
+		t.Fatalf("r0: %v", err)
+	}
+
+	ov := baseCfg("A", "B")
+	ov.StockOverrides = map[string]config.StockParams{"A": {MAWindow: iptr(9999)}}
+	r1, err := RunBacktestWindow(ov, series, series["A"].Dates[0], end)
+	if err != nil {
+		t.Fatalf("r1: %v", err)
+	}
+
+	bOnly := baseCfg("B")
+	rB, err := RunBacktestWindow(bOnly, series, series["B"].Dates[0], end)
+	if err != nil {
+		t.Fatalf("rB: %v", err)
+	}
+
+	// Assert — 停用 A 後買入下降;且「A+B 但停用 A」的投組 == 「只有 B」(A 不買不佔現金)。
+	if r0.TotalBuys <= r1.TotalBuys {
+		t.Fatalf("disabling A should reduce buys: r0=%d r1=%d", r0.TotalBuys, r1.TotalBuys)
+	}
+	if r1.TotalBuys != rB.TotalBuys || r1.FinalTotal != rB.FinalTotal {
+		t.Fatalf("portfolio with A disabled should equal B-only: r1(buys=%d total=%.2f) vs B(buys=%d total=%.2f)",
+			r1.TotalBuys, r1.FinalTotal, rB.TotalBuys, rB.FinalTotal)
 	}
 }

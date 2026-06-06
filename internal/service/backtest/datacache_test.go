@@ -1,6 +1,7 @@
-package kernals
+package backtest
 
 import (
+	"github.com/Jason0411202/stockbot-long-backend/internal/service/trading"
 	"os"
 	"path/filepath"
 	"testing"
@@ -35,10 +36,10 @@ bad,row,only,three
 
 	// Assert — 只有 3 條有效列 (header/壞列/0 收盤被略過)。
 	s := series["AAA"]
-	if len(s.dates) != 3 {
-		t.Fatalf("valid rows = %d, want 3 (closes %v)", len(s.dates), s.closePrices)
+	if len(s.Dates) != 3 {
+		t.Fatalf("valid rows = %d, want 3 (closes %v)", len(s.Dates), s.ClosePrices)
 	}
-	if _, ok := s.dateIndex["2020-01-04"]; !ok {
+	if _, ok := s.DateIndex["2020-01-04"]; !ok {
 		t.Fatalf("expected 2020-01-04 indexed")
 	}
 }
@@ -60,13 +61,13 @@ func TestLoadSeriesFromCSV_SortsUnordered(t *testing.T) {
 
 	// Assert — 日期升冪、收盤隨日期同步重排。
 	s := series["BBB"]
-	for i := 1; i < len(s.dates); i++ {
-		if !s.dates[i].After(s.dates[i-1]) {
+	for i := 1; i < len(s.Dates); i++ {
+		if !s.Dates[i].After(s.Dates[i-1]) {
 			t.Fatalf("dates not ascending at %d", i)
 		}
 	}
-	if s.closePrices[0] != 10 || s.closePrices[2] != 30 {
-		t.Fatalf("closes not reordered with dates: %v", s.closePrices)
+	if s.ClosePrices[0] != 10 || s.ClosePrices[2] != 30 {
+		t.Fatalf("closes not reordered with dates: %v", s.ClosePrices)
 	}
 }
 
@@ -108,7 +109,7 @@ func TestParseFloat(t *testing.T) {
 func TestEvaluateWalkForward_DelegatesToCore(t *testing.T) {
 	// Arrange
 	start := mustDate(t, "2019-01-01")
-	series := map[string]*stockSeries{
+	series := map[string]*trading.StockSeries{
 		"A": seriesFrom(start, constPrices(800, 100)),
 		"B": seriesFrom(start, constPrices(800, 100)),
 	}
