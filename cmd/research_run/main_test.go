@@ -6,14 +6,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Jason0411202/stockbot-long-backend/kernals"
+	"github.com/Jason0411202/stockbot-long-backend/internal/service/backtest"
 )
 
 // main_test.go 驗證回測結果輸出格式 (含 PnL 百分比與零本金防呆)。
 
 func TestPrintResult(t *testing.T) {
 	// Arrange
-	res := &kernals.BacktestResult{
+	res := &backtest.BacktestResult{
 		InitialCash: 100000, TotalContributed: 50000,
 		FinalCash: 20000, FinalHoldingValue: 180000, FinalTotal: 200000,
 		TotalBuys: 30, TotalSells: 10, SkippedBuys: 2,
@@ -34,7 +34,7 @@ func TestPrintResult(t *testing.T) {
 
 func TestPrintResult_ZeroInvestedNoDivByZero(t *testing.T) {
 	// Arrange — 本金為 0 不可除零 panic。
-	res := &kernals.BacktestResult{}
+	res := &backtest.BacktestResult{}
 
 	// Act
 	var out bytes.Buffer

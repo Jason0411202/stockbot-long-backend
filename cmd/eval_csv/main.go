@@ -15,7 +15,7 @@ import (
 	"os"
 
 	"github.com/Jason0411202/stockbot-long-backend/internal/config"
-	"github.com/Jason0411202/stockbot-long-backend/kernals"
+	"github.com/Jason0411202/stockbot-long-backend/internal/service/backtest"
 )
 
 func main() {
@@ -33,24 +33,24 @@ func main() {
 		fmt.Fprintln(os.Stderr, "載入 config 失敗:", err)
 		os.Exit(1)
 	}
-	series, err := kernals.LoadSeriesFromCSV(*dataDir, cfg.TrackStocks)
+	series, err := backtest.LoadSeriesFromCSV(*dataDir, cfg.TrackStocks)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "載入 CSV 失敗 (先跑 go run ./cmd/fetch_data):", err)
 		os.Exit(1)
 	}
 
-	full, err := kernals.EvaluateFullSpan(cfg, series)
+	full, err := backtest.EvaluateFullSpan(cfg, series)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "全期評估失敗:", err)
 		os.Exit(1)
 	}
-	wfp := kernals.WalkForwardParams{WindowMonths: *window, StepMonths: *step, MinTradeDays: *minDays}
-	_, agg, err := kernals.EvaluateWalkForward(cfg, series, wfp)
+	wfp := backtest.WalkForwardParams{WindowMonths: *window, StepMonths: *step, MinTradeDays: *minDays}
+	_, agg, err := backtest.EvaluateWalkForward(cfg, series, wfp)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "walk-forward 評估失敗:", err)
 		os.Exit(1)
 	}
-	isoos, err := kernals.EvaluateRollingOOS(cfg, series, wfp, *isMonths, *foldMonths)
+	isoos, err := backtest.EvaluateRollingOOS(cfg, series, wfp, *isMonths, *foldMonths)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "滾動 OOS 評估失敗:", err)
 		os.Exit(1)
@@ -62,7 +62,7 @@ func main() {
 }
 
 // printRollingOOS 印出滾動式 walk-forward 樣本外驗證 (反過擬合)。
-func printRollingOOS(r kernals.RollingOOSReport) {
+func printRollingOOS(r backtest.RollingOOSReport) {
 	fmt.Println()
 	fmt.Printf("滾動 walk-forward OOS (初始 IS 錨定 %d 月;分界日 %s,其後每窗皆樣本外)\n",
 		r.ISMonths, r.Anchor.Format("2006-01-02"))
@@ -96,7 +96,7 @@ func printRollingOOS(r kernals.RollingOOSReport) {
 
 func row2(label, a, b string) { fmt.Printf("%-16s %12s %12s\n", label, a, b) }
 
-func gateStr(a kernals.AggregateReport) string {
+func gateStr(a backtest.AggregateReport) string {
 	n := 0
 	for _, g := range []bool{a.G1RetParticipation, a.G2RiskReduction, a.G3CalmarVsBH, a.G4Skill, a.G5Robustness} {
 		if g {
@@ -106,7 +106,7 @@ func gateStr(a kernals.AggregateReport) string {
 	return fmt.Sprintf("%d/5", n)
 }
 
-func printHeadline(cfg *config.Config, r kernals.WindowReport) {
+func printHeadline(cfg *config.Config, r backtest.WindowReport) {
 	fmt.Printf("問題設定:期初 %s + 每月解鎖 %s,標的 %v\n",
 		money(cfg.InitialCash), money(cfg.MonthlyContribution), cfg.TrackStocks)
 	fmt.Printf("全期連續回測 %s ~ %s (%.1f 年);投入本金合計 %s\n",
@@ -127,7 +127,7 @@ func printHeadline(cfg *config.Config, r kernals.WindowReport) {
 	fmt.Println()
 }
 
-func printWalkForward(cfg *config.Config, window, step int, agg kernals.AggregateReport) {
+func printWalkForward(cfg *config.Config, window, step int, agg backtest.AggregateReport) {
 	fmt.Printf("Walk-forward 穩健性 — 視窗 %d 月 / 步進 %d 月 / %d 個視窗 (每窗獨立注資)\n", window, step, agg.NWindows)
 	fmt.Println("──────────────────────────────────────────────")
 	fmt.Printf("中位 MWR      策略 %s   vs  B&H %s   (Blend %s)\n", pct(agg.MedStratMWR), pct(agg.MedBHMWR), pct(agg.MedBlendMWR))

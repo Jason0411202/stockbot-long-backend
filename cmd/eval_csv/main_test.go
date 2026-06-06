@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/Jason0411202/stockbot-long-backend/internal/config"
-	"github.com/Jason0411202/stockbot-long-backend/kernals"
+	"github.com/Jason0411202/stockbot-long-backend/internal/service/backtest"
 )
 
 // captureStdout 暫時把 os.Stdout 導向丟棄,避免 print 系列函式污染測試輸出。
@@ -107,7 +107,7 @@ func TestPassFail(t *testing.T) {
 
 func TestGateStr(t *testing.T) {
 	// Arrange: 5 道關卡通過 3 道
-	a := kernals.AggregateReport{
+	a := backtest.AggregateReport{
 		G1RetParticipation: true,
 		G2RiskReduction:    false,
 		G3CalmarVsBH:       true,
@@ -118,22 +118,22 @@ func TestGateStr(t *testing.T) {
 	if got := gateStr(a); got != "3/5" {
 		t.Errorf("gateStr = %q, want 3/5", got)
 	}
-	if got := gateStr(kernals.AggregateReport{}); got != "0/5" {
+	if got := gateStr(backtest.AggregateReport{}); got != "0/5" {
 		t.Errorf("gateStr(zero) = %q, want 0/5", got)
 	}
 }
 
 // --- print 系列:只求執行不 panic + 覆蓋率 ---
 
-func sampleMetrics() kernals.SeriesMetrics {
-	return kernals.SeriesMetrics{
+func sampleMetrics() backtest.SeriesMetrics {
+	return backtest.SeriesMetrics{
 		MWR: 0.12, MWROK: true, MaxDD: -0.2, Calmar: 0.6,
 		Sortino: 1.1, AvgExp: 0.5, Multiple: 1.3,
 	}
 }
 
-func sampleWindowReport() kernals.WindowReport {
-	return kernals.WindowReport{
+func sampleWindowReport() backtest.WindowReport {
+	return backtest.WindowReport{
 		Start: time.Date(2020, 1, 2, 0, 0, 0, 0, time.UTC),
 		End:   time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC),
 		Years: 4.0, TotalIn: 100000,
@@ -144,8 +144,8 @@ func sampleWindowReport() kernals.WindowReport {
 	}
 }
 
-func sampleAggregate() kernals.AggregateReport {
-	return kernals.AggregateReport{
+func sampleAggregate() backtest.AggregateReport {
+	return backtest.AggregateReport{
 		NWindows:    6,
 		MedStratMWR: 0.1, MedBHMWR: 0.12, MedBlendMWR: 0.08,
 		MedStratMDD: -0.15, MedBHMDD: -0.3,
@@ -180,12 +180,12 @@ func TestPrintRollingOOS(t *testing.T) {
 	// Arrange: 構造一份含多折 (含一折 Calmar 為 NaN/Inf 走邊界) 的報告
 	is := sampleAggregate()
 	oos := sampleAggregate()
-	r := kernals.RollingOOSReport{
+	r := backtest.RollingOOSReport{
 		ISMonths: 36, FoldMonths: 12,
 		Anchor: time.Date(2021, 6, 1, 0, 0, 0, 0, time.UTC),
 		NIS:    4, NOOS: 6,
 		IS: is, OOS: oos,
-		Folds: []kernals.OOSFold{
+		Folds: []backtest.OOSFold{
 			{
 				FirstStart: time.Date(2021, 6, 1, 0, 0, 0, 0, time.UTC),
 				LastEnd:    time.Date(2022, 6, 1, 0, 0, 0, 0, time.UTC),
@@ -211,7 +211,7 @@ func TestPrintRollingOOS(t *testing.T) {
 	r3 := r
 	r3.IS.MedStratCalmar = 1.0
 	r3.OOS.MedStratCalmar = 0.7
-	r3.Folds = []kernals.OOSFold{
+	r3.Folds = []backtest.OOSFold{
 		{FirstStart: r.Anchor, LastEnd: r.Anchor, N: 1, Calmar: 0.9, CalmarWin: 1.0, GatesPass: 5},
 	}
 	printRollingOOS(r3)

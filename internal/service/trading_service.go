@@ -125,44 +125,20 @@ func (s *TradingService) RunOnline(ctx context.Context) error {
 }
 
 // loadSeries loads every tracked stock's history from the DB and builds a
-// trading.StockSeries per stock. It ports the OLD loadStockSeries exactly: the DB
-// path only carries (date, close_price), so highs/lows/vols are nil and the date
-// is parsed "2006-01-02" with a datetime fallback. Split-adjust + MA/prefix-sum
-// are delegated to the pure trading package, matching the backtest/CSV paths.
+// trading.StockSeries per stock. It delegates the DB-rows→StockSeries
+// construction to the shared LoadTradingSeries helper (no behavior change), then
+// warns about any tracked stock that produced no series (preserving the OLD
+// loadStockSeries logging).
 func (s *TradingService) loadSeries(ctx context.Context) (map[string]*trading.StockSeries, error) {
-	raw, err := s.series.LoadSeries(ctx, s.cfg.TrackStocks)
+	series, err := LoadTradingSeries(ctx, s.series, s.cfg.TrackStocks)
 	if err != nil {
-		return nil, fmt.Errorf("load series: %w", err)
+		return nil, err
 	}
-
-	series := make(map[string]*trading.StockSeries, len(s.cfg.TrackStocks))
 	for _, stockID := range s.cfg.TrackStocks {
-		history := raw[stockID]
-
-		dates := make([]time.Time, 0, len(history))
-		prices := make([]float64, 0, len(history))
-		for _, h := range history {
-			t, perr := time.Parse(dateLayout, h.Date)
-			if perr != nil {
-				t, perr = time.Parse(datetimeLayout, h.Date)
-				if perr != nil {
-					continue
-				}
-			}
-			dates = append(dates, t)
-			prices = append(prices, h.ClosePrice)
-		}
-
-		if len(dates) == 0 {
+		if _, ok := series[stockID]; !ok {
 			s.log.Warn("無歷史資料 stockID=", stockID)
-			continue
 		}
-
-		// 還原股票分割 (split):使價格序列連續,再由 NewStockSeries 計算 MA / 前綴和。
-		trading.ApplySplitAdjust(prices)
-		series[stockID] = trading.NewStockSeries(dates, prices, nil, nil, nil)
 	}
-
 	return series, nil
 }
 

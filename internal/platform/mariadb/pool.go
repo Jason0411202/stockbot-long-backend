@@ -8,18 +8,44 @@ import (
 	"fmt"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	"github.com/go-sql-driver/mysql"
 )
 
 //go:embed schema.sql
 var schemaSQL string
 
+// defaultSchema 為向後相容的預設資料庫名稱:舊的 DB_DSN 未包含 db name,
+// 舊程式以每次呼叫 `USE StockLongData` 切換 schema。
+const defaultSchema = "StockLongData"
+
 // OpenPool 以 dsn 建立一個設定好連線池參數的 *sql.DB,並在回傳前以 Ping 驗證連線。
 // dsn 為空字串時直接回傳錯誤,不嘗試開啟連線。
+//
+// 為向後相容,OpenPool 會 augment 傳入的 dsn (舊 DB_DSN 不含 db name):
+//   - 若未指定 DBName,補上 "StockLongData" → 連線池一律 scope 到該 schema,
+//     消除舊程式每次呼叫的 `USE StockLongData`。
+//   - 設定 multiStatements=true → 讓內嵌的多語句 schema.sql 能一次執行。
+//   - 設定 ParseTime=true → DATE/DATETIME 欄位可直接掃描成 time.Time。
+//
+// 既有的 DB_DSN 值 (不論是否已含這些參數) 都會被保留並正確化。
 func OpenPool(dsn string) (*sql.DB, error) {
 	if dsn == "" {
 		return nil, fmt.Errorf("OpenPool: dsn 不可為空字串")
 	}
+
+	cfg, err := mysql.ParseDSN(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("OpenPool: 解析 dsn 失敗: %w", err)
+	}
+	if cfg.DBName == "" {
+		cfg.DBName = defaultSchema
+	}
+	if cfg.Params == nil {
+		cfg.Params = make(map[string]string)
+	}
+	cfg.Params["multiStatements"] = "true"
+	cfg.ParseTime = true
+	dsn = cfg.FormatDSN()
 
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {

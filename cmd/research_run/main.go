@@ -1,53 +1,67 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
 	"time"
 
-	"github.com/Jason0411202/stockbot-long-backend/app_context"
-	"github.com/Jason0411202/stockbot-long-backend/kernals"
-	"github.com/Jason0411202/stockbot-long-backend/sqls"
-
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/joho/godotenv"
+
+	"github.com/Jason0411202/stockbot-long-backend/internal/config"
+	"github.com/Jason0411202/stockbot-long-backend/internal/logging"
+	"github.com/Jason0411202/stockbot-long-backend/internal/platform/mariadb"
+	"github.com/Jason0411202/stockbot-long-backend/internal/repository"
+	"github.com/Jason0411202/stockbot-long-backend/internal/service"
+	"github.com/Jason0411202/stockbot-long-backend/internal/service/backtest"
 )
 
 // cmd/research_run 是一個一次性的回測 runner：
 //  1. 載入 .env 與 config.yaml
-//  2. 連線 DB 並視情況更新股價資料
-//  3. 執行 RunBacktest 並印出結果
-//  4. 離開
+//  2. 連線 DB (使用既有歷史資料,不觸發 TWSE 爬蟲)
+//  3. 由 DB 建構價格序列並執行 RunBacktestOnSeries
+//  4. 印出結果並離開
 //
 // 與主程式差別：不啟動 Discord bot、不啟動 Echo server、不進 infinite loop。
 func main() {
 	start := time.Now()
 
+	log := logging.InitLogger()
+
 	if err := godotenv.Load(".env"); err != nil {
 		fmt.Fprintln(os.Stderr, "[warn] 未找到 .env，改用系統環境變數:", err)
 	}
 
-	appCtx := app_context.NewAppContext()
-
-	// 只做 DB 連線 + use database，不觸發 TWSE 爬蟲（回測使用既有歷史資料）。
-	if err := sqls.ConnectToMariadb(appCtx); err != nil {
-		appCtx.Log.Fatalf("ConnectToMariadb 失敗: %v", err)
-	}
-	if err := sqls.ConnectToDatabase(appCtx, "StockLongData"); err != nil {
-		appCtx.Log.Fatalf("ConnectToDatabase 失敗: %v", err)
-	}
-
-	result, err := kernals.RunBacktest(appCtx)
+	cfg, err := config.Load(config.Path())
 	if err != nil {
-		appCtx.Log.Fatalf("RunBacktest 失敗: %v", err)
+		log.Fatalf("載入 config 失敗: %v", err)
 	}
 
-	printResult(os.Stdout, appCtx.Cfg.TrackStocks, appCtx.Cfg.BackTestingMonths, result, time.Since(start))
+	// 只做 DB 連線,不觸發 TWSE 爬蟲（回測使用既有歷史資料）。
+	db, err := mariadb.OpenPool(os.Getenv("DB_DSN"))
+	if err != nil {
+		log.Fatalf("OpenPool 失敗: %v", err)
+	}
+	defer db.Close()
+
+	stockRepo := repository.NewStockHistoryRepository(db)
+	series, err := service.LoadTradingSeries(context.Background(), stockRepo, cfg.TrackStocks)
+	if err != nil {
+		log.Fatalf("LoadTradingSeries 失敗: %v", err)
+	}
+
+	result, err := backtest.RunBacktestOnSeries(cfg, series)
+	if err != nil {
+		log.Fatalf("RunBacktestOnSeries 失敗: %v", err)
+	}
+
+	printResult(os.Stdout, cfg.TrackStocks, cfg.BackTestingMonths, result, time.Since(start))
 }
 
 // printResult 格式化回測結果到 out。抽離 main()(連線/exit)讓輸出格式可被測試。
-func printResult(out io.Writer, stocks []string, backMonths int, result *kernals.BacktestResult, elapsed time.Duration) {
+func printResult(out io.Writer, stocks []string, backMonths int, result *backtest.BacktestResult, elapsed time.Duration) {
 	totalIn := result.InitialCash + result.TotalContributed
 	fmt.Fprintln(out, "=== BACKTEST RESULT ===")
 	fmt.Fprintf(out, "TrackStocks:         %v\n", stocks)

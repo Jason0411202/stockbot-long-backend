@@ -5,10 +5,11 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/joho/godotenv"
+
+	"github.com/Jason0411202/stockbot-long-backend/internal/platform/mariadb"
 )
 
 // db_probe：只做連線 + 查詢 StockHistory 筆數，不做任何寫入/網路抓取。
@@ -20,16 +21,12 @@ func main() {
 		os.Exit(2)
 	}
 
-	db, err := sql.Open("mysql", dsn)
+	db, err := mariadb.OpenPool(dsn) // 連線池 (含 Ping) 取代手刻 sql.Open
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "open:", err)
 		os.Exit(2)
 	}
-	db.SetConnMaxLifetime(time.Minute)
-	if err := db.Ping(); err != nil {
-		fmt.Fprintln(os.Stderr, "ping:", err)
-		os.Exit(3)
-	}
+	defer db.Close()
 
 	if err := probe(db, os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, err)

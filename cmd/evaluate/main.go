@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"math"
@@ -8,13 +9,15 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/Jason0411202/stockbot-long-backend/app_context"
-	"github.com/Jason0411202/stockbot-long-backend/internal/config"
-	"github.com/Jason0411202/stockbot-long-backend/kernals"
-	"github.com/Jason0411202/stockbot-long-backend/sqls"
-
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/joho/godotenv"
+
+	"github.com/Jason0411202/stockbot-long-backend/internal/config"
+	"github.com/Jason0411202/stockbot-long-backend/internal/logging"
+	"github.com/Jason0411202/stockbot-long-backend/internal/platform/mariadb"
+	"github.com/Jason0411202/stockbot-long-backend/internal/repository"
+	"github.com/Jason0411202/stockbot-long-backend/internal/service"
+	"github.com/Jason0411202/stockbot-long-backend/internal/service/backtest"
 )
 
 // cmd/evaluate 為 walk-forward 策略評估 runner (DB 版),問題設定 = 每月定期定額注資:
@@ -31,11 +34,16 @@ func main() {
 	stocksCSV := flag.String("stocks", "", "覆寫追蹤標的 (逗號分隔,例如 00631L 或 006208,00830);留空用 config.yaml")
 	flag.Parse()
 
+	log := logging.InitLogger()
+
 	if err := godotenv.Load(".env"); err != nil {
 		fmt.Fprintln(os.Stderr, "[warn] 未找到 .env,改用系統環境變數:", err)
 	}
 
-	appCtx := app_context.NewAppContext()
+	cfg, err := config.Load(config.Path())
+	if err != nil {
+		log.Fatalf("載入 config 失敗: %v", err)
+	}
 	if *stocksCSV != "" {
 		var stocks []string
 		for _, s := range strings.Split(*stocksCSV, ",") {
@@ -43,26 +51,32 @@ func main() {
 				stocks = append(stocks, s)
 			}
 		}
-		appCtx.Cfg.TrackStocks = stocks
-		appCtx.Log.Infof("已覆寫追蹤標的為 %v", stocks)
-	}
-	if err := sqls.ConnectToMariadb(appCtx); err != nil {
-		appCtx.Log.Fatalf("ConnectToMariadb 失敗: %v", err)
-	}
-	if err := sqls.ConnectToDatabase(appCtx, "StockLongData"); err != nil {
-		appCtx.Log.Fatalf("ConnectToDatabase 失敗: %v", err)
+		cfg.TrackStocks = stocks
+		log.Infof("已覆寫追蹤標的為 %v", stocks)
 	}
 
-	p := kernals.WalkForwardParams{
+	db, err := mariadb.OpenPool(os.Getenv("DB_DSN"))
+	if err != nil {
+		log.Fatalf("OpenPool 失敗: %v", err)
+	}
+	defer db.Close()
+
+	stockRepo := repository.NewStockHistoryRepository(db)
+	series, err := service.LoadTradingSeries(context.Background(), stockRepo, cfg.TrackStocks)
+	if err != nil {
+		log.Fatalf("LoadTradingSeries 失敗: %v", err)
+	}
+
+	p := backtest.WalkForwardParams{
 		WindowMonths: *windowMonths,
 		StepMonths:   *stepMonths,
 		MinTradeDays: *minDays,
 	}
-	reports, agg, err := kernals.RunWalkForward(appCtx, p)
+	reports, agg, err := backtest.EvaluateWalkForward(cfg, series, p)
 	if err != nil {
-		appCtx.Log.Fatalf("RunWalkForward 失敗: %v", err)
+		log.Fatalf("EvaluateWalkForward 失敗: %v", err)
 	}
-	printReport(appCtx.Cfg, p, reports, agg)
+	printReport(cfg, p, reports, agg)
 }
 
 // --- 格式化小工具 (處理 Inf/NaN) ---
@@ -111,7 +125,7 @@ func passFail(b bool) string {
 	return "FAIL ❌"
 }
 
-func printReport(cfg *config.Config, p kernals.WalkForwardParams, reports []kernals.WindowReport, agg kernals.AggregateReport) {
+func printReport(cfg *config.Config, p backtest.WalkForwardParams, reports []backtest.WindowReport, agg backtest.AggregateReport) {
 	stocks := cfg.TrackStocks
 	fmt.Println()
 	fmt.Println("════════════════════════════════════════════════════════════════════════")
@@ -189,7 +203,7 @@ func verdict(pass bool) string {
 	return "尚未全部通過 —— 見下方揭露,逐關卡判斷差在哪、是否只是『抱現金』的假優勢 ⚠️"
 }
 
-func printDisclosures(stocks []string, agg kernals.AggregateReport) {
+func printDisclosures(stocks []string, agg backtest.AggregateReport) {
 	fmt.Println("  ── 必要揭露 (避免被回測誤導) ──")
 	fmt.Printf("    1. 倖存者/選股偏誤:%v 是『事後』挑選且都存活、長期向上的大盤型 ETF。\n", stocks)
 	fmt.Println("       逢低加碼策略在『會跌但會回來』的多頭市場本就占優,本結果是『樂觀上界』,")

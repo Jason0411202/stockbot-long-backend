@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/Jason0411202/stockbot-long-backend/internal/config"
-	"github.com/Jason0411202/stockbot-long-backend/kernals"
+	"github.com/Jason0411202/stockbot-long-backend/internal/service/backtest"
 )
 
 // captureStdout 把 os.Stdout 暫時導向丟棄,避免 print 系列污染測試輸出。
@@ -118,15 +118,15 @@ func TestVerdict(t *testing.T) {
 
 // --- print 系列:執行不 panic + 覆蓋率 ---
 
-func sampleMetrics() kernals.SeriesMetrics {
-	return kernals.SeriesMetrics{
+func sampleMetrics() backtest.SeriesMetrics {
+	return backtest.SeriesMetrics{
 		MWR: 0.12, MWROK: true, MaxDD: -0.2, Calmar: 0.6,
 		Sortino: 1.1, AvgExp: 0.5, Multiple: 1.3,
 	}
 }
 
-func sampleWindowReport() kernals.WindowReport {
-	return kernals.WindowReport{
+func sampleWindowReport() backtest.WindowReport {
+	return backtest.WindowReport{
 		Start: time.Date(2020, 1, 2, 0, 0, 0, 0, time.UTC),
 		End:   time.Date(2022, 1, 2, 0, 0, 0, 0, time.UTC),
 		Years: 2.0, TotalIn: 100000,
@@ -135,8 +135,8 @@ func sampleWindowReport() kernals.WindowReport {
 	}
 }
 
-func sampleAggregate(g4 bool) kernals.AggregateReport {
-	return kernals.AggregateReport{
+func sampleAggregate(g4 bool) backtest.AggregateReport {
+	return backtest.AggregateReport{
 		NWindows:    3,
 		MedStratMWR: 0.1, MedBHMWR: 0.12, MedBlendMWR: 0.08,
 		MedStratMDD: -0.15, MedBHMDD: -0.3,
@@ -155,8 +155,8 @@ func TestPrintReport(t *testing.T) {
 	cfg := &config.Config{
 		TrackStocks: []string{"00631L", "00830"}, InitialCash: 50000, MonthlyContribution: 2500,
 	}
-	p := kernals.WalkForwardParams{WindowMonths: 24, StepMonths: 3, MinTradeDays: 200}
-	reports := []kernals.WindowReport{sampleWindowReport(), sampleWindowReport()}
+	p := backtest.WalkForwardParams{WindowMonths: 24, StepMonths: 3, MinTradeDays: 200}
+	reports := []backtest.WindowReport{sampleWindowReport(), sampleWindowReport()}
 	// Act: 含有 reports → 走 len>0 + participation>0 分支
 	printReport(cfg, p, reports, sampleAggregate(true))
 
