@@ -14,8 +14,6 @@ import (
 	"math"
 	"os"
 
-	"time"
-
 	"main/config"
 	"main/kernals"
 )
@@ -26,7 +24,8 @@ func main() {
 	window := flag.Int("window", 24, "walk-forward 視窗 (月)")
 	step := flag.Int("step", 3, "視窗步進 (月)")
 	minDays := flag.Int("min-days", 200, "視窗最少交易日")
-	splitFrac := flag.Float64("split", 0.6, "IS/OOS 切分:IS (前段調參) 佔共同有效期的比例")
+	isMonths := flag.Int("is-months", 36, "滾動 OOS:初始樣本內 (IS) 錨定月數")
+	foldMonths := flag.Int("fold-months", 12, "滾動 OOS:每折月數")
 	flag.Parse()
 
 	cfg, err := config.Load(*cfgPath)
@@ -51,52 +50,51 @@ func main() {
 		fmt.Fprintln(os.Stderr, "walk-forward 評估失敗:", err)
 		os.Exit(1)
 	}
-	isoos, err := kernals.EvaluateISOOS(cfg, series, wfp, *splitFrac)
+	isoos, err := kernals.EvaluateRollingOOS(cfg, series, wfp, *isMonths, *foldMonths)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "IS/OOS 評估失敗:", err)
+		fmt.Fprintln(os.Stderr, "滾動 OOS 評估失敗:", err)
 		os.Exit(1)
 	}
 
 	printHeadline(cfg, full)
 	printWalkForward(cfg, *window, *step, agg)
-	printISOOS(isoos)
+	printRollingOOS(isoos)
 }
 
-// printISOOS 印出樣本內 / 樣本外切分驗證 (反過擬合的調參參考)。
-func printISOOS(r kernals.ISOOSReport) {
+// printRollingOOS 印出滾動式 walk-forward 樣本外驗證 (反過擬合)。
+func printRollingOOS(r kernals.RollingOOSReport) {
 	fmt.Println()
-	fmt.Printf("IS/OOS 切分驗證 (前 %.0f%% 調參 / 後 %.0f%% 驗證;分割日 %s)\n",
-		r.SplitFrac*100, (1-r.SplitFrac)*100, r.SplitDate.Format("2006-01-02"))
-	fmt.Printf("IS %d 視窗 (%s 起) | OOS %d 視窗 (~%s 止)\n",
-		r.NIS, dateOr(r.ISStart), r.NOOS, dateOr(r.OOSEnd))
+	fmt.Printf("滾動 walk-forward OOS (初始 IS 錨定 %d 月;分界日 %s,其後每窗皆樣本外)\n",
+		r.ISMonths, r.Anchor.Format("2006-01-02"))
+	fmt.Printf("IS %d 視窗 | OOS %d 視窗 (依 %d 月分 %d 折)\n", r.NIS, r.NOOS, r.FoldMonths, len(r.Folds))
 	fmt.Println("──────────────────────────────────────────────")
-	fmt.Printf("%-16s %12s %12s\n", "", "IS(樣本內)", "OOS(樣本外)")
+	fmt.Printf("%-16s %12s %12s\n", "", "IS(樣本內)", "OOS(全部)")
 	row2("中位 MWR", pct(r.IS.MedStratMWR), pct(r.OOS.MedStratMWR))
 	row2("中位 MaxDD", pct(r.IS.MedStratMDD), pct(r.OOS.MedStratMDD))
 	row2("中位 Calmar", ratio(r.IS.MedStratCalmar), ratio(r.OOS.MedStratCalmar))
 	row2("Calmar 勝率", pct(r.IS.CalmarWinRate), pct(r.OOS.CalmarWinRate))
-	row2("真擇時勝率", pct(r.IS.BlendSkillRate), pct(r.OOS.BlendSkillRate))
 	row2("五道關卡(G1~5)", gateStr(r.IS), gateStr(r.OOS))
+	fmt.Println("── 每折 OOS (跨期一致性) ──")
+	minFold := math.Inf(1)
+	for _, f := range r.Folds {
+		fmt.Printf("  %s 起 (%d 窗): Calmar %s  勝率 %s  關卡 %d/5\n",
+			f.FirstStart.Format("2006-01"), f.N, ratio(f.Calmar), pct(f.CalmarWin), f.GatesPass)
+		if !math.IsNaN(f.Calmar) && !math.IsInf(f.Calmar, 0) && f.Calmar < minFold {
+			minFold = f.Calmar
+		}
+	}
 	fmt.Println("──────────────────────────────────────────────")
-	// 過擬合判讀:OOS Calmar 相對 IS 的保留率。
 	retain := r.OOS.MedStratCalmar / r.IS.MedStratCalmar
-	verdict := "穩健 ✅ (OOS 接近 IS)"
-	if r.IS.MedStratCalmar <= 0 || r.OOS.MedStratCalmar < 0.6*r.IS.MedStratCalmar {
-		verdict = "過擬合疑慮 ⚠️ (OOS 大幅退化)"
+	verdict := "穩健 ✅ (OOS 接近 IS、各折皆不崩)"
+	if r.IS.MedStratCalmar <= 0 || r.OOS.MedStratCalmar < 0.6*r.IS.MedStratCalmar || minFold < 0.6 {
+		verdict = "過擬合疑慮 ⚠️ (OOS 或某折大幅退化)"
 	} else if r.OOS.MedStratCalmar < 0.8*r.IS.MedStratCalmar {
 		verdict = "尚可,略退化"
 	}
-	fmt.Printf("判讀:OOS Calmar 為 IS 的 %.0f%% → %s\n", retain*100, verdict)
+	fmt.Printf("判讀:OOS Calmar 為 IS 的 %.0f%%、最差折 Calmar %s → %s\n", retain*100, ratio(minFold), verdict)
 }
 
 func row2(label, a, b string) { fmt.Printf("%-16s %12s %12s\n", label, a, b) }
-
-func dateOr(t time.Time) string {
-	if t.IsZero() {
-		return "—"
-	}
-	return t.Format("2006-01-02")
-}
 
 func gateStr(a kernals.AggregateReport) string {
 	n := 0
