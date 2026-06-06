@@ -229,16 +229,19 @@ func (e *Engine) ProcessDay(today time.Time, series map[string]*stockSeries, exe
 			continue
 		}
 
-		// 進場均線:預設用預先算好的 20MA;若 cfg.MAWindow 指定其他長度則用 prefixClose O(1) 重算。
+		// 套用該股 per-stock override (無 override 時 == 共用 cfg,零成本)。其後該股決策一律用 eff。
+		eff := e.cfg.ForStock(stockID)
+
+		// 進場均線:預設用預先算好的 20MA;若 eff.MAWindow 指定其他長度則用 prefixClose O(1) 重算。
 		entryMA := s.ma20[idx]
-		if e.cfg.MAWindow > 0 && e.cfg.MAWindow != 20 {
-			entryMA = s.maAt(idx, e.cfg.MAWindow)
+		if eff.MAWindow > 0 && eff.MAWindow != 20 {
+			entryMA = s.maAt(idx, eff.MAWindow)
 		}
 
 		// 牛熊判定 (一天一次);套到買賣兩個 snapshot。
 		isBullToday := false
-		if e.cfg.RegimeMethod != "" {
-			isBullToday = e.regimeBull(s, idx)
+		if eff.RegimeMethod != "" {
+			isBullToday = regimeBull(eff, s, idx)
 		}
 
 		// === 買入 ===
@@ -249,10 +252,10 @@ func (e *Engine) ProcessDay(today time.Time, series map[string]*stockSeries, exe
 		if needEquity {
 			snap.Equity = eqToday
 		}
-		if e.cfg.CooldownBreakBudget > 0 {
-			snap.CooldownBreaksLeft = e.cfg.CooldownBreakBudget - e.breaksInWindow(stockID, today)
+		if eff.CooldownBreakBudget > 0 {
+			snap.CooldownBreaksLeft = eff.CooldownBreakBudget - e.breaksInWindow(eff, stockID, today)
 		}
-		if buy := DecideBuy(e.cfg, snap); buy.Should {
+		if buy := DecideBuy(eff, snap); buy.Should {
 			if err := e.applyBuy(stockID, today, buy, exec); err != nil {
 				return err
 			}
@@ -267,7 +270,7 @@ func (e *Engine) ProcessDay(today time.Time, series map[string]*stockSeries, exe
 		snap = e.buildSnapshot(stockID, today, todayPrice, entryMA)
 		e.applyGateInputs(&snap, s, idx)
 		snap.IsBull = isBullToday
-		if sell := DecideSell(e.cfg, snap); sell.Should {
+		if sell := DecideSell(eff, snap); sell.Should {
 			if err := e.applySell(stockID, today, sell, exec); err != nil {
 				return err
 			}
@@ -331,9 +334,10 @@ func (e *Engine) buildSnapshot(stockID string, today time.Time, todayPrice, ma20
 	}
 }
 
-// breaksInWindow 回傳近 CooldownBreakWindowDays 日曆日內 (不含界外) 同一檔已動用的「打破冷卻」次數。
-func (e *Engine) breaksInWindow(stockID string, today time.Time) int {
-	w := e.cfg.CooldownBreakWindowDays
+// breaksInWindow 回傳近 cfg.CooldownBreakWindowDays 日曆日內 (不含界外) 同一檔已動用的「打破冷卻」次數。
+// 收 cfg 參數以支援 per-stock override (窗長可能各股不同)。
+func (e *Engine) breaksInWindow(cfg *config.Config, stockID string, today time.Time) int {
+	w := cfg.CooldownBreakWindowDays
 	if w <= 0 {
 		w = 365 // ≈252 交易日≈1 年
 	}
@@ -359,10 +363,9 @@ func (e *Engine) applyGateInputs(snap *Snapshot, s *stockSeries, idx int) {
 	}
 }
 
-// regimeBull 依 cfg.RegimeMethod 判定 (stock, idx) 當日是否為多頭。
+// regimeBull 依 c.RegimeMethod 判定 (stock, idx) 當日是否為多頭。free function 以支援 per-stock override。
 // 資料不足 (NaN / 回看越界) 一律回 false (= bear/中性,維持嚴格逢低買的保守行為)。
-func (e *Engine) regimeBull(s *stockSeries, idx int) bool {
-	c := e.cfg
+func regimeBull(c *config.Config, s *stockSeries, idx int) bool {
 	w := c.RegimeMAWindow
 	if w <= 0 {
 		w = 200

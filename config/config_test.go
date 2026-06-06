@@ -7,6 +7,36 @@ import (
 	"testing"
 )
 
+func iptr(v int) *int         { return &v }
+func fptr(v float64) *float64 { return &v }
+
+// ForStock 應套用該股 override、不動到其他股、不改 base,無 override 時回傳原指標。
+func TestForStock_Overrides(t *testing.T) {
+	base := &Config{
+		RegimeMAWindow: 95, BullBuyFrac: 0.20, TrailStopBear: 0.10, TrailMinGain: 0.10,
+		StockOverrides: map[string]StockParams{
+			"00631L": {RegimeMAWindow: iptr(60), BullBuyFrac: fptr(0.15)},
+		},
+	}
+
+	// 有 override 的股:被覆寫的欄位變更,未列的繼承。
+	eff := base.ForStock("00631L")
+	if eff.RegimeMAWindow != 60 || eff.BullBuyFrac != 0.15 {
+		t.Fatalf("override 未生效: regMA=%d bullFrac=%.2f", eff.RegimeMAWindow, eff.BullBuyFrac)
+	}
+	if eff.TrailStopBear != 0.10 || eff.TrailMinGain != 0.10 {
+		t.Fatalf("未列欄位應繼承共用值, 得 trail=%.2f tmin=%.2f", eff.TrailStopBear, eff.TrailMinGain)
+	}
+	// base 不可被改動。
+	if base.RegimeMAWindow != 95 || base.BullBuyFrac != 0.20 {
+		t.Fatalf("ForStock 不應改動 base: regMA=%d bullFrac=%.2f", base.RegimeMAWindow, base.BullBuyFrac)
+	}
+	// 無 override 的股:回傳原指標 (零成本)。
+	if got := base.ForStock("00830"); got != base {
+		t.Fatalf("無 override 應回傳原 *Config 指標")
+	}
+}
+
 func writeConfig(t *testing.T, body string) string {
 	t.Helper()
 	dir := t.TempDir()

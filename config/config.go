@@ -102,6 +102,74 @@ type Config struct {
 	//   BearBuyFrac>0:熊市買入 = 現金 × BearBuyFrac × 幾何深度權重 (ratio^i)。需搭配 BuyFracBasis。
 	//   花現金的固定比例在數學上永遠歸不了零 → 每個更深更便宜的跌點都還有錢買 (vs 固定 tier 會把現金抄光)。
 	BearBuyFrac float64 `yaml:"bear_buy_frac"`
+
+	// ── Per-stock 量身訂做:個股可覆寫部分旋鈕 (其餘繼承上面的共用值) ──
+	//   每支股票性質不同 (如槓桿倍數),可各自設最適參數。空 map = 全部共用 (與舊行為一致)。
+	//   ⚠️ per-stock 調參極易過擬合 → 採用前務必用 IS/OOS (cmd/eval_csv -split) 確認 OOS 不退化。
+	StockOverrides map[string]StockParams `yaml:"stock_overrides"`
+}
+
+// StockParams 為單一個股可覆寫的策略旋鈕 (指標型;nil = 繼承共用值,YAML 省略即 nil)。
+type StockParams struct {
+	MAWindow              *int     `yaml:"ma_window"`
+	RegimeMAWindow        *int     `yaml:"regime_ma_window"`
+	BullBuyBand           *float64 `yaml:"bull_buy_band"`
+	CooldownDays          *int     `yaml:"cooldown_days"`
+	BullCooldownDays      *int     `yaml:"bull_cooldown_days"`
+	BullBuyFrac           *float64 `yaml:"bull_buy_frac"`
+	BearBuyFrac           *float64 `yaml:"bear_buy_frac"`
+	BuyTierRatio          *float64 `yaml:"buy_tier_ratio"`
+	BaselineSellThreshold *float64 `yaml:"baseline_sell_threshold"`
+	SellFracOfPosition    *float64 `yaml:"sell_frac_of_position"`
+	TrailStopBear         *float64 `yaml:"trail_stop_bear"`
+	TrailMinGain          *float64 `yaml:"trail_min_gain"`
+}
+
+// ForStock 回傳「套用該股 override 後」的有效設定。無 override 時回傳原指標 (零成本)。
+// 回傳的是淺拷貝 (slice / map 欄位共享,皆唯讀);決策端不得改動回傳的 Config。
+func (c *Config) ForStock(stockID string) *Config {
+	ov, ok := c.StockOverrides[stockID]
+	if !ok {
+		return c
+	}
+	cp := *c
+	if ov.MAWindow != nil {
+		cp.MAWindow = *ov.MAWindow
+	}
+	if ov.RegimeMAWindow != nil {
+		cp.RegimeMAWindow = *ov.RegimeMAWindow
+	}
+	if ov.BullBuyBand != nil {
+		cp.BullBuyBand = *ov.BullBuyBand
+	}
+	if ov.CooldownDays != nil {
+		cp.CooldownDays = *ov.CooldownDays
+	}
+	if ov.BullCooldownDays != nil {
+		cp.BullCooldownDays = *ov.BullCooldownDays
+	}
+	if ov.BullBuyFrac != nil {
+		cp.BullBuyFrac = *ov.BullBuyFrac
+	}
+	if ov.BearBuyFrac != nil {
+		cp.BearBuyFrac = *ov.BearBuyFrac
+	}
+	if ov.BuyTierRatio != nil {
+		cp.BuyTierRatio = *ov.BuyTierRatio
+	}
+	if ov.BaselineSellThreshold != nil {
+		cp.BaselineSellThreshold = *ov.BaselineSellThreshold
+	}
+	if ov.SellFracOfPosition != nil {
+		cp.SellFracOfPosition = *ov.SellFracOfPosition
+	}
+	if ov.TrailStopBear != nil {
+		cp.TrailStopBear = *ov.TrailStopBear
+	}
+	if ov.TrailMinGain != nil {
+		cp.TrailMinGain = *ov.TrailMinGain
+	}
+	return &cp
 }
 
 // MAWindowOrDefault 回傳實際使用的進場均線長度 (<=0 時為 20)。
