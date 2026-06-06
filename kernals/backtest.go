@@ -2,17 +2,11 @@ package kernals
 
 import (
 	"fmt"
-	"io"
 	"main/app_context"
 	"main/config"
-	"os"
 	"sort"
 	"time"
 )
-
-// backtestWarnSink 是 runBacktestOnSeries 寫 runtime warning 的目的地;
-// 預設指向 os.Stderr,測試可注入 buffer 觀察 warning。
-var backtestWarnSink io.Writer = os.Stderr
 
 // BacktestResult 是一次回測的數值結果。衡量指標為 FinalTotal = FinalCash + FinalHoldingValue。
 // 問題設定含每月注資時,TotalContributed 為期間注入的新資金,投入本金總額 = InitialCash + TotalContributed。
@@ -32,6 +26,7 @@ type BacktestResult struct {
 //   - 回測使用 noopExecutor (不寫 DB / 不發 Discord)
 //   - 回測跑完後停止並回報結果;上線會接續每日 loop
 func RunBacktest(appCtx *app_context.AppContext, backTestMonths int) (*BacktestResult, error) {
+	_ = backTestMonths // 僅作為上層「回測模式」開關 (DailyCheck:>0 進回測模式);回測起點改用 common issuance
 	if appCtx.Cfg.ScalingStrategy != "Baseline" {
 		return nil, fmt.Errorf("回測目前僅支援 Scaling_Strategy=Baseline")
 	}
@@ -42,36 +37,23 @@ func RunBacktest(appCtx *app_context.AppContext, backTestMonths int) (*BacktestR
 	if len(series) == 0 {
 		return nil, fmt.Errorf("無任何股票歷史資料可供回測")
 	}
-	return runBacktestOnSeries(appCtx.Cfg, series, backTestMonths)
+	return runBacktestOnSeries(appCtx.Cfg, series)
 }
 
 // runBacktestOnSeries 為不依賴 DB 與 Discord 的純函式版本,方便做單元測試。
 //
-// backTestMonths 表示回測往前推幾個「日曆月」(用 time.AddDate(0, -N, 0) 計算 cutoff 日期),
-// 不是 N × 22 個交易日的近似。<= 0 表示停用截尾、用全部資料。
-//
-// 它現在只負責「把 backTestMonths 換算成 [start, end] 區間 (含原本的不足資料 warning)」,
-// 實際模擬委派給 runBacktestWindow。
-func runBacktestOnSeries(cfg *config.Config, series map[string]*stockSeries, backTestMonths int) (*BacktestResult, error) {
+// 回測起點 = commonIssuanceStart (所有追蹤股票都已發行的那一天),確保整段回測期間每檔追蹤股票都有資料;
+// 終點 = 最後一筆資料日。實際模擬委派給 runBacktestWindow。
+func runBacktestOnSeries(cfg *config.Config, series map[string]*stockSeries) (*BacktestResult, error) {
 	allDates := collectDateUnion(series)
 	if len(allDates) == 0 {
 		return nil, fmt.Errorf("無任何日期可供回測")
 	}
 	start := allDates[0]
-	end := allDates[len(allDates)-1]
-	if backTestMonths > 0 {
-		cutoff := end.AddDate(0, -backTestMonths, 0)
-		if cutoff.Before(allDates[0]) || cutoff.Equal(allDates[0]) {
-			// DB 提供的資料比 back_testing_months 要求的少。即使 config.Load 已經 sanity check 過配置,
-			// 真實情況仍可能更短 (TWSE 抓不到、股票上市日晚於 cutoff、手動動過 DB...)。
-			fmt.Fprintf(backtestWarnSink,
-				"⚠️  back_testing_months=%d 要求往前推到 %s,但 DB 最早資料只到 %s,回測實際使用全部 %d 天\n",
-				backTestMonths, cutoff.Format("2006-01-02"),
-				allDates[0].Format("2006-01-02"), len(allDates))
-		} else {
-			start = cutoff
-		}
+	if ci, ok := commonIssuanceStart(cfg, series); ok && ci.After(start) {
+		start = ci // 起點不早於「所有追蹤股票都已發行」的那一天
 	}
+	end := allDates[len(allDates)-1]
 	return runBacktestWindow(cfg, series, start, end)
 }
 

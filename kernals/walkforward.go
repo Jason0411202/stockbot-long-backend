@@ -162,6 +162,24 @@ func EvaluateFullSpan(cfg *config.Config, series map[string]*stockSeries) (Windo
 	return evaluateWindow(cfg, series, allDates, start, allDates[len(allDates)-1])
 }
 
+// commonIssuanceStart 回傳「所有追蹤股票都已發行 (都有資料)」的最早日期 = 各股票第一筆資料日的最大值。
+// 回測 / 上線都從此日起算,確保整段期間每檔追蹤股票都存在 (不在某檔尚未上市的空窗期做決策)。
+func commonIssuanceStart(cfg *config.Config, series map[string]*stockSeries) (time.Time, bool) {
+	var latest time.Time
+	found := false
+	for _, id := range cfg.TrackStocks {
+		s, ok := series[id]
+		if !ok || len(s.dates) == 0 {
+			continue
+		}
+		if d := s.dates[0]; !found || d.After(latest) {
+			latest = d
+			found = true
+		}
+	}
+	return latest, found
+}
+
 // commonSupportStart 回傳「所有追蹤股票皆已具備有效 MA20」的最早日期。
 // = 各追蹤股票第 20 個交易日 (dates[19]) 的最大值。確保每個視窗起點都無 MA20 暖身空轉。
 func commonSupportStart(cfg *config.Config, series map[string]*stockSeries) (time.Time, bool) {

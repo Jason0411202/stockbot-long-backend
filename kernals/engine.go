@@ -519,6 +519,9 @@ func loadStockSeries(appCtx *app_context.AppContext) (map[string]*stockSeries, e
 			continue
 		}
 
+		// 還原股票分割 (split):使價格序列連續,再計算 MA / 前綴和。
+		applySplitAdjust(prices)
+
 		idx := make(map[string]int, len(dates))
 		for i, d := range dates {
 			idx[d.Format("2006-01-02")] = i

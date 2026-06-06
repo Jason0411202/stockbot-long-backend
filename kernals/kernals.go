@@ -144,8 +144,14 @@ func runCatchUp(appCtx *app_context.AppContext, engine *Engine, series map[strin
 
 	var catchupDates []time.Time
 	if watermark.IsZero() {
-		appCtx.Log.Info("首次啟動,從最早資料 catch-up")
-		catchupDates = allDates
+		// 首次啟動:從「所有追蹤股票都已發行」的那一天起 catch-up (不在某檔尚未上市的空窗期做決策)。
+		startFloor := allDates[0]
+		if ci, ok := commonIssuanceStart(appCtx.Cfg, series); ok && ci.After(startFloor) {
+			startFloor = ci
+		}
+		lo := sort.Search(len(allDates), func(i int) bool { return !allDates[i].Before(startFloor) })
+		catchupDates = allDates[lo:]
+		appCtx.Log.Infof("首次啟動,從 common issuance %s catch-up", startFloor.Format("2006-01-02"))
 	} else {
 		idx := sort.Search(len(allDates), func(i int) bool {
 			return allDates[i].After(watermark)

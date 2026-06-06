@@ -29,7 +29,7 @@ type bar struct {
 func main() {
 	months := flag.Int("months", 90, "往前抓幾個月")
 	outDir := flag.String("out", "data", "CSV 輸出目錄")
-	stocksCSV := flag.String("stocks", "006208,00830", "追蹤標的 (逗號分隔)")
+	stocksCSV := flag.String("stocks", "00631L,00830", "追蹤標的 (逗號分隔)")
 	sleepMs := flag.Int("sleep", 1200, "每次 API 呼叫間隔 (毫秒)")
 	flag.Parse()
 

@@ -1,17 +1,14 @@
 package kernals
 
 import (
-	"bytes"
 	"main/config"
 	"math"
-	"strings"
 	"testing"
 	"time"
 )
 
 // makeSeries 建立 n 個連續日曆日的合成序列 (起點 startYear/startMonth 1 號),
-// 收盤價固定為 100 → backtest 不會觸發 baseline 買賣,
-// 所以我們可以單獨驗 truncation / warning 行為。
+// 收盤價固定為 100 → backtest 不會觸發 baseline 買賣,方便單獨驗起點 / 區間行為。
 func makeSeries(n int, startYear int, startMonth time.Month) *stockSeries {
 	dates := make([]time.Time, n)
 	prices := make([]float64, n)
@@ -43,106 +40,71 @@ func minimalCfg() *config.Config {
 		TrackStocks:               []string{"TEST"},
 		ScalingStrategy:           "Baseline",
 		BuyAndSellMultiplier:      1.0,
-		MaxBackMonths:             1,
-		BackTestingMonths:         0, // 測試時用參數覆寫,struct 欄位本身不直接被 runBacktestOnSeries 讀
 		CooldownDays:              14,
 		BaselineBuyTiers:          []config.BaselineBuyTier{{Above: -0.1, Amount: 500}},
 		BaselineBuyFallbackAmount: 3000,
 		BaselineSellAmount:        10000,
 		BaselineSellThreshold:     1.0,
 		InitialCash:               1000000,
-		InitDBBackMonths:          1,
 	}
 }
 
-// installSink 把 backtestWarnSink 換成 buffer,測試結束自動還原。
-func installSink(t *testing.T) *bytes.Buffer {
-	t.Helper()
-	prev := backtestWarnSink
-	buf := &bytes.Buffer{}
-	backtestWarnSink = buf
-	t.Cleanup(func() { backtestWarnSink = prev })
-	return buf
-}
-
-// 序列覆蓋 30 個月 (~900 天) → 要求 60 個月超出資料,應觸發 warning。
-func TestRunBacktestOnSeries_WarnsWhenRequestExceedsAvailable(t *testing.T) {
-	buf := installSink(t)
-
+// commonIssuanceStart = 各追蹤股票第一筆資料日的最大值 (較晚上市者決定起點)。
+func TestCommonIssuanceStart_LatestListing(t *testing.T) {
 	series := map[string]*stockSeries{
-		"TEST": makeSeries(900, 2020, time.January),
+		"A": makeSeries(300, 2019, time.January), // 2019-01-01 起
+		"B": makeSeries(300, 2019, time.March),   // 2019-03-01 起 (較晚上市)
 	}
 	cfg := minimalCfg()
+	cfg.TrackStocks = []string{"A", "B"}
 
-	_, err := runBacktestOnSeries(cfg, series, 60)
+	got, ok := commonIssuanceStart(cfg, series)
+	if !ok {
+		t.Fatal("expected common issuance found")
+	}
+	want := time.Date(2019, 3, 1, 0, 0, 0, 0, time.UTC)
+	if !got.Equal(want) {
+		t.Fatalf("commonIssuanceStart = %s, want %s (較晚上市的 B)", got.Format("2006-01-02"), want.Format("2006-01-02"))
+	}
+}
+
+// 回測起點應為 commonIssuanceStart:某檔尚未上市的空窗期不納入回測 (不在那段做決策)。
+func TestRunBacktestOnSeries_StartsAtCommonIssuance(t *testing.T) {
+	series := map[string]*stockSeries{
+		"A": makeSeries(400, 2019, time.January),
+		"B": makeSeries(400, 2019, time.March),
+	}
+	cfg := minimalCfg()
+	cfg.TrackStocks = []string{"A", "B"}
+
+	// 直接比對 runBacktestWindow(從 common issuance 起) 與 runBacktestOnSeries 結果一致,
+	// 證明 runBacktestOnSeries 確實以 common issuance 為起點。
+	ci, _ := commonIssuanceStart(cfg, series)
+	allDates := collectDateUnion(series)
+	end := allDates[len(allDates)-1]
+	want, err := runBacktestWindow(cfg, series, ci, end)
+	if err != nil {
+		t.Fatalf("runBacktestWindow err: %v", err)
+	}
+	got, err := runBacktestOnSeries(cfg, series)
+	if err != nil {
+		t.Fatalf("runBacktestOnSeries err: %v", err)
+	}
+	if got.FinalTotal != want.FinalTotal || got.TotalBuys != want.TotalBuys {
+		t.Fatalf("runBacktestOnSeries 未從 common issuance 起算: got Final=%.2f Buys=%d, want Final=%.2f Buys=%d",
+			got.FinalTotal, got.TotalBuys, want.FinalTotal, want.TotalBuys)
+	}
+}
+
+// 單一標的:common issuance = 該檔第一天,回測使用全部資料,不報錯。
+func TestRunBacktestOnSeries_SingleStockUsesAll(t *testing.T) {
+	series := map[string]*stockSeries{"TEST": makeSeries(250, 2024, time.January)}
+	cfg := minimalCfg()
+	res, err := runBacktestOnSeries(cfg, series)
 	if err != nil {
 		t.Fatalf("backtest err: %v", err)
 	}
-
-	out := buf.String()
-	if !strings.Contains(out, "back_testing_months=60") {
-		t.Fatalf("expected warning mentioning back_testing_months=60, got: %q", out)
-	}
-	if !strings.Contains(out, "DB 最早資料只到") {
-		t.Fatalf("expected warning mentioning earliest DB date, got: %q", out)
-	}
-}
-
-// 序列覆蓋 6 個月 (~180 天) → 要求 3 個月,完全在範圍內,不警告。
-func TestRunBacktestOnSeries_NoWarnWhenRequestFitsAvailable(t *testing.T) {
-	buf := installSink(t)
-
-	series := map[string]*stockSeries{
-		"TEST": makeSeries(180, 2024, time.January),
-	}
-	cfg := minimalCfg()
-
-	if _, err := runBacktestOnSeries(cfg, series, 3); err != nil {
-		t.Fatalf("backtest err: %v", err)
-	}
-
-	if buf.Len() != 0 {
-		t.Fatalf("expected no warning, got: %q", buf.String())
-	}
-}
-
-// 邊界:cutoff 剛好等於序列起始日 → 視為「資料剛好不夠」,觸發 warning。
-// 序列起點 2024-01-01,長度 365 (跨入 2024-12),latest = 2024-12-30,
-// backTestMonths=12 → cutoff = 2023-12-30 < 2024-01-01,所以警告。
-func TestRunBacktestOnSeries_WarnsAtBoundary(t *testing.T) {
-	buf := installSink(t)
-
-	series := map[string]*stockSeries{
-		"TEST": makeSeries(365, 2024, time.January),
-	}
-	cfg := minimalCfg()
-
-	if _, err := runBacktestOnSeries(cfg, series, 12); err != nil {
-		t.Fatalf("backtest err: %v", err)
-	}
-
-	if buf.Len() == 0 {
-		t.Fatalf("expected warning at boundary (cutoff before earliest), got nothing")
-	}
-}
-
-// backTestMonths <= 0 表示「停用」,絕不應該觸發警告。
-func TestRunBacktestOnSeries_NoWarnWhenDisabled(t *testing.T) {
-	buf := installSink(t)
-
-	series := map[string]*stockSeries{
-		"TEST": makeSeries(50, 2024, time.January),
-	}
-	cfg := minimalCfg()
-
-	if _, err := runBacktestOnSeries(cfg, series, 0); err != nil {
-		t.Fatalf("backtest err: %v", err)
-	}
-	if _, err := runBacktestOnSeries(cfg, series, -1); err != nil {
-		t.Fatalf("backtest err: %v", err)
-	}
-
-	if buf.Len() != 0 {
-		t.Fatalf("expected no warning when disabled, got: %q", buf.String())
+	if res.InitialCash != cfg.InitialCash {
+		t.Fatalf("InitialCash = %.2f, want %.2f", res.InitialCash, cfg.InitialCash)
 	}
 }

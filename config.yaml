@@ -6,7 +6,7 @@
 
 # 追蹤的股票清單，每一檔都有各自獨立的冷卻期
 track_stocks:
-  - "006208"
+  - "00631L"
   - "00830"
 
 scaling_strategy: Baseline
