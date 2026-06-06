@@ -104,7 +104,7 @@ func TestGenerateWindows_UniverseAndStep(t *testing.T) {
 	}
 	cfg := wfCfg([]string{"A", "B"})
 	allDates := collectDateUnion(series)
-	p := WalkForwardParams{WindowMonths: 12, StepMonths: 3, DCAEveryDays: 21, MinTradeDays: 100}
+	p := WalkForwardParams{WindowMonths: 12, StepMonths: 3, MinTradeDays: 100}
 	windows := generateWindows(cfg, series, allDates, p)
 	if len(windows) < 3 {
 		t.Fatalf("expected >=3 windows, got %d", len(windows))
@@ -126,7 +126,8 @@ func TestGenerateWindows_UniverseAndStep(t *testing.T) {
 	}
 }
 
-func TestLumpSumBenchmark_RisingStock(t *testing.T) {
+// 無注資時,B&H「立刻買滿」== 期初一次性買滿:升勢股 100→200 應給 100% MWR、~100% 曝險。
+func TestBHImmediateArm_NoContribEqualsLumpSum(t *testing.T) {
 	start := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 	prices := make([]float64, 366) // day0..day365
 	for i := range prices {
@@ -134,41 +135,47 @@ func TestLumpSumBenchmark_RisingStock(t *testing.T) {
 	}
 	series := map[string]*stockSeries{"A": buildSeries(start, prices)}
 	windowDates := series["A"].dates
-	bh := lumpSumBenchmark(series, windowDates, []string{"A"}, 100000)
+	cfg := wfCfg([]string{"A"}) // InitialCash 100000
+	contribOnDay := make([]float64, len(windowDates))
+	arm := bhImmediateArm(cfg, series, windowDates, contribOnDay)
 
 	// 起點 px=100 -> 1000 股 = 100000;終點 px=200 -> 200000
-	if math.Abs(bh.curve[0]-100000) > 1 {
-		t.Fatalf("bh start equity = %.2f, want ~100000", bh.curve[0])
+	if math.Abs(arm.curve[0]-100000) > 1 {
+		t.Fatalf("bh start equity = %.2f, want ~100000", arm.curve[0])
 	}
-	if math.Abs(bh.curve[len(bh.curve)-1]-200000) > 1 {
-		t.Fatalf("bh end equity = %.2f, want ~200000", bh.curve[len(bh.curve)-1])
+	if math.Abs(arm.finalEquity-200000) > 1 {
+		t.Fatalf("bh final equity = %.2f, want ~200000", arm.finalEquity)
 	}
-	years := yearsBetween(windowDates[0], windowDates[len(windowDates)-1])
-	m := curveMetrics(bh.curve, 100000, years)
-	if math.Abs(m.CAGR-1.0) > 0.02 {
-		t.Fatalf("bh CAGR = %.4f, want ~1.0 (+100%%/yr)", m.CAGR)
+	m := armMetrics(arm, cfg.InitialCash)
+	if math.Abs(m.MWR-1.0) > 0.02 {
+		t.Fatalf("bh MWR = %.4f, want ~1.0 (+100%%/yr, 無注資 → == 池 CAGR)", m.MWR)
 	}
-	// deployed XIRR 對 lump-sum 應 == pool CAGR (全數投入、無餘額)
-	x, ok := xirr(bh.deployed)
-	if !ok || math.Abs(x-1.0) > 0.02 {
-		t.Fatalf("bh deployed XIRR = (%.4f,%v), want ~1.0", x, ok)
+	if m.AvgExp < 0.99 {
+		t.Fatalf("bh exposure = %.4f, want ~1.0 (立刻買滿)", m.AvgExp)
 	}
 }
 
-func TestExposureMatchedBlend_ZeroWeightIsFlat(t *testing.T) {
-	bhCurve := []float64{100000, 120000, 90000, 130000}
-	blend := exposureMatchedBlend(bhCurve, 0.0, 100000)
-	for i, v := range blend {
-		if math.Abs(v-100000) > 1e-9 {
-			t.Fatalf("blend[%d] = %.4f, want 100000 (w=0 -> 全現金)", i, v)
-		}
+// 同曝險 Blend:w=0 → 全現金、淨值平盤 (MWR 0、回撤 0);w=1 → 完全複製 B&H NAV。
+func TestBlendMetrics_WeightBounds(t *testing.T) {
+	bhNav := []float64{1.0, 1.2, 0.9, 1.3}
+	base := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	dates := []time.Time{base, base.AddDate(0, 0, 120), base.AddDate(0, 0, 240), base.AddDate(0, 0, 360)}
+	contribOnDay := make([]float64, len(bhNav))
+
+	m0 := blendMetrics(bhNav, 0.0, contribOnDay, 100000, dates)
+	if m0.MaxDD != 0 {
+		t.Fatalf("blend(w=0) MaxDD = %v, want 0 (全現金平盤)", m0.MaxDD)
 	}
-	// w=1 應完全複製 B&H 曲線
-	full := exposureMatchedBlend(bhCurve, 1.0, 100000)
-	for i := range bhCurve {
-		if math.Abs(full[i]-bhCurve[i]) > 1e-6 {
-			t.Fatalf("blend(w=1)[%d] = %.4f, want %.4f", i, full[i], bhCurve[i])
-		}
+	if math.Abs(m0.MWR-0.0) > 1e-6 {
+		t.Fatalf("blend(w=0) MWR = %.6f, want ~0", m0.MWR)
+	}
+
+	m1 := blendMetrics(bhNav, 1.0, contribOnDay, 100000, dates)
+	if math.Abs(m1.MaxDD-maxDrawdown(bhNav)) > 1e-9 {
+		t.Fatalf("blend(w=1) MaxDD = %.6f, want %.6f (複製 B&H NAV)", m1.MaxDD, maxDrawdown(bhNav))
+	}
+	if math.Abs(m1.AvgExp-1.0) > 1e-12 {
+		t.Fatalf("blend(w=1) AvgExp = %.6f, want 1.0", m1.AvgExp)
 	}
 }
 
@@ -191,11 +198,11 @@ func TestCalmarWin(t *testing.T) {
 	}
 }
 
-// mkReport 建立一個只填 G1 相關欄位 (Strat/BH CAGR、MaxDD) 的最小 WindowReport。
-func mkReport(stratCAGR, bhCAGR float64) WindowReport {
+// mkReport 建立一個只填 G1 相關欄位 (Strat/BH MWR、MaxDD) 的最小 WindowReport。
+func mkReport(stratMWR, bhMWR float64) WindowReport {
 	return WindowReport{
-		Strat: SeriesMetrics{CAGR: stratCAGR, MaxDD: -0.10},
-		BH:    SeriesMetrics{CAGR: bhCAGR, MaxDD: -0.20},
+		Strat: SeriesMetrics{MWR: stratMWR, MaxDD: -0.10},
+		BH:    SeriesMetrics{MWR: bhMWR, MaxDD: -0.20},
 	}
 }
 
@@ -231,7 +238,7 @@ func TestWalkForward_FlatSeries_NoPanic(t *testing.T) {
 		"B": buildSeries(start, constPrices(800, 100)),
 	}
 	cfg := wfCfg([]string{"A", "B"})
-	p := WalkForwardParams{WindowMonths: 12, StepMonths: 6, DCAEveryDays: 21, MinTradeDays: 100}
+	p := WalkForwardParams{WindowMonths: 12, StepMonths: 6, MinTradeDays: 100}
 	reports, agg, err := walkForwardOnSeries(cfg, series, p)
 	if err != nil {
 		t.Fatalf("walkForwardOnSeries err: %v", err)

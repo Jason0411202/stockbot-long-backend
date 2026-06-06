@@ -122,6 +122,14 @@ func (e *Engine) SetRecorder(r *DayRecorder) { e.rec = r }
 // SeedCash 由外部 (上線啟動) 指定起始現金,覆蓋預設的 cfg.InitialCash。
 func (e *Engine) SeedCash(cash float64) { e.cash = cash }
 
+// AddCash 把一筆外部注資 (定期定額) 加進現金池,當日即可動用。amount <= 0 為 no-op。
+// 用於回測/評估的「每月解鎖新資金」問題設定;上線真實餘額另由 BotState 還原,不經此注入。
+func (e *Engine) AddCash(amount float64) {
+	if amount > 0 {
+		e.cash += amount
+	}
+}
+
 // SeedPosition 餵入既有 lot (上線啟動從 UnrealizedGainsLosses 還原狀態)。
 func (e *Engine) SeedPosition(stockID string, date time.Time, shares int, price float64) {
 	if shares <= 0 || price <= 0 {

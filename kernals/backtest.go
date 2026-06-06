@@ -15,8 +15,10 @@ import (
 var backtestWarnSink io.Writer = os.Stderr
 
 // BacktestResult 是一次回測的數值結果。衡量指標為 FinalTotal = FinalCash + FinalHoldingValue。
+// 問題設定含每月注資時,TotalContributed 為期間注入的新資金,投入本金總額 = InitialCash + TotalContributed。
 type BacktestResult struct {
 	InitialCash       float64
+	TotalContributed  float64 // 期間每月注入的新資金合計 (cfg.MonthlyContribution>0 時)
 	FinalCash         float64
 	FinalHoldingValue float64
 	FinalTotal        float64
@@ -92,15 +94,25 @@ func runBacktestWindow(cfg *config.Config, series map[string]*stockSeries, start
 	}
 	windowDates := allDates[lo:hi]
 
+	// 問題設定:每月第一個交易日注入 cfg.MonthlyContribution 新資金 (起始月除外;<=0 為關閉)。
+	contribOnDay := contributionAmounts(windowDates, cfg.MonthlyContribution)
 	engine := NewEngine(cfg)
-	if err := engine.ProcessDates(windowDates, series, noopExecutor{}); err != nil {
-		return nil, err
+	totalContrib := 0.0
+	for i, d := range windowDates {
+		if contribOnDay[i] > 0 {
+			engine.AddCash(contribOnDay[i])
+			totalContrib += contribOnDay[i]
+		}
+		if err := engine.ProcessDay(d, series, noopExecutor{}); err != nil {
+			return nil, err
+		}
 	}
 
 	stats := engine.Stats()
 	finalHolding := engine.HoldingValueAsOf(series, end)
 	return &BacktestResult{
 		InitialCash:       cfg.InitialCash,
+		TotalContributed:  totalContrib,
 		FinalCash:         engine.Cash(),
 		FinalHoldingValue: finalHolding,
 		FinalTotal:        engine.Cash() + finalHolding,

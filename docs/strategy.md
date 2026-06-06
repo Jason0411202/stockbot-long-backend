@@ -1,5 +1,15 @@
 # 買賣邏輯
 
+> **最新且完整的交易規則 (牛熊 regime 感知、全程現金比例) 見 [optimization/BEST-STRATEGY.md](optimization/BEST-STRATEGY.md)。**
+> 本頁下方「加減碼邏輯」段落為早期固定金額金字塔版的歷史說明,現行策略已改為現金比例,請以 BEST-STRATEGY.md 為準。
+
+## 問題設定 (problem setting):每月解鎖新資金
+
+回測 / 評估的資金情境為**定期定額注資**:期初 `initial_cash` (100,000),之後在「每個日曆月第一個交易日」
+再注入 `monthly_contribution` (2,500) 可動用資金 (起始月除外)。因有持續外部注資,報酬用資金加權 (MWR/XIRR)、
+回撤用 NAV 單位淨值。`monthly_contribution=0` 即退化回「期初一次性資金」舊行為。詳見 [backtest.md](backtest.md)。
+注資僅作用於回測 / 評估;上線交易的真實餘額由 BotState 還原,不在此自動注資。
+
 * 主攻台股 ETF (006208, 00830) 長線 + 波段交易
 * 每檔股票各自有自己的冷卻期，彼此獨立計算
 * 買入與賣出皆以「股數」為基本交易單位：將目標金額換算成最接近的股數 (四捨五入) 後實際下單

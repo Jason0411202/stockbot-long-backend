@@ -38,11 +38,11 @@ func runBacktestMode(appCtx *app_context.AppContext) {
 		appCtx.Log.Error("回測執行錯誤:", err)
 		return
 	}
-	appCtx.Log.Infof("=== 回測結果 === 起始現金: %.2f, 期末現金: %.2f, 期末持股市值: %.2f, 合計: %.2f",
-		result.InitialCash, result.FinalCash, result.FinalHoldingValue, result.FinalTotal)
+	appCtx.Log.Infof("=== 回測結果 === 起始現金: %.2f, 每月注資合計: %.2f, 期末現金: %.2f, 期末持股市值: %.2f, 合計: %.2f",
+		result.InitialCash, result.TotalContributed, result.FinalCash, result.FinalHoldingValue, result.FinalTotal)
 	_ = discord.SendEmbedDiscordMessage(appCtx, "📊 回測結果",
-		fmt.Sprintf("起始現金: %.2f\n期末現金: %.2f\n期末持股市值: %.2f\n合計: %.2f",
-			result.InitialCash, result.FinalCash, result.FinalHoldingValue, result.FinalTotal),
+		fmt.Sprintf("起始現金: %.2f\n每月注資合計: %.2f\n期末現金: %.2f\n期末持股市值: %.2f\n合計: %.2f",
+			result.InitialCash, result.TotalContributed, result.FinalCash, result.FinalHoldingValue, result.FinalTotal),
 		0x2196F3)
 }
 

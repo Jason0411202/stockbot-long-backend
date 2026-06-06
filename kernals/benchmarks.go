@@ -6,26 +6,38 @@ import (
 	"time"
 )
 
-// benchmarks.go 提供回測評估的對照組。三者都與策略共用同一份 series、同一組 windowDates、
-// 同一筆起始現金池 (apples-to-apples),且刻意「不」走 DecideBuy / DecideSell —— benchmark 的
-// 目的就是隔離出「策略那套 MA20 / 加碼級距 / 冷卻邏輯」到底有沒有加值。
+// benchmarks.go 提供「每月定期定額注資」問題設定下的對照組。所有對照組與策略共用同一份 series、
+// 同一組 windowDates、同一筆期初資金、同一份注資時程 (apples-to-apples),且刻意「不」走
+// DecideBuy / DecideSell —— benchmark 的目的就是隔離出策略那套 MA / 加碼級距 / 冷卻 / 賣出邏輯
+// 到底有沒有加值。
 //
 // 對照組:
-//   - lumpSumBenchmark        : 期初一次買滿、抱到底 (高報酬高風險的參考)。
-//   - naiveDCABenchmark       : 固定金額、固定頻率、永不賣 (中性 DCA;「我的聰明邏輯有用嗎」的控制組)。
-//   - exposureMatchedBlend    : 與策略「實際平均持股佔比 w」相同的固定權重現金+B&H 混合。
-//                               這是防作弊的關鍵 —— 低持股策略光靠抱現金就能贏 Calmar,
-//                               策略必須連這個「同曝險笨蛋」都在 Calmar 與 CAGR 雙雙勝出,才算真有擇時能力。
+//   - B&H (bhImmediateArm)   : 資金一解鎖就立刻等權買滿、抱到底 (永遠盡量滿倉的對照,高報酬高風險)。
+//   - Blend (blendMetrics)   : 與策略「實際平均持股佔比 w」相同的固定權重「市場 + 現金」混合,
+//                              收同一份注資。這是防作弊的關鍵 —— 低持股策略光靠抱現金就能贏 Calmar,
+//                              策略必須連這個「同曝險笨蛋」都在 (資金加權報酬 + Calmar) 雙雙勝出,才算真有擇時能力。
+//
+// 因為有持續外部注資,報酬一律用資金加權 (XIRR/MWR;外部現金流 = 期初+每月注入皆為負、期末清算為正,
+// 恰一次變號故必唯一可解),回撤一律用 NAV 單位淨值 (navCurveFromEquity,扣除注資灌水的真實投資回撤)。
 
-// benchResult 為單一對照組在某視窗的輸出。
-type benchResult struct {
-	curve       []float64  // 與 windowDates 等長的每日總權益 (現金 + 持股市值)
-	deployed    []Cashflow // 已投入資金的對外現金流 (買入為負、期末清算為正),供 deployed-capital XIRR
-	avgExposure float64    // 平均持股佔比 mean(holdings/total),僅計 total>0 的日子
+// armResult 為單一做法 (策略 / B&H) 在某視窗下的模擬輸出。
+type armResult struct {
+	curve        []float64  // 每日總權益 (現金 + 持股市值,含已注入資金)
+	contribOnDay []float64  // 每日注資額 (與 curve / windowDates 對齊;無注資為 0)
+	flows        []Cashflow // 外部現金流:期初 -initial、每月 -monthly、期末 +finalEquity (供資金加權 XIRR)
+	avgExposure  float64    // 平均持股佔比 mean(holdings/equity),僅計 equity>0 的日子
+	finalEquity  float64    // 期末總權益
+	totalIn      float64    // 投入本金總額 = 期初 + Σ注資
+	finalCash    float64    // 期末閒置現金 (「現金尾巴」;策略才有意義)
+	buys         int
+	sells        int
+	skipped      int
+	trailSells   int // 移動停利觸發的賣出次數 (策略才有意義)
+	profitSells  int // 獲利了結觸發的賣出次數 (策略才有意義)
 }
 
 // tradableAt 回傳在 day 當天「已上市可交易」的追蹤股票 (closeAsOf ok)。
-// B&H 等權只能分配給 window 起始日已存在的股票,不得替「之後才上市」的股票預留現金 (那是未來資訊洩漏)。
+// B&H 等權只能分配給當天已存在的股票,不得替「之後才上市」的股票預留現金 (那是未來資訊洩漏)。
 func tradableAt(cfg *config.Config, series map[string]*stockSeries, day time.Time) []string {
 	out := make([]string, 0, len(cfg.TrackStocks))
 	for _, id := range cfg.TrackStocks {
@@ -54,118 +66,122 @@ func holdingValue(series map[string]*stockSeries, positions map[string]int, day 
 	return total
 }
 
-// lumpSumBenchmark：期初 (windowDates[0]) 把現金池等權買滿 tradable 股票 (整股、餘額留現金),抱到底。
-func lumpSumBenchmark(series map[string]*stockSeries, windowDates []time.Time, tradable []string, initialCash float64) benchResult {
-	start := windowDates[0]
-	positions := make(map[string]int, len(tradable))
-	spent := 0.0
-	if len(tradable) > 0 {
-		perStock := initialCash / float64(len(tradable))
-		for _, id := range tradable {
-			px, ok := series[id].closeAsOf(start)
-			if !ok || px <= 0 {
-				continue
-			}
-			sh := int(math.Floor(perStock / px))
-			if sh <= 0 {
-				continue
-			}
-			positions[id] = sh
-			spent += float64(sh) * px
-		}
+// bhImmediateArm:期初把期初資金等權買滿,其後每個注資日把當前所有現金 (新注入 + 整股餘額)
+// 立刻等權買滿,持有到底、永不賣 —— 即「資金一解鎖就立刻買」的 Buy & Hold。
+func bhImmediateArm(cfg *config.Config, series map[string]*stockSeries, windowDates []time.Time, contribOnDay []float64) armResult {
+	positions := make(map[string]int, len(cfg.TrackStocks))
+	cash := cfg.InitialCash
+	totalIn := cfg.InitialCash
+	flows := []Cashflow{{Date: windowDates[0], Amount: -cfg.InitialCash}}
+
+	buys := 0
+	if deployAllCash(cfg, series, windowDates[0], positions, &cash) {
+		buys++
 	}
-	leftover := initialCash - spent // 整股餘額留現金,屬於資金池權益的一部分
 
 	curve := make([]float64, len(windowDates))
 	expSum, expN := 0.0, 0
 	for i, d := range windowDates {
-		holdings := holdingValue(series, positions, d)
-		total := holdings + leftover
-		curve[i] = total
-		if total > 0 {
-			expSum += holdings / total
-			expN++
-		}
-	}
-	avgExp := safeMean(expSum, expN)
-
-	var deployed []Cashflow
-	if spent > 0 {
-		end := windowDates[len(windowDates)-1]
-		finalHoldings := holdingValue(series, positions, end)
-		deployed = []Cashflow{{Date: start, Amount: -spent}, {Date: end, Amount: finalHoldings}}
-	}
-	return benchResult{curve: curve, deployed: deployed, avgExposure: avgExp}
-}
-
-// naiveDCABenchmark：每 everyK 個交易日 (含第 0 日) 投入 amountPerBuy,等權分散、整股、永不賣。
-// clamp 到剩餘現金,故總投入不超過資金池。用來回答「拿掉擇時邏輯、純定期定額會怎樣」。
-func naiveDCABenchmark(cfg *config.Config, series map[string]*stockSeries, windowDates []time.Time, initialCash float64, everyK int, amountPerBuy float64) benchResult {
-	if everyK < 1 {
-		everyK = 1
-	}
-	positions := make(map[string]int)
-	cash := initialCash
-	curve := make([]float64, len(windowDates))
-	var deployed []Cashflow
-	expSum, expN := 0.0, 0
-
-	for i, d := range windowDates {
-		if i%everyK == 0 && cash > 0 {
-			trad := tradableAt(cfg, series, d)
-			if len(trad) > 0 {
-				per := amountPerBuy / float64(len(trad))
-				for _, id := range trad {
-					px, ok := series[id].closeAsOf(d)
-					if !ok || px <= 0 {
-						continue
-					}
-					afford := math.Min(per, cash)
-					sh := int(math.Floor(afford / px))
-					if sh <= 0 {
-						continue
-					}
-					cost := float64(sh) * px
-					cash -= cost
-					positions[id] += sh
-					deployed = append(deployed, Cashflow{Date: d, Amount: -cost})
-				}
+		if contribOnDay[i] > 0 {
+			cash += contribOnDay[i]
+			totalIn += contribOnDay[i]
+			flows = append(flows, Cashflow{Date: d, Amount: -contribOnDay[i]})
+			if deployAllCash(cfg, series, d, positions, &cash) {
+				buys++
 			}
 		}
 		holdings := holdingValue(series, positions, d)
-		total := holdings + cash
-		curve[i] = total
-		if total > 0 {
-			expSum += holdings / total
+		equity := holdings + cash
+		curve[i] = equity
+		if equity > 0 {
+			expSum += holdings / equity
 			expN++
 		}
 	}
-	if len(deployed) > 0 {
-		end := windowDates[len(windowDates)-1]
-		if fh := holdingValue(series, positions, end); fh > 0 {
-			deployed = append(deployed, Cashflow{Date: end, Amount: fh})
-		}
+
+	end := windowDates[len(windowDates)-1]
+	finalEq := holdingValue(series, positions, end) + cash
+	flows = append(flows, Cashflow{Date: end, Amount: finalEq})
+	return armResult{
+		curve: curve, contribOnDay: contribOnDay, flows: flows,
+		avgExposure: safeMean(expSum, expN), finalEquity: finalEq, totalIn: totalIn, buys: buys,
 	}
-	return benchResult{curve: curve, deployed: deployed, avgExposure: safeMean(expSum, expN)}
 }
 
-// exposureMatchedBlend：固定權重 w 的「B&H 投組 + 0% 現金」每日再平衡混合。
-// 由建構方式保證每日曝險恰為 w,故 avgExposure == w。報酬 = initialCash * Π(1 + w*bhDailyReturn)。
-// 這是把「可被抱現金灌水的 Calmar」轉成「真擇時測試」的對照基準。
-func exposureMatchedBlend(bhCurve []float64, w, initialCash float64) []float64 {
-	curve := make([]float64, len(bhCurve))
-	if len(bhCurve) == 0 {
-		return curve
+// deployAllCash 把 *cash 等權買滿 day 當天可交易的追蹤股票 (整股,餘額留 *cash);永不借錢。
+// 回傳是否至少買進 1 股。
+func deployAllCash(cfg *config.Config, series map[string]*stockSeries, day time.Time, positions map[string]int, cash *float64) bool {
+	trad := tradableAt(cfg, series, day)
+	if len(trad) == 0 || *cash <= 0 {
+		return false
 	}
-	curve[0] = initialCash
-	for i := 1; i < len(bhCurve); i++ {
-		bhRet := 0.0
-		if bhCurve[i-1] > 0 {
-			bhRet = bhCurve[i]/bhCurve[i-1] - 1
+	per := *cash / float64(len(trad))
+	bought := false
+	for _, id := range trad {
+		px, ok := series[id].closeAsOf(day)
+		if !ok || px <= 0 {
+			continue
 		}
-		curve[i] = curve[i-1] * (1 + w*bhRet)
+		sh := int(math.Floor(per / px))
+		if sh <= 0 {
+			continue
+		}
+		*cash -= float64(sh) * px
+		positions[id] += sh
+		bought = true
 	}
-	return curve
+	return bought
+}
+
+// blendMetrics 由 B&H 的 NAV (市場純投資淨值) 與權重 w (= 策略實際平均曝險) 建構「同曝險混合」並算指標。
+// 混合 = 每日 w 在市場、(1-w) 在現金的定權重再平衡組合,收同一份注資。其曝險恆為 w,
+// 用來把「可被抱現金灌水的 Calmar」轉成真擇時測試。
+func blendMetrics(bhNav []float64, w float64, contribOnDay []float64, initial float64, dates []time.Time) SeriesMetrics {
+	n := len(bhNav)
+	if n == 0 {
+		return SeriesMetrics{AvgExp: w}
+	}
+	blendNav := make([]float64, n)
+	blendNav[0] = 1
+	for i := 1; i < n; i++ {
+		r := 0.0
+		if bhNav[i-1] > 0 {
+			r = bhNav[i]/bhNav[i-1] - 1
+		}
+		blendNav[i] = blendNav[i-1] * (1 + w*r)
+	}
+	flows, finalEq, totalIn := flowsFromNav(blendNav, contribOnDay, initial, dates)
+	mwr, ok := xirr(flows)
+	mdd := maxDrawdown(blendNav)
+	cal := math.NaN()
+	if ok {
+		cal = calmar(mwr, mdd)
+	}
+	return SeriesMetrics{
+		MWR: mwr, MWROK: ok, MaxDD: mdd, Calmar: cal,
+		Sortino: sortino(dailyReturns(blendNav), 0, 252),
+		AvgExp:  w, Multiple: safeDiv(finalEq, totalIn),
+	}
+}
+
+// flowsFromNav 把「期初 initial + 注資時程 contribOnDay」投入一條 NAV 序列 (注資以前一日 NAV 換單位),
+// 回傳外部現金流 (期初/每月為負、期末清算為正)、期末權益、投入本金總額。供合成對照組 (Blend) 算資金加權報酬。
+func flowsFromNav(nav, contribOnDay []float64, initial float64, dates []time.Time) (flows []Cashflow, finalEquity, totalIn float64) {
+	units := initial
+	totalIn = initial
+	flows = []Cashflow{{Date: dates[0], Amount: -initial}}
+	for i := 1; i < len(nav); i++ {
+		if contribOnDay[i] > 0 {
+			if nav[i-1] > 0 {
+				units += contribOnDay[i] / nav[i-1]
+			}
+			totalIn += contribOnDay[i]
+			flows = append(flows, Cashflow{Date: dates[i], Amount: -contribOnDay[i]})
+		}
+	}
+	finalEquity = units * nav[len(nav)-1]
+	flows = append(flows, Cashflow{Date: dates[len(dates)-1], Amount: finalEquity})
+	return flows, finalEquity, totalIn
 }
 
 func safeMean(sum float64, n int) float64 {
@@ -173,4 +189,11 @@ func safeMean(sum float64, n int) float64 {
 		return 0
 	}
 	return sum / float64(n)
+}
+
+func safeDiv(a, b float64) float64 {
+	if b == 0 {
+		return 0
+	}
+	return a / b
 }

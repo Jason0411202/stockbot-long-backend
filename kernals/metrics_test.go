@@ -120,6 +120,26 @@ func TestCalmar(t *testing.T) {
 	}
 }
 
+func TestNavCurveFromEquity(t *testing.T) {
+	// 注資不可製造假報酬:day1 注入 50 使權益 100→150,但市場沒動 → NAV 應維持 1.0;
+	// day2 市場翻倍 (無注資) → NAV = 2.0。
+	nav := navCurveFromEquity([]float64{100, 150, 300}, []float64{0, 50, 0}, 100)
+	approx(t, "nav[0]", nav[0], 1.0, 1e-12)
+	approx(t, "nav[1] flat despite contribution", nav[1], 1.0, 1e-12)
+	approx(t, "nav[2] doubled", nav[2], 2.0, 1e-12)
+	approx(t, "nav drawdown (monotonic)", maxDrawdown(nav), 0.0, 1e-12)
+
+	// 無注資時 NAV 回撤 == 原始權益回撤 (退化等價)。
+	eq := []float64{100000, 120000, 90000, 110000, 80000, 130000}
+	zero := make([]float64, len(eq))
+	approx(t, "nav-dd == raw-dd when no contributions",
+		maxDrawdown(navCurveFromEquity(eq, zero, 100000)), maxDrawdown(eq), 1e-12)
+
+	// 注資會「灌高」權益、遮蔽真實回撤:原始 -40% 但其中 10 是注資 → 真實投資回撤更深。
+	nav2 := navCurveFromEquity([]float64{100, 60}, []float64{0, 10}, 100)
+	approx(t, "nav reveals true drop", nav2[1], 60.0/110.0, 1e-12)
+}
+
 func TestMedianStdev(t *testing.T) {
 	approx(t, "median odd", median([]float64{3, 1, 2}), 2, tol)
 	approx(t, "median even", median([]float64{4, 1, 3, 2}), 2.5, tol)

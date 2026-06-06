@@ -56,6 +56,37 @@ func cagr(start, end, years float64) float64 {
 	return math.Pow(end/start, 1.0/years) - 1
 }
 
+// navCurveFromEquity 由「每日總權益」與「每日外部注資額」還原 NAV / 單位淨值序列 (contribution-neutral)。
+//
+// 有定期注資時,原始權益曲線會被注資「灌高」,直接量 maxDrawdown 會低估真實投資回撤。
+// 解法 = 共同基金式單位記帳:注資視為「以當日(注資前)淨值買進新單位」,不改變每單位淨值 →
+// NAV 序列只反映投資績效、與注資時程無關,其回撤才是真實的投資回撤。
+//
+//	nav[0] = equity[0] / units0          (units0 = initial,故注資前 nav[0]≈1)
+//	每日:注資 c_i 以 nav[i-1] 換成新單位 units += c_i/nav[i-1];nav[i] = equity[i]/units
+//
+// 當所有注資為 0 時,units 恆為 initial、nav[i]=equity[i]/initial,maxDrawdown(nav)==maxDrawdown(equity)
+// (回撤對等比例縮放不變),故行為與「無注資」舊版完全一致。
+// contribOnDay[i] = 第 i 天「在當日交易前」注入的金額 (無注資為 0);長度需與 equity 對齊。
+func navCurveFromEquity(equity, contribOnDay []float64, initial float64) []float64 {
+	n := len(equity)
+	nav := make([]float64, n)
+	if n == 0 || initial <= 0 {
+		return nav
+	}
+	units := initial
+	nav[0] = equity[0] / units
+	for i := 1; i < n; i++ {
+		if i < len(contribOnDay) && contribOnDay[i] > 0 && nav[i-1] > 0 {
+			units += contribOnDay[i] / nav[i-1]
+		}
+		if units > 0 {
+			nav[i] = equity[i] / units
+		}
+	}
+	return nav
+}
+
 // maxDrawdown 回傳權益曲線的最大回撤,以 <= 0 的比例表示 (例如 -0.25 = 自高點下跌 25%)。
 // 單調上升或空曲線回傳 0。
 func maxDrawdown(curve []float64) float64 {
