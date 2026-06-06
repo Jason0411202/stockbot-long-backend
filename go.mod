@@ -1,4 +1,4 @@
-module main
+module github.com/Jason0411202/stockbot-long-backend
 
 go 1.21.4
 

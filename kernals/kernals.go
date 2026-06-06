@@ -2,9 +2,9 @@ package kernals
 
 import (
 	"fmt"
-	"main/app_context"
-	"main/discord"
-	"main/sqls"
+	"github.com/Jason0411202/stockbot-long-backend/app_context"
+	"github.com/Jason0411202/stockbot-long-backend/discord"
+	"github.com/Jason0411202/stockbot-long-backend/sqls"
 	"sort"
 	"time"
 )

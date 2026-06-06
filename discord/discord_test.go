@@ -4,7 +4,7 @@ import (
 	"io"
 	"testing"
 
-	"main/app_context"
+	"github.com/Jason0411202/stockbot-long-backend/app_context"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/sirupsen/logrus"

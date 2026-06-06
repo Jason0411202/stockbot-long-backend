@@ -3,7 +3,7 @@ package kernals
 import (
 	"bufio"
 	"fmt"
-	"main/config"
+	"github.com/Jason0411202/stockbot-long-backend/config"
 	"math"
 	"os"
 	"path/filepath"

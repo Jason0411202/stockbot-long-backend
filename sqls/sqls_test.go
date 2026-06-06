@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"main/app_context"
-	"main/config"
+	"github.com/Jason0411202/stockbot-long-backend/app_context"
+	"github.com/Jason0411202/stockbot-long-backend/config"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	_ "github.com/go-sql-driver/mysql" // 註冊 "mysql" driver,供 ConnectToMariadb 的 sql.Open 測試

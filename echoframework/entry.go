@@ -3,9 +3,9 @@ package echoframework
 import (
 	"os"
 
-	"main/app_context"
-	"main/internal/handler"
-	"main/internal/middleware"
+	"github.com/Jason0411202/stockbot-long-backend/app_context"
+	"github.com/Jason0411202/stockbot-long-backend/internal/handler"
+	"github.com/Jason0411202/stockbot-long-backend/internal/middleware"
 
 	"github.com/labstack/echo/v4"
 	echoMw "github.com/labstack/echo/v4/middleware"

@@ -1,11 +1,11 @@
 package main
 
 import (
-	"main/app_context"
-	"main/discord"
-	"main/echoframework"
-	"main/kernals"
-	"main/sqls"
+	"github.com/Jason0411202/stockbot-long-backend/app_context"
+	"github.com/Jason0411202/stockbot-long-backend/discord"
+	"github.com/Jason0411202/stockbot-long-backend/echoframework"
+	"github.com/Jason0411202/stockbot-long-backend/kernals"
+	"github.com/Jason0411202/stockbot-long-backend/sqls"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/joho/godotenv"

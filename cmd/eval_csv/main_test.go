@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"main/config"
-	"main/kernals"
+	"github.com/Jason0411202/stockbot-long-backend/config"
+	"github.com/Jason0411202/stockbot-long-backend/kernals"
 )
 
 // captureStdout 暫時把 os.Stdout 導向丟棄,避免 print 系列函式污染測試輸出。

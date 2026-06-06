@@ -2,8 +2,8 @@ package app_context
 
 import (
 	"database/sql"
-	"main/config"
-	"main/logs"
+	"github.com/Jason0411202/stockbot-long-backend/config"
+	"github.com/Jason0411202/stockbot-long-backend/logs"
 	"os"
 
 	"github.com/bwmarrin/discordgo"

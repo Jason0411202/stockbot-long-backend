@@ -11,7 +11,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"main/helper"
+	"github.com/Jason0411202/stockbot-long-backend/helper"
 	"net/http"
 	"os"
 	"path/filepath"

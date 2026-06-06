@@ -11,7 +11,7 @@ package kernals
 
 import (
 	"fmt"
-	"main/config"
+	"github.com/Jason0411202/stockbot-long-backend/config"
 	"time"
 )
 

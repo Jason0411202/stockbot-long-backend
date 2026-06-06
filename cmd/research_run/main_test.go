@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"main/kernals"
+	"github.com/Jason0411202/stockbot-long-backend/kernals"
 )
 
 // main_test.go 驗證回測結果輸出格式 (含 PnL 百分比與零本金防呆)。

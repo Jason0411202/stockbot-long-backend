@@ -2,7 +2,7 @@ package discord
 
 import (
 	"fmt"
-	"main/app_context"
+	"github.com/Jason0411202/stockbot-long-backend/app_context"
 	"os"
 
 	"github.com/bwmarrin/discordgo"

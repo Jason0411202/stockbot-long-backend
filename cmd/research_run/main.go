@@ -6,9 +6,9 @@ import (
 	"os"
 	"time"
 
-	"main/app_context"
-	"main/kernals"
-	"main/sqls"
+	"github.com/Jason0411202/stockbot-long-backend/app_context"
+	"github.com/Jason0411202/stockbot-long-backend/kernals"
+	"github.com/Jason0411202/stockbot-long-backend/sqls"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/joho/godotenv"

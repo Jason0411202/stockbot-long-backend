@@ -1,7 +1,7 @@
 package kernals
 
 import (
-	"main/config"
+	"github.com/Jason0411202/stockbot-long-backend/config"
 	"math"
 	"math/rand"
 	"testing"

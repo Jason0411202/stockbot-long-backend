@@ -1,7 +1,7 @@
 package echoframework
 
 import (
-	"main/app_context"
+	"github.com/Jason0411202/stockbot-long-backend/app_context"
 
 	"github.com/labstack/echo/v4"
 )
