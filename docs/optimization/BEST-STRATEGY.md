@@ -9,6 +9,11 @@
 > 🔁 **追蹤標的現已改為 00631L(2x 槓桿)+ 00830,並重新調校 4 個參數** (見 config.yaml 與 [../backtest.md](../backtest.md#2x-調校)):
 > `regime_ma_window` 200→**95**、`trail_stop_bear` 0.08→**0.10**、`trail_min_gain` 0.20→**0.10**、`bull_buy_frac` 0.25→**0.20**。
 > 00631L 結果:全期 Calmar 0.95→**1.47**、wf Calmar **1.65**、Calmar 勝率 **95%**、回撤 −51%(B&H)→**−30%**,**五道關卡全過**。
+>
+> 🧬 **per-stock + IS/OOS (反過擬合):** 個股可逐檔覆寫參數 (config.yaml `stock_overrides`),但只採用經 IS/OOS
+> (前段調參、後段驗證,`cmd/eval_csv -split`) 確認**樣本外不退化**的設定。實測唯一通過:**00631L regime_ma 95→60**
+> (IS/OOS 雙勝、OOS 保留 105%);**00830 維持共用 95** (它的 IS 最佳 regime 150~200 在 OOS 崩潰=過擬合,被護欄擋下)。
+> 加上此覆寫:full Calmar 1.47→**1.51**、wf 1.65→**1.71**/勝率 **100%**、回撤 −30→**−28.8%**。
 > 本文件以下內文的規則細節 (200MA、8% 移動停利、買 25%…) 為 1x 基準,**現行值以 config.yaml 為準**。最新數字一律 `go run ./cmd/eval_csv`。
 
 ## 一、摘要
