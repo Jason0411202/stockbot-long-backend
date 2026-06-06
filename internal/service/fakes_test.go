@@ -24,6 +24,7 @@ type fakeStock struct {
 	prices     map[string]float64
 	priceErr   map[string]error
 	closesDesc map[string][]float64
+	history    map[string][]entity.StockHistory
 	nameErr    error
 	insertErr  error
 
@@ -63,8 +64,11 @@ func (f *fakeStock) GetClosePricesDescAsOf(_ context.Context, stockID, _ string)
 	return f.closesDesc[stockID], nil
 }
 
-func (f *fakeStock) GetCloseHistoryAsc(_ context.Context, _ string) ([]entity.StockHistory, error) {
-	return nil, nil
+func (f *fakeStock) GetCloseHistoryAsc(_ context.Context, stockID string) ([]entity.StockHistory, error) {
+	if f.nameErr != nil { // reuse nameErr as a generic read-error switch in tests
+		return nil, f.nameErr
+	}
+	return f.history[stockID], nil
 }
 
 func (f *fakeStock) InsertBarIgnore(_ context.Context, stockID, stockName string, b entity.Bar) error {
