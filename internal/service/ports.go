@@ -48,3 +48,32 @@ type BackfillStore interface {
 type MarketFetcher interface {
 	FetchMonth(date, stockID string) ([]entity.Bar, string, error)
 }
+
+// LedgerSeedStore is the online-startup seed port over the ledger. It exposes
+// the read-only queries TradingService needs to restore in-memory engine state
+// (positions + per-stock last-buy date) from the DB. Satisfied by
+// *repository.LedgerRepository (same concrete type that backs LedgerStore).
+type LedgerSeedStore interface {
+	LoadAllUnrealized(ctx context.Context) ([]entity.UnrealizedGainsLoss, error)
+	LastBuyDateRaw(ctx context.Context, stockID string) (string, bool, error)
+}
+
+// SeriesLoader is the StockHistory series-load port used by TradingService to
+// build the in-memory price series for the engine. Satisfied by
+// *repository.StockHistoryRepository.
+type SeriesLoader interface {
+	LoadSeries(ctx context.Context, stockIDs []string) (map[string][]entity.StockHistory, error)
+}
+
+// StateStore is the generic BotState key/value port used to persist the online
+// engine's watermark and cash. Satisfied by *repository.BotStateRepository.
+type StateStore interface {
+	Get(ctx context.Context, key string) (string, bool, error)
+	Set(ctx context.Context, key, value string) error
+}
+
+// Notifier is the outbound-notification port used by TradingService to send
+// per-trade embeds. Satisfied by *client/discord.Client.
+type Notifier interface {
+	SendEmbed(title, message string, color int) error
+}
