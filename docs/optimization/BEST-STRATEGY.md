@@ -89,10 +89,9 @@
 ## 三、完整參數 (config.yaml)
 
 ```yaml
-track_stocks: ["006208", "00830"]
+track_stocks: ["00631L", "00830"]
 initial_cash: 100000
 monthly_contribution: 2500   # 問題設定:每月第一個交易日解鎖新資金 (見 ../backtest.md)
-buy_and_sell_multiplier: 3
 
 ma_window: 10
 regime_method: ma_pos
@@ -106,13 +105,10 @@ bull_buy_band: 0.05
 buy_frac_basis: cash         # 買入基準 = 剩餘現金 (idea-1)
 bull_buy_frac: 0.20          # 牛市每次買「現金的 20%」(2x 調校;1x 注資基準為 0.25)
 bear_buy_frac: 0.02          # 熊市每次買「現金的 2% × 深度權重」(根治深跌沒錢;取代固定 tier)
-bull_buy_amount: 2000        # 後備值;buy_frac_basis 啟用時不使用
 
 buy_depth_basis: peak
 buy_tier_ratio: 2.5          # 深度權重 ratio^i → 1/2.5/6.25/15.6/39 (陡度 2.5 為報酬引擎)
 baseline_buy_tiers: [{above: -0.1}, {above: -0.2}, {above: -0.3}, {above: -0.4}]
-buy_base_amount: 500         # 僅固定 tier 路徑用 (現行走現金比例,不使用)
-buy_size_mode: equity        # 僅固定金額路徑用 (現行牛熊皆現金比例,不使用)
 
 baseline_sell_threshold: 1.0 # +100% 獲利了結 (僅多頭觸發)
 sell_frac_of_position: 0.33  # 獲利了結賣當前持股 33% (分批)

@@ -6,78 +6,65 @@ import (
 	"net/http"
 
 	"github.com/labstack/echo/v4"
-	"github.com/labstack/gommon/log"
 )
 
-var appCtx = app_context.NewAppContext()
+// controller.go 的 handler 皆以「建構式 (closure)」形式建立並注入 *app_context.AppContext,
+// 不再使用 package-level 全域 appCtx —— 移除 import 期副作用,讓 handler 可被獨立測試。
 
-func home(c echo.Context) error {
-	return c.String(http.StatusOK, "Hello, World!")
+func newHomeHandler() echo.HandlerFunc {
+	return func(c echo.Context) error {
+		return c.String(http.StatusOK, "Hello, World!")
+	}
 }
 
-func get_unrealized_gains_losses(c echo.Context) error {
-	if c.Request().Method == "GET" {
-		log.Info("GET /api/get_unrealized_gains_losses")
+func newUnrealizedGainsLossesHandler(appCtx *app_context.AppContext) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		appCtx.Log.Info("GET /api/get_unrealized_gains_losses")
 		returnValue, err := sqls.GetAllUnrealizedGainsLosses(appCtx)
 		if err != nil {
-			log.Error("GetAllUnrealizedGainsLosses 發生錯誤:", err)
+			appCtx.Log.Error("GetAllUnrealizedGainsLosses 發生錯誤:", err)
 			return c.JSONPretty(http.StatusOK, []map[string]interface{}{}, "  ")
 		}
-
 		return c.JSONPretty(http.StatusOK, returnValue, "  ")
-	} else {
-		return c.String(http.StatusMethodNotAllowed, "Method Not Allowed")
 	}
 }
 
-func get_realized_gains_losses(c echo.Context) error {
-	if c.Request().Method == "GET" {
-		log.Info("GET /api/get_realized_gains_losses")
+func newRealizedGainsLossesHandler(appCtx *app_context.AppContext) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		appCtx.Log.Info("GET /api/get_realized_gains_losses")
 		returnValue, err := sqls.GetAllRealizedGainsLosses(appCtx)
 		if err != nil {
-			log.Error("GetAllRealizedGainsLosses 發生錯誤:", err)
+			appCtx.Log.Error("GetAllRealizedGainsLosses 發生錯誤:", err)
 			return c.JSONPretty(http.StatusOK, []map[string]interface{}{}, "  ")
 		}
-
 		return c.JSONPretty(http.StatusOK, returnValue, "  ")
-	} else {
-		return c.String(http.StatusMethodNotAllowed, "Method Not Allowed")
 	}
 }
 
-func get_stock_statistic_data(c echo.Context) error {
-	if c.Request().Method == "GET" {
-		log.Info("GET /api/get_stock_statistic_data")
+func newStockStatisticDataHandler(appCtx *app_context.AppContext) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		appCtx.Log.Info("GET /api/get_stock_statistic_data")
 		returnValue, err := sqls.GetStockStatisticData(appCtx)
 		if err != nil {
-			log.Error("GetStockStatisticData 發生錯誤:", err)
+			appCtx.Log.Error("GetStockStatisticData 發生錯誤:", err)
 			return c.JSONPretty(http.StatusOK, []map[string]interface{}{}, "  ")
 		}
-
 		return c.JSONPretty(http.StatusOK, returnValue, "  ")
-	} else {
-		return c.String(http.StatusMethodNotAllowed, "Method Not Allowed")
 	}
 }
 
-func get_stock_history_data(c echo.Context) error {
-	if c.Request().Method == "GET" {
+func newStockHistoryDataHandler(appCtx *app_context.AppContext) echo.HandlerFunc {
+	return func(c echo.Context) error {
 		stockId := c.QueryParam("stockId")
 		if stockId == "" {
 			return c.JSON(http.StatusBadRequest, map[string]string{"error": "stockId 參數是必要的"})
 		}
-
-		log.Infof("GET /api/get_stock_history_data?stockId=%s", stockId)
-
-		// 模擬回傳資料
+		appCtx.Log.Infof("GET /api/get_stock_history_data?stockId=%s", stockId)
 		returnValue, err := sqls.GetStockHistoryData(appCtx, stockId)
 		if err != nil {
-			log.Error("GetStockStatisticData 發生錯誤:", err)
+			appCtx.Log.Error("GetStockHistoryData 發生錯誤:", err)
 			return c.JSONPretty(http.StatusOK, []map[string]interface{}{}, "  ")
 		}
-
 		return c.JSONPretty(http.StatusOK, returnValue, "  ")
-	} else {
-		return c.String(http.StatusMethodNotAllowed, "Method Not Allowed")
 	}
 }

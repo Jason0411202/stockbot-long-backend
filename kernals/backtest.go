@@ -25,8 +25,9 @@ type BacktestResult struct {
 // 回測與上線使用同一個 Engine + DecideBuy / DecideSell,差別僅在:
 //   - 回測使用 noopExecutor (不寫 DB / 不發 Discord)
 //   - 回測跑完後停止並回報結果;上線會接續每日 loop
-func RunBacktest(appCtx *app_context.AppContext, backTestMonths int) (*BacktestResult, error) {
-	_ = backTestMonths // 僅作為上層「回測模式」開關 (DailyCheck:>0 進回測模式);回測起點改用 common issuance
+//
+// 回測區間固定為 [common issuance, 最後資料日];BackTestingMonths 只在上層 DailyCheck 當「回測模式開關」。
+func RunBacktest(appCtx *app_context.AppContext) (*BacktestResult, error) {
 	if appCtx.Cfg.ScalingStrategy != "Baseline" {
 		return nil, fmt.Errorf("回測目前僅支援 Scaling_Strategy=Baseline")
 	}

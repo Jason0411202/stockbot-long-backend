@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"main/helper"
 	"net/http"
 	"os"
@@ -99,8 +100,18 @@ func fetchMonth(client *http.Client, dateYYYYMMDD, stockID string) ([]bar, error
 		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	return parseStockDay(body)
+}
+
+// parseStockDay 解析 TWSE STOCK_DAY API 的 JSON body,回傳該月每日 OHLCV。
+// 從 fetchMonth 抽出的純函式 (不依賴網路),方便單元測試各種輸入分支。
+func parseStockDay(body []byte) ([]bar, error) {
 	var payload map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+	if err := json.Unmarshal(body, &payload); err != nil {
 		return nil, err
 	}
 	if stat, _ := payload["stat"].(string); stat != "OK" {

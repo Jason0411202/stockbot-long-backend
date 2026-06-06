@@ -6,15 +6,6 @@ import (
 	"strings"
 )
 
-func ValueInStringArray(value string, array []string) int {
-	for _, v := range array {
-		if v == value {
-			return 1
-		}
-	}
-	return 0
-}
-
 func ROCToAD(lastBuyTime string) (string, error) {
 	parts := strings.Split(lastBuyTime, "/") // 將 "113/01/01" 切割成 ["113", "01", "01"]
 	rocYear, err := strconv.Atoi(parts[0])   // 將 "113" 轉換成 113

@@ -11,7 +11,9 @@ import (
 	echoMw "github.com/labstack/echo/v4/middleware"
 )
 
-func EchoInit(appCtx *app_context.AppContext) {
+// buildServer 組裝完整的 Echo 物件 (middleware + 業務路由 + 運維路由),但不啟動監聽。
+// 抽出此純組裝步驟,讓 routing / health / metrics 接線可被測試 (EchoInit 只多一行 Start)。
+func buildServer(appCtx *app_context.AppContext) *echo.Echo {
 	e := echo.New() //建立一個 Echo 物件
 
 	// --- 既有 middleware ---
@@ -27,13 +29,17 @@ func EchoInit(appCtx *app_context.AppContext) {
 	e.Use(middleware.NewMetricsMiddleware()) // Prometheus metrics 收集
 
 	// --- 既有業務路由 ---
-	EchoRouting(e) // 設定 routing 規則
+	EchoRouting(e, appCtx) // 設定 routing 規則 (注入 appCtx)
 
 	// --- 運維路由（health check + metrics）---
 	e.GET("/health", handler.NewLivenessHandler())          // K8s livenessProbe
 	e.GET("/ready", handler.NewReadinessHandler(appCtx.Db)) // K8s readinessProbe
-	e.GET("/metrics", middleware.NewMetricsHandler())        // Prometheus 拉指標
+	e.GET("/metrics", middleware.NewMetricsHandler())       // Prometheus 拉指標
 
+	return e
+}
+
+func EchoInit(appCtx *app_context.AppContext) {
 	// --- Server 啟動（HTTP only，TLS 由外部 Ingress/Caddy 負責）---
-	appCtx.Log.Fatal(e.Start(":8080"))
+	appCtx.Log.Fatal(buildServer(appCtx).Start(":8080"))
 }

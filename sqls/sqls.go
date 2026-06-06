@@ -14,9 +14,12 @@ import (
 	"time"
 )
 
+// twseBaseURL 為 TWSE STOCK_DAY API 端點;抽成變數讓測試可用 httptest 取代 (正式預設指向真實端點)。
+var twseBaseURL = "https://www.twse.com.tw/exchangeReport/STOCK_DAY"
+
 // 向 TWSE API 發送請求，取得股票歷史資料
 func TWSEapi(date string, stockID string, appCtx *app_context.AppContext) (finalData [][]string, stockName string, err error) {
-	apiurl := fmt.Sprintf("https://www.twse.com.tw/exchangeReport/STOCK_DAY?response=json&date=%s&stockNo=%s", date, stockID) // 準備好 api url
+	apiurl := fmt.Sprintf("%s?response=json&date=%s&stockNo=%s", twseBaseURL, date, stockID) // 準備好 api url
 	appCtx.Log.Info("apiurl: ", apiurl)
 
 	response, err := http.Get(apiurl) // 發送 GET 請求
@@ -613,41 +616,6 @@ func GetStockName(appCtx *app_context.AppContext, stockID string) (string, error
 	return stockName, nil
 }
 
-func GetAverageStockPrice(appCtx *app_context.AppContext, stockID string, today string, days int) (float64, error) {
-	if err := ConnectToMariadb(appCtx); err != nil {
-		return -1, err
-	}
-	if err := ConnectToDatabase(appCtx, "StockLongData"); err != nil {
-		return -1, err
-	}
-
-	SQL_cmd := "SELECT close_price FROM StockHistory WHERE stock_id = ? AND date <= ? ORDER BY date DESC LIMIT ?;"
-	rows, err := appCtx.Db.Query(SQL_cmd, stockID, today, days)
-	if err != nil {
-		return -1, err
-	}
-	defer rows.Close()
-
-	stockHistoryPriceRecords := make([]float64, 0, days)
-	for rows.Next() {
-		var record float64
-		if err := rows.Scan(&record); err != nil {
-			return -1, err
-		}
-		stockHistoryPriceRecords = append(stockHistoryPriceRecords, record)
-	}
-
-	if len(stockHistoryPriceRecords) < days {
-		return -1, fmt.Errorf("資料不足，無法計算均價")
-	}
-
-	var sum float64
-	for _, price := range stockHistoryPriceRecords {
-		sum += price
-	}
-	return sum / float64(days), nil
-}
-
 func GetTodayStockPrice(appCtx *app_context.AppContext, stockID string, today string, priceType string) (float64, error) {
 	if err := ConnectToMariadb(appCtx); err != nil {
 		return -1, err
@@ -1040,31 +1008,4 @@ func GetStockHistoryData(appCtx *app_context.AppContext, stockId string) ([]map[
 		})
 	}
 	return returnValue, nil
-}
-
-// GetTransactionPriceOfUnrealizedGainsLosses 取得未實現損益中，某支股票的最高或最低交易價格，
-// 若無資料則回傳 -1。
-func GetTransactionPriceOfUnrealizedGainsLosses(appCtx *app_context.AppContext, stockID string, today string, types string) (float64, error) {
-	if err := ConnectToMariadb(appCtx); err != nil {
-		return -1, err
-	}
-	if err := ConnectToDatabase(appCtx, "StockLongData"); err != nil {
-		return -1, err
-	}
-
-	var SQL_cmd string
-	if types == "Highest" {
-		SQL_cmd = "SELECT MAX(transaction_price) FROM UnrealizedGainsLosses WHERE stock_id = ? AND transaction_date <= ?;"
-	} else {
-		SQL_cmd = "SELECT MIN(transaction_price) FROM UnrealizedGainsLosses WHERE stock_id = ? AND transaction_date <= ?;"
-	}
-	row := appCtx.Db.QueryRow(SQL_cmd, stockID, today)
-	var price sql.NullFloat64
-	if err := row.Scan(&price); err != nil {
-		return -1, err
-	}
-	if !price.Valid {
-		return -1, nil
-	}
-	return price.Float64, nil
 }

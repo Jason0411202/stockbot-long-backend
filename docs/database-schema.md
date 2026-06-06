@@ -87,7 +87,6 @@ App 啟動時 (`InitDatabase`) 會自動執行 [`sqls/SQLcommend.sql`](../sqls/S
 
 **讀取路徑**：
 - `GetLowestUnrealizedGainsLossesRecord` 取「成本最低的 lot」用來決定下一筆要賣什麼
-- `GetTransactionPriceOfUnrealizedGainsLosses` 取持倉中的 max/min 買入價，用於 baseline 加減碼判斷
 
 ---
 

@@ -55,7 +55,7 @@ type Snapshot struct {
 //  1. 當日有正常價格、有進場均線。
 //  2. 觸發:今價 < 進場均線×(1+band);bull 用 BullBuyBand 放寬,bear 嚴格 (band=0)。
 //  3. 冷卻 (passesCooldown):固定冷卻;CooldownBreakBudget>0 時可動用額度提前買 (撿回被錯過的深跌點)。
-//  4. 金額 (buyAmount):bull 用 idea-1「現金/權益比例」(BuyFracBasis+BullBuyFrac) 或固定大額;bear 走 depth 表;可按帳戶大小縮放。
+//  4. 金額 (buyAmount):買「現金/權益基準的固定比例」— 牛市 ×BullBuyFrac;熊市 ×BearBuyFrac×幾何深度權重。
 func DecideBuy(cfg *config.Config, snap Snapshot) BuyIntent {
 	if snap.TodayPrice <= 0 || math.IsNaN(snap.MA20) {
 		return BuyIntent{}
@@ -100,42 +100,19 @@ func passesCooldown(cfg *config.Config, snap Snapshot) (ok, broke bool) {
 	return false, false
 }
 
-// buyAmount 回傳本次買入的目標金額 (現金夾取前)。
-// idea-1:BuyFracBasis 啟用時,像「賣固定比例持股」那樣買固定比例的現金/權益 —
-// 牛市 = 基準×BullBuyFrac;熊市 (BearBuyFrac>0) = 基準×BearBuyFrac×幾何深度權重 (永遠留現金尾巴 → 深跌仍有錢)。
-// 否則維持原 fixed/tier + buy_size_mode 縮放。
+// buyAmount 回傳本次買入的目標金額 (現金夾取前):買「現金/權益基準的固定比例」。
+//   牛市 = 基準 × BullBuyFrac。
+//   熊市 = 基準 × BearBuyFrac × 幾何深度權重 (跌越深買越大比例;永遠留現金尾巴 → 深跌仍有錢)。
+// 基準 (cash/equity) 由 BuyFracBasis 決定;基準 <= 0 (沒錢) 回傳 0 → 不買。
 func buyAmount(cfg *config.Config, snap Snapshot) float64 {
-	if cfg.BuyFracBasis != "" {
-		if basis := fracBasis(cfg, snap); basis > 0 {
-			if snap.IsBull && cfg.BullBuyFrac > 0 {
-				return basis * cfg.BullBuyFrac
-			}
-			if !snap.IsBull && cfg.BearBuyFrac > 0 {
-				return basis * cfg.BearBuyFrac * bearDepthWeight(cfg, buyDepthPct(cfg, snap))
-			}
-		}
+	basis := fracBasis(cfg, snap)
+	if basis <= 0 {
+		return 0
 	}
-
-	var amount float64
-	if snap.IsBull && cfg.BullBuyAmount > 0 {
-		amount = cfg.BullBuyAmount * cfg.BuyAndSellMultiplier
-	} else {
-		amount = baselineBuyAmountFromCfg(cfg, buyDepthPct(cfg, snap)) * cfg.BuyAndSellMultiplier
+	if snap.IsBull {
+		return basis * cfg.BullBuyFrac
 	}
-	// 動態部位大小:金字塔形狀不變,只把絕對額按帳戶大小等比縮放。
-	if cfg.InitialCash > 0 {
-		switch cfg.BuySizeMode {
-		case "cash":
-			if snap.Cash > 0 {
-				amount *= snap.Cash / cfg.InitialCash
-			}
-		case "equity":
-			if snap.Equity > 0 {
-				amount *= snap.Equity / cfg.InitialCash
-			}
-		}
-	}
-	return amount
+	return basis * cfg.BearBuyFrac * bearDepthWeight(cfg, buyDepthPct(cfg, snap))
 }
 
 // fracBasis 回傳比例買入的基準金額 (現金或權益)。
@@ -191,18 +168,13 @@ func DecideSell(cfg *config.Config, snap Snapshot) SellIntent {
 	if gain < cfg.BaselineSellThreshold {
 		return SellIntent{}
 	}
-	// 賣出量:預設固定金額;SellFracOfPosition>0 則改賣「當前持股的此比例」(分批出場)。
-	var shares int
-	if cfg.SellFracOfPosition > 0 && snap.HeldShares > 0 {
-		shares = int(math.Round(cfg.SellFracOfPosition * float64(snap.HeldShares)))
-		if shares < 1 {
-			shares = 1
-		}
-	} else {
-		shares = amountToShares(cfg.BaselineSellAmount*cfg.BuyAndSellMultiplier, snap.TodayPrice)
-	}
-	if shares <= 0 {
+	// 賣出量:賣「當前持股的 SellFracOfPosition 比例」(分批出場;至少 1 股)。
+	if cfg.SellFracOfPosition <= 0 || snap.HeldShares <= 0 {
 		return SellIntent{}
+	}
+	shares := int(math.Round(cfg.SellFracOfPosition * float64(snap.HeldShares)))
+	if shares < 1 {
+		shares = 1
 	}
 	return SellIntent{Should: true, TargetShares: shares, Price: snap.TodayPrice, Reason: "profit"}
 }
@@ -231,26 +203,6 @@ func buyDepthPct(cfg *config.Config, snap Snapshot) float64 {
 		}
 		return 0
 	}
-}
-
-// baselineBuyAmountFromCfg 依 tier 決定買入目標金額,純函式。
-// 幾何加碼曲線啟用時 (BuyBaseAmount>0 && BuyTierRatio>0):金額 = base×ratio^i
-// (i = 命中 tier 索引;跌破最深 tier 用 ratio^len 當 fallback),沿用 tier 的 above 邊界。
-func baselineBuyAmountFromCfg(cfg *config.Config, percentages float64) float64 {
-	if cfg.BuyBaseAmount > 0 && cfg.BuyTierRatio > 0 {
-		for i, tier := range cfg.BaselineBuyTiers {
-			if percentages > tier.Above {
-				return cfg.BuyBaseAmount * math.Pow(cfg.BuyTierRatio, float64(i))
-			}
-		}
-		return cfg.BuyBaseAmount * math.Pow(cfg.BuyTierRatio, float64(len(cfg.BaselineBuyTiers)))
-	}
-	for _, tier := range cfg.BaselineBuyTiers {
-		if percentages > tier.Above {
-			return tier.Amount
-		}
-	}
-	return cfg.BaselineBuyFallbackAmount
 }
 
 // amountToShares 將金額轉為最接近的股數 (四捨五入)。

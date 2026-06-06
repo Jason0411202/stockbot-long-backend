@@ -1,7 +1,7 @@
 # 買賣邏輯
 
-> **最新且完整的交易規則 (牛熊 regime 感知、全程現金比例) 見 [optimization/BEST-STRATEGY.md](optimization/BEST-STRATEGY.md)。**
-> 本頁下方「加減碼邏輯」段落為早期固定金額金字塔版的歷史說明,現行策略已改為現金比例,請以 BEST-STRATEGY.md 為準。
+> **最新且完整的交易規則 (牛熊 regime 感知、全程現金比例) 見 [optimization/BEST-STRATEGY.md](optimization/BEST-STRATEGY.md) 與專案 README。**
+> 早期「固定金額金字塔」版本 (`buy_and_sell_multiplier`、`baseline_buy_fallback_amount`、`bull_buy_amount`、`buy_base_amount`、`buy_size_mode`、`baseline_sell_amount`) 已**從程式碼移除**,現行只保留現金比例路徑。
 
 ## 問題設定 (problem setting):每月解鎖新資金
 
@@ -10,31 +10,27 @@
 回撤用 NAV 單位淨值。`monthly_contribution=0` 即退化回「期初一次性資金」舊行為。詳見 [backtest.md](backtest.md)。
 注資僅作用於回測 / 評估;上線交易的真實餘額由 BotState 還原,不在此自動注資。
 
-* 主攻台股 ETF (006208, 00830) 長線 + 波段交易
+* 主攻台股 ETF (00631L, 00830) 長線 + 波段交易
 * 每檔股票各自有自己的冷卻期，彼此獨立計算
 * 買入與賣出皆以「股數」為基本交易單位：將目標金額換算成最接近的股數 (四捨五入) 後實際下單
-* 當股價來到 20 MA 以下時執行買入操作，買入股數由 baseline 加減碼邏輯 + 目前單價計算得出，該股票買入後 `cooldown_days` 天內不再買入
-* 當某支追蹤的股票，其最低購買價的獲利超過 `baseline_sell_threshold` (100%) 時，執行賣出操作，賣出股數由賣出金額換算得出，本操作沒有冷卻
+* 先以 regime 均線判斷牛/熊,再決定進場閾值與買入比例 (詳見 BEST-STRATEGY.md)，該股票買入後 `cooldown_days` 天內不再買入 (另給「打破冷卻」額度)
+* 當某支追蹤的股票，其最低購買價的獲利超過 `baseline_sell_threshold` (100%,僅多頭) 時分批獲利了結；熊市則以移動停利出場，皆無冷卻
 
-## 加減碼邏輯
+## 加減碼邏輯 (現行:全程現金比例)
 
-### Baseline method (原金字塔策略)
+目前專案中唯一的交易策略。`scaling_strategy` 只接受 `Baseline`。買賣金額一律為「基準的固定比例」而非固定金額：
 
-目前專案中唯一的交易策略。`scaling_strategy` 只接受 `Baseline`；此策略在舊版本中稱為「金字塔策略 (Pyramid)」。
-
-* 買入金額按照當前股價相對於持有中最高買入價的比例，越低買越多 (預設 tiers 見 `config.yaml`)：
-  * -10% 內：500
-  * -20% 內：750
-  * -30% 內：1300
-  * -40% 內：2000
-  * 超過 -40%：3000 (`baseline_buy_fallback_amount`)
-* 觸發賣出時的目標金額為 `baseline_sell_amount` (預設 10000)，實際會乘以 `buy_and_sell_multiplier`
-* 所有金額最後都會除以當天股價並四捨五入得到「實際買/賣股數」
+* **買入金額**：基準 (`buy_frac_basis`,定版 `cash` = 當前現金) 乘上比例 —
+  * 牛市 = 現金 × `bull_buy_frac` (定版 0.20)。
+  * 熊市 = 現金 × `bear_buy_frac` (定版 0.02) × 幾何深度權重 (`buy_tier_ratio`^命中 `baseline_buy_tiers` 索引;跌越深買越大比例)。
+  * 花固定比例的現金在數學上永遠歸不了零 → 深跌時仍有銀彈。
+* **賣出股數**：獲利了結賣「當前持股的 `sell_frac_of_position`」(定版 0.33);熊市移動停利則全數出場。
+* 目標金額最後除以當天股價、四捨五入得到「實際買/賣股數」，再經 no-borrow 夾取 (見下)。
 
 ## 資金安全 (no-borrow 不變量)
 
 回測 / 模擬交易的可利用資金**僅等於當前持有現金** (起始現金 + 已實現賣出收入 − 已支出買入成本)，
-不得借錢、也不允許透支。實作上在 `runBacktestOnSeries` 中以下列方式防守：
+不得借錢、也不允許透支。實作上在引擎買入套用 (`applyBuy`) 時以下列方式防守：
 
 1. 每次買入前計算 `maxAffordable = floor(cash / price)`。若策略目標股數超過 `maxAffordable`，則夾取到 `maxAffordable`。
 2. 若夾取後仍為 0，則跳過該次買進並累計到 `SkippedBuys`。

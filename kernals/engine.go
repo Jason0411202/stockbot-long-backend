@@ -181,25 +181,6 @@ func (e *Engine) HoldingValueAsOf(series map[string]*stockSeries, day time.Time)
 	return total
 }
 
-// FinalHoldingValue 以每檔股票最後可得收盤價結算持股市值。
-func (e *Engine) FinalHoldingValue(series map[string]*stockSeries) float64 {
-	total := 0.0
-	for stockID, pos := range e.positions {
-		if len(pos) == 0 {
-			continue
-		}
-		s, ok := series[stockID]
-		if !ok || len(s.closePrices) == 0 {
-			continue
-		}
-		lastPrice := s.closePrices[len(s.closePrices)-1]
-		for _, l := range pos {
-			total += float64(l.shares) * lastPrice
-		}
-	}
-	return total
-}
-
 // ProcessDay 處理單一日期下所有追蹤股票的買賣決策。
 // 流程 (對每檔股票):
 //  1. 用記憶體狀態組 Snapshot
@@ -208,9 +189,8 @@ func (e *Engine) FinalHoldingValue(series map[string]*stockSeries) float64 {
 //  4. 通知 Executor (上線:寫 DB / 發 Discord;回測:no-op)
 func (e *Engine) ProcessDay(today time.Time, series map[string]*stockSeries, exec Executor) error {
 	todayStr := today.Format("2006-01-02")
-	// 動態部位大小 / 牛市權益比例買入 啟用時,先算當日總權益 (用今日收盤即決策價,無未來資訊);否則零成本略過。
-	dynSizing := e.cfg.BuySizeMode == "cash" || e.cfg.BuySizeMode == "equity"
-	needEquity := dynSizing || e.cfg.BuyFracBasis == "equity"
+	// BuyFracBasis=="equity" 時,先算當日總權益 (用今日收盤即決策價,無未來資訊);cash 基準則零成本略過。
+	needEquity := e.cfg.BuyFracBasis == "equity"
 	eqToday := 0.0
 	if needEquity {
 		eqToday = e.cash + e.HoldingValueAsOf(series, today)

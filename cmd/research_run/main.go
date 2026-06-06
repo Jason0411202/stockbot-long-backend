@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -37,27 +38,34 @@ func main() {
 		appCtx.Log.Fatalf("ConnectToDatabase 失敗: %v", err)
 	}
 
-	result, err := kernals.RunBacktest(appCtx, appCtx.Cfg.BackTestingMonths)
+	result, err := kernals.RunBacktest(appCtx)
 	if err != nil {
 		appCtx.Log.Fatalf("RunBacktest 失敗: %v", err)
 	}
 
-	elapsed := time.Since(start)
+	printResult(os.Stdout, appCtx.Cfg.TrackStocks, appCtx.Cfg.BackTestingMonths, result, time.Since(start))
+}
+
+// printResult 格式化回測結果到 out。抽離 main()(連線/exit)讓輸出格式可被測試。
+func printResult(out io.Writer, stocks []string, backMonths int, result *kernals.BacktestResult, elapsed time.Duration) {
 	totalIn := result.InitialCash + result.TotalContributed
-	fmt.Println("=== BACKTEST RESULT ===")
-	fmt.Printf("TrackStocks:         %v\n", appCtx.Cfg.TrackStocks)
-	fmt.Printf("BackTestingMonths:   %d\n", appCtx.Cfg.BackTestingMonths)
-	fmt.Printf("InitialCash:         %.2f\n", result.InitialCash)
-	fmt.Printf("TotalContributed:    %.2f (每月注資合計)\n", result.TotalContributed)
-	fmt.Printf("TotalInvested:       %.2f (期初 + 注資)\n", totalIn)
-	fmt.Printf("FinalCash:           %.2f\n", result.FinalCash)
-	fmt.Printf("FinalHoldingValue:   %.2f\n", result.FinalHoldingValue)
-	fmt.Printf("FinalTotal:          %.2f\n", result.FinalTotal)
-	fmt.Printf("TotalBuys:           %d\n", result.TotalBuys)
-	fmt.Printf("TotalSells:          %d\n", result.TotalSells)
-	fmt.Printf("SkippedBuys:         %d\n", result.SkippedBuys)
-	fmt.Printf("PnL vs Invested:     %+.2f (%+.2f%%)\n",
-		result.FinalTotal-totalIn,
-		(result.FinalTotal-totalIn)/totalIn*100)
-	fmt.Printf("Runtime:             %s\n", elapsed)
+	fmt.Fprintln(out, "=== BACKTEST RESULT ===")
+	fmt.Fprintf(out, "TrackStocks:         %v\n", stocks)
+	fmt.Fprintf(out, "BackTestingMonths:   %d\n", backMonths)
+	fmt.Fprintf(out, "InitialCash:         %.2f\n", result.InitialCash)
+	fmt.Fprintf(out, "TotalContributed:    %.2f (每月注資合計)\n", result.TotalContributed)
+	fmt.Fprintf(out, "TotalInvested:       %.2f (期初 + 注資)\n", totalIn)
+	fmt.Fprintf(out, "FinalCash:           %.2f\n", result.FinalCash)
+	fmt.Fprintf(out, "FinalHoldingValue:   %.2f\n", result.FinalHoldingValue)
+	fmt.Fprintf(out, "FinalTotal:          %.2f\n", result.FinalTotal)
+	fmt.Fprintf(out, "TotalBuys:           %d\n", result.TotalBuys)
+	fmt.Fprintf(out, "TotalSells:          %d\n", result.TotalSells)
+	fmt.Fprintf(out, "SkippedBuys:         %d\n", result.SkippedBuys)
+	pnl := result.FinalTotal - totalIn
+	pct := 0.0
+	if totalIn != 0 {
+		pct = pnl / totalIn * 100
+	}
+	fmt.Fprintf(out, "PnL vs Invested:     %+.2f (%+.2f%%)\n", pnl, pct)
+	fmt.Fprintf(out, "Runtime:             %s\n", elapsed)
 }

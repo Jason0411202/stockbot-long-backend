@@ -37,6 +37,38 @@ func TestForStock_Overrides(t *testing.T) {
 	}
 }
 
+// ForStock 應套用「每一個」可覆寫欄位,且不動到 base。
+func TestForStock_AllFieldsOverridden(t *testing.T) {
+	// Arrange
+	base := &Config{
+		MAWindow: 10, RegimeMAWindow: 95, BullBuyBand: 0.05, CooldownDays: 14, BullCooldownDays: 14,
+		BullBuyFrac: 0.20, BearBuyFrac: 0.02, BuyTierRatio: 2.5, BaselineSellThreshold: 1.0,
+		SellFracOfPosition: 0.33, TrailStopBear: 0.10, TrailMinGain: 0.10,
+		StockOverrides: map[string]StockParams{
+			"X": {
+				MAWindow: iptr(5), RegimeMAWindow: iptr(60), BullBuyBand: fptr(0.08),
+				CooldownDays: iptr(7), BullCooldownDays: iptr(3), BullBuyFrac: fptr(0.25),
+				BearBuyFrac: fptr(0.03), BuyTierRatio: fptr(3.0), BaselineSellThreshold: fptr(0.8),
+				SellFracOfPosition: fptr(0.5), TrailStopBear: fptr(0.12), TrailMinGain: fptr(0.05),
+			},
+		},
+	}
+
+	// Act
+	e := base.ForStock("X")
+
+	// Assert — 每個欄位都被覆寫成 override 值。
+	if e.MAWindow != 5 || e.RegimeMAWindow != 60 || e.BullBuyBand != 0.08 || e.CooldownDays != 7 ||
+		e.BullCooldownDays != 3 || e.BullBuyFrac != 0.25 || e.BearBuyFrac != 0.03 || e.BuyTierRatio != 3.0 ||
+		e.BaselineSellThreshold != 0.8 || e.SellFracOfPosition != 0.5 || e.TrailStopBear != 0.12 || e.TrailMinGain != 0.05 {
+		t.Fatalf("not all fields overridden: %+v", e)
+	}
+	// base 不被改動。
+	if base.MAWindow != 10 || base.TrailMinGain != 0.10 {
+		t.Fatalf("ForStock mutated base")
+	}
+}
+
 func writeConfig(t *testing.T, body string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -51,14 +83,18 @@ const baseYaml = `
 track_stocks:
   - "006208"
 scaling_strategy: Baseline
-buy_and_sell_multiplier: 2.0
 max_back_months: 1
 cooldown_days: 14
+buy_frac_basis: cash
+bull_buy_frac: 0.20
+bear_buy_frac: 0.02
+buy_tier_ratio: 2.5
+buy_depth_basis: peak
 baseline_buy_tiers:
-  - { above: -0.1, amount: 500 }
-baseline_buy_fallback_amount: 3000
+  - { above: -0.1 }
+  - { above: -0.2 }
 baseline_sell_threshold: 1.0
-baseline_sell_amount: 10000
+sell_frac_of_position: 0.33
 initial_cash: 1000000
 `
 
@@ -137,6 +173,102 @@ func TestLoad_BackTestingMonthsSanityCheck(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 		})
+	}
+}
+
+// Load 應對省略的欄位套用合理預設值。
+func TestLoad_AppliesDefaults(t *testing.T) {
+	// Arrange — 給必要欄位 + 現金比例旋鈕 (Baseline 必填),其餘留空看預設。
+	body := `
+track_stocks:
+  - "00631L"
+initial_cash: 100000
+init_db_back_months: 60
+back_testing_months: -1
+buy_frac_basis: cash
+bull_buy_frac: 0.20
+bear_buy_frac: 0.02
+sell_frac_of_position: 0.33
+`
+	// Act
+	cfg, err := Load(writeConfig(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// Assert — 預設:ScalingStrategy=Baseline、CooldownDays=14。
+	if cfg.ScalingStrategy != "Baseline" {
+		t.Fatalf("ScalingStrategy default = %q, want Baseline", cfg.ScalingStrategy)
+	}
+	if cfg.CooldownDays != 14 {
+		t.Fatalf("CooldownDays default = %d, want 14", cfg.CooldownDays)
+	}
+}
+
+// Load 應正確解析完整設定 (含現金比例旋鈕、tier 邊界、per-stock override)。
+func TestLoad_FullValid(t *testing.T) {
+	// Arrange
+	body := baseYaml + `
+init_db_back_months: 60
+back_testing_months: 60
+regime_method: ma_pos
+regime_ma_window: 95
+stock_overrides:
+  "00631L":
+    regime_ma_window: 60
+`
+	// Act
+	cfg, err := Load(writeConfig(t, body))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// Assert — 核心欄位 + tier 邊界 + per-stock override 都正確讀入。
+	if cfg.BuyFracBasis != "cash" || cfg.BullBuyFrac != 0.20 || cfg.BearBuyFrac != 0.02 {
+		t.Fatalf("frac knobs misparsed: %+v", cfg)
+	}
+	if len(cfg.BaselineBuyTiers) != 2 || cfg.BaselineBuyTiers[0].Above != -0.1 {
+		t.Fatalf("baseline tiers misparsed: %+v", cfg.BaselineBuyTiers)
+	}
+	if eff := cfg.ForStock("00631L"); eff.RegimeMAWindow != 60 {
+		t.Fatalf("per-stock override not parsed: regimeMA=%d, want 60", eff.RegimeMAWindow)
+	}
+}
+
+// Baseline 策略缺少現金比例旋鈕時應 fail-fast (避免靜默不交易)。
+func TestLoad_BaselineRequiresFracKnobs(t *testing.T) {
+	// Arrange — 有 track_stocks 但完全沒有現金比例旋鈕。
+	body := `
+track_stocks:
+  - "00631L"
+scaling_strategy: Baseline
+initial_cash: 100000
+init_db_back_months: 60
+back_testing_months: -1
+`
+	// Act + Assert
+	if _, err := Load(writeConfig(t, body)); err == nil {
+		t.Fatalf("expected error when cash-fraction knobs missing for Baseline")
+	}
+
+	// 補齊四個旋鈕後應通過。
+	ok := body + "buy_frac_basis: cash\nbull_buy_frac: 0.2\nbear_buy_frac: 0.02\nsell_frac_of_position: 0.33\n"
+	if _, err := Load(writeConfig(t, ok)); err != nil {
+		t.Fatalf("complete cash-fraction config should load, got %v", err)
+	}
+}
+
+func TestLoad_FileNotFound(t *testing.T) {
+	// Arrange + Act + Assert
+	if _, err := Load(filepath.Join(t.TempDir(), "missing.yaml")); err == nil {
+		t.Fatalf("expected error for missing config file")
+	}
+}
+
+func TestLoad_InvalidYAML(t *testing.T) {
+	// Arrange — 壞掉的 YAML。
+	if _, err := Load(writeConfig(t, "track_stocks: [unclosed")); err == nil {
+		t.Fatalf("expected parse error for malformed yaml")
 	}
 }
 

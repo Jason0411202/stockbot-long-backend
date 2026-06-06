@@ -1,110 +1,155 @@
 package kernals
 
 import (
-	"main/config"
-	"math"
 	"testing"
 	"time"
 )
 
-// makeSeries 建立 n 個連續日曆日的合成序列 (起點 startYear/startMonth 1 號),
-// 收盤價固定為 100 → backtest 不會觸發 baseline 買賣,方便單獨驗起點 / 區間行為。
-func makeSeries(n int, startYear int, startMonth time.Month) *stockSeries {
-	dates := make([]time.Time, n)
-	prices := make([]float64, n)
-	idx := make(map[string]int, n)
-	ma20 := make([]float64, n)
+// backtest_test.go 為回測核心的整合測試:起點 (common issuance)、區間視窗、每月注資時程、
+// 防呆 (僅支援 Baseline)。回測與上線共用同一引擎,故這些測試也間接守住上線決策。
 
-	start := time.Date(startYear, startMonth, 1, 0, 0, 0, 0, time.UTC)
-	for i := 0; i < n; i++ {
-		d := start.AddDate(0, 0, i)
-		dates[i] = d
-		prices[i] = 100.0
-		idx[d.Format("2006-01-02")] = i
-		if i >= 19 {
-			ma20[i] = 100.0
-		} else {
-			ma20[i] = math.NaN()
-		}
-	}
-	return &stockSeries{
-		dates:       dates,
-		dateIndex:   idx,
-		closePrices: prices,
-		ma20:        ma20,
-	}
-}
-
-func minimalCfg() *config.Config {
-	return &config.Config{
-		TrackStocks:               []string{"TEST"},
-		ScalingStrategy:           "Baseline",
-		BuyAndSellMultiplier:      1.0,
-		CooldownDays:              14,
-		BaselineBuyTiers:          []config.BaselineBuyTier{{Above: -0.1, Amount: 500}},
-		BaselineBuyFallbackAmount: 3000,
-		BaselineSellAmount:        10000,
-		BaselineSellThreshold:     1.0,
-		InitialCash:               1000000,
-	}
-}
-
-// commonIssuanceStart = 各追蹤股票第一筆資料日的最大值 (較晚上市者決定起點)。
 func TestCommonIssuanceStart_LatestListing(t *testing.T) {
+	// Arrange — A 早上市、B 晚上市;common issuance = 較晚者第一天。
 	series := map[string]*stockSeries{
-		"A": makeSeries(300, 2019, time.January), // 2019-01-01 起
-		"B": makeSeries(300, 2019, time.March),   // 2019-03-01 起 (較晚上市)
+		"A": flatSeries(300, 2019, time.January, 100),
+		"B": flatSeries(300, 2019, time.March, 100),
 	}
-	cfg := minimalCfg()
-	cfg.TrackStocks = []string{"A", "B"}
+	cfg := baseCfg("A", "B")
 
+	// Act
 	got, ok := commonIssuanceStart(cfg, series)
-	if !ok {
-		t.Fatal("expected common issuance found")
-	}
+
+	// Assert
 	want := time.Date(2019, 3, 1, 0, 0, 0, 0, time.UTC)
-	if !got.Equal(want) {
-		t.Fatalf("commonIssuanceStart = %s, want %s (較晚上市的 B)", got.Format("2006-01-02"), want.Format("2006-01-02"))
+	if !ok || !got.Equal(want) {
+		t.Fatalf("commonIssuanceStart = (%s,%v), want (%s,true)", got.Format("2006-01-02"), ok, want.Format("2006-01-02"))
 	}
 }
 
-// 回測起點應為 commonIssuanceStart:某檔尚未上市的空窗期不納入回測 (不在那段做決策)。
 func TestRunBacktestOnSeries_StartsAtCommonIssuance(t *testing.T) {
+	// Arrange
 	series := map[string]*stockSeries{
-		"A": makeSeries(400, 2019, time.January),
-		"B": makeSeries(400, 2019, time.March),
+		"A": flatSeries(400, 2019, time.January, 100),
+		"B": flatSeries(400, 2019, time.March, 100),
 	}
-	cfg := minimalCfg()
-	cfg.TrackStocks = []string{"A", "B"}
+	cfg := baseCfg("A", "B")
 
-	// 直接比對 runBacktestWindow(從 common issuance 起) 與 runBacktestOnSeries 結果一致,
-	// 證明 runBacktestOnSeries 確實以 common issuance 為起點。
+	// Act — runBacktestOnSeries 應等於「從 common issuance 起算的視窗」。
 	ci, _ := commonIssuanceStart(cfg, series)
-	allDates := collectDateUnion(series)
-	end := allDates[len(allDates)-1]
-	want, err := runBacktestWindow(cfg, series, ci, end)
+	end := collectDateUnion(series)
+	want, err := runBacktestWindow(cfg, series, ci, end[len(end)-1])
 	if err != nil {
-		t.Fatalf("runBacktestWindow err: %v", err)
+		t.Fatalf("window: %v", err)
 	}
 	got, err := runBacktestOnSeries(cfg, series)
 	if err != nil {
-		t.Fatalf("runBacktestOnSeries err: %v", err)
+		t.Fatalf("onSeries: %v", err)
 	}
+
+	// Assert
 	if got.FinalTotal != want.FinalTotal || got.TotalBuys != want.TotalBuys {
-		t.Fatalf("runBacktestOnSeries 未從 common issuance 起算: got Final=%.2f Buys=%d, want Final=%.2f Buys=%d",
+		t.Fatalf("onSeries not anchored at common issuance: got(Final=%.2f Buys=%d) want(Final=%.2f Buys=%d)",
 			got.FinalTotal, got.TotalBuys, want.FinalTotal, want.TotalBuys)
 	}
 }
 
-// 單一標的:common issuance = 該檔第一天,回測使用全部資料,不報錯。
-func TestRunBacktestOnSeries_SingleStockUsesAll(t *testing.T) {
-	series := map[string]*stockSeries{"TEST": makeSeries(250, 2024, time.January)}
-	cfg := minimalCfg()
-	res, err := runBacktestOnSeries(cfg, series)
+func TestRunBacktestWindow_TracksContributions(t *testing.T) {
+	// Arrange — 90 連續日從 2020-01-01 (跨 1~3 月),每月注資 2500 → 起始月 (Jan) 不注、Feb/Mar 各注一次。
+	cfg := baseCfg("TEST")
+	cfg.MonthlyContribution = 2500
+	series := map[string]*stockSeries{"TEST": flatSeries(90, 2020, time.January, 100)}
+	dates := series["TEST"].dates
+
+	// Act
+	res, err := runBacktestWindow(cfg, series, dates[0], dates[len(dates)-1])
 	if err != nil {
-		t.Fatalf("backtest err: %v", err)
+		t.Fatalf("window: %v", err)
 	}
-	if res.InitialCash != cfg.InitialCash {
-		t.Fatalf("InitialCash = %.2f, want %.2f", res.InitialCash, cfg.InitialCash)
+
+	// Assert — 平盤序列零成交,期末現金 = 期初 + 注資合計;注資合計 = 2500×2。
+	if res.TotalContributed != 5000 {
+		t.Fatalf("TotalContributed = %.2f, want 5000", res.TotalContributed)
+	}
+	if res.TotalBuys != 0 || res.TotalSells != 0 {
+		t.Fatalf("flat series should not trade, got buys=%d sells=%d", res.TotalBuys, res.TotalSells)
+	}
+	if res.FinalCash != cfg.InitialCash+5000 {
+		t.Fatalf("FinalCash = %.2f, want %.2f", res.FinalCash, cfg.InitialCash+5000)
+	}
+}
+
+func TestRunBacktestWindow_RejectsNonBaseline(t *testing.T) {
+	// Arrange
+	cfg := baseCfg("TEST")
+	cfg.ScalingStrategy = "SomethingElse"
+	series := map[string]*stockSeries{"TEST": flatSeries(30, 2020, time.January, 100)}
+	dates := series["TEST"].dates
+
+	// Act + Assert
+	if _, err := runBacktestWindow(cfg, series, dates[0], dates[len(dates)-1]); err == nil {
+		t.Fatalf("expected error for non-Baseline strategy")
+	}
+}
+
+func TestRunBacktestWindow_EmptyWindowErrors(t *testing.T) {
+	// Arrange — start 在所有資料之後 → 視窗內無交易日。
+	cfg := baseCfg("TEST")
+	series := map[string]*stockSeries{"TEST": flatSeries(30, 2020, time.January, 100)}
+
+	// Act + Assert
+	future := time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC)
+	if _, err := runBacktestWindow(cfg, series, future, future.AddDate(0, 1, 0)); err == nil {
+		t.Fatalf("expected error for empty window")
+	}
+}
+
+func TestContributionAmounts(t *testing.T) {
+	// Arrange — 90 連續日從 2020-01-01。
+	dates := flatSeries(90, 2020, time.January, 100).dates
+
+	// Act
+	got := contributionAmounts(dates, 2500)
+
+	// Assert — out[0]=0;每逢月份切換注一次;合計 = 2500×2 (Feb/Mar)。
+	if got[0] != 0 {
+		t.Fatalf("first day should never receive contribution, got %.2f", got[0])
+	}
+	total, injections := 0.0, 0
+	for _, v := range got {
+		if v > 0 {
+			total += v
+			injections++
+		}
+	}
+	if injections != 2 || total != 5000 {
+		t.Fatalf("got %d injections totalling %.2f, want 2 totalling 5000 (Feb/Mar)", injections, total)
+	}
+
+	// monthly<=0 → 全 0 (退化回無注資)。
+	for _, v := range contributionAmounts(dates, 0) {
+		if v != 0 {
+			t.Fatalf("monthly=0 should disable contributions")
+		}
+	}
+}
+
+func TestCollectDateUnion_SortedDedup(t *testing.T) {
+	// Arrange — 兩檔部分重疊的日期。
+	series := map[string]*stockSeries{
+		"A": seriesFrom(mustDate(t, "2020-01-01"), constPrices(3, 1)),
+		"B": seriesFrom(mustDate(t, "2020-01-02"), constPrices(3, 1)),
+	}
+
+	// Act
+	union := collectDateUnion(series)
+
+	// Assert — 去重 + 升冪:01-01..01-04 共 4 天。
+	if len(union) != 4 {
+		t.Fatalf("union len = %d, want 4", len(union))
+	}
+	for i := 1; i < len(union); i++ {
+		if !union[i].After(union[i-1]) {
+			t.Fatalf("union not strictly increasing at %d", i)
+		}
 	}
 }

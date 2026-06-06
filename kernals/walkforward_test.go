@@ -1,181 +1,186 @@
 package kernals
 
 import (
-	"main/config"
 	"math"
 	"testing"
 	"time"
 )
 
-// buildSeries 由起始日 + 連續日曆日收盤價建立 stockSeries (ma20 與 loadStockSeries 同邏輯)。
-func buildSeries(start time.Time, prices []float64) *stockSeries {
-	n := len(prices)
-	dates := make([]time.Time, n)
-	idx := make(map[string]int, n)
-	ma20 := make([]float64, n)
-	const window = 20
-	sum := 0.0
-	for i := 0; i < n; i++ {
-		d := start.AddDate(0, 0, i)
-		dates[i] = d
-		idx[d.Format("2006-01-02")] = i
-		sum += prices[i]
-		if i >= window {
-			sum -= prices[i-window]
-		}
-		if i >= window-1 {
-			ma20[i] = sum / float64(window)
-		} else {
-			ma20[i] = math.NaN()
-		}
-	}
-	cp := make([]float64, n)
-	copy(cp, prices)
-	return &stockSeries{dates: dates, dateIndex: idx, closePrices: cp, ma20: ma20}
-}
-
-func constPrices(n int, v float64) []float64 {
-	out := make([]float64, n)
-	for i := range out {
-		out[i] = v
-	}
-	return out
-}
-
-func wfCfg(stocks []string) *config.Config {
-	return &config.Config{
-		TrackStocks:               stocks,
-		ScalingStrategy:           "Baseline",
-		BuyAndSellMultiplier:      1.0,
-		CooldownDays:              14,
-		BaselineBuyTiers:          []config.BaselineBuyTier{{Above: -0.1, Amount: 500}},
-		BaselineBuyFallbackAmount: 3000,
-		BaselineSellAmount:        10000,
-		BaselineSellThreshold:     1.0,
-		InitialCash:               100000,
-	}
-}
+// walkforward_test.go 為 walk-forward 評估與對照組的整合測試:as-of 查價、視窗產生、
+// B&H / 同曝險 Blend 對照組、Calmar 比較、五道關卡彙整。
 
 func TestCloseAsOf(t *testing.T) {
+	// Arrange — 含非交易日空隙。
 	s := &stockSeries{
 		dates: []time.Time{
-			time.Date(2019, 5, 3, 0, 0, 0, 0, time.UTC),
-			time.Date(2019, 5, 6, 0, 0, 0, 0, time.UTC),
-			time.Date(2019, 5, 8, 0, 0, 0, 0, time.UTC),
+			mustDate(t, "2019-05-03"), mustDate(t, "2019-05-06"), mustDate(t, "2019-05-08"),
 		},
 		closePrices: []float64{30, 31, 32},
 	}
-	// 非交易日 2019-05-07 -> 取 <= 該日最近收盤 = 2019-05-06 的 31
-	if px, ok := s.closeAsOf(time.Date(2019, 5, 7, 0, 0, 0, 0, time.UTC)); !ok || px != 31 {
-		t.Fatalf("closeAsOf(05-07) = (%v,%v), want (31,true)", px, ok)
+	cases := []struct {
+		name string
+		day  string
+		px   float64
+		ok   bool
+	}{
+		{"non-trading day takes prior close", "2019-05-07", 31, true},
+		{"pre-listing returns false", "2018-06-01", 0, false},
+		{"exact trading day", "2019-05-08", 32, true},
 	}
-	// 上市前 -> (0,false),無未來資訊
-	if px, ok := s.closeAsOf(time.Date(2018, 6, 1, 0, 0, 0, 0, time.UTC)); ok || px != 0 {
-		t.Fatalf("closeAsOf(pre-listing) = (%v,%v), want (0,false)", px, ok)
-	}
-	// 剛好交易日 -> 當日收盤
-	if px, ok := s.closeAsOf(time.Date(2019, 5, 8, 0, 0, 0, 0, time.UTC)); !ok || px != 32 {
-		t.Fatalf("closeAsOf(05-08) = (%v,%v), want (32,true)", px, ok)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			px, ok := s.closeAsOf(mustDate(t, c.day))
+			if px != c.px || ok != c.ok {
+				t.Fatalf("closeAsOf(%s) = (%v,%v), want (%v,%v)", c.day, px, ok, c.px, c.ok)
+			}
+		})
 	}
 }
 
 func TestCommonSupportStart(t *testing.T) {
+	// Arrange — B 較晚上市,其第 20 個交易日決定共同有效起點。
 	series := map[string]*stockSeries{
-		"A": buildSeries(time.Date(2019, 1, 1, 0, 0, 0, 0, time.UTC), constPrices(50, 100)),
-		"B": buildSeries(time.Date(2019, 2, 1, 0, 0, 0, 0, time.UTC), constPrices(50, 100)),
+		"A": seriesFrom(mustDate(t, "2019-01-01"), constPrices(50, 100)),
+		"B": seriesFrom(mustDate(t, "2019-02-01"), constPrices(50, 100)),
 	}
-	cfg := wfCfg([]string{"A", "B"})
+	cfg := baseCfg("A", "B")
+
+	// Act
 	got, ok := commonSupportStart(cfg, series)
-	if !ok {
-		t.Fatal("expected common support found")
-	}
-	// B 較晚上市,其第 20 個交易日 (dates[19]) = 2019-02-20
+
+	// Assert — B 的 dates[19] = 2019-02-20。
 	want := time.Date(2019, 2, 20, 0, 0, 0, 0, time.UTC)
-	if !got.Equal(want) {
-		t.Fatalf("commonSupportStart = %s, want %s", got.Format("2006-01-02"), want.Format("2006-01-02"))
+	if !ok || !got.Equal(want) {
+		t.Fatalf("commonSupportStart = (%s,%v), want (%s,true)", got.Format("2006-01-02"), ok, want.Format("2006-01-02"))
 	}
 }
 
 func TestGenerateWindows_UniverseAndStep(t *testing.T) {
-	start := time.Date(2019, 1, 1, 0, 0, 0, 0, time.UTC)
+	// Arrange
+	start := mustDate(t, "2019-01-01")
 	series := map[string]*stockSeries{
-		"A": buildSeries(start, constPrices(800, 100)),
-		"B": buildSeries(start, constPrices(800, 100)),
+		"A": seriesFrom(start, constPrices(800, 100)),
+		"B": seriesFrom(start, constPrices(800, 100)),
 	}
-	cfg := wfCfg([]string{"A", "B"})
-	allDates := collectDateUnion(series)
+	cfg := baseCfg("A", "B")
 	p := WalkForwardParams{WindowMonths: 12, StepMonths: 3, MinTradeDays: 100}
-	windows := generateWindows(cfg, series, allDates, p)
+
+	// Act
+	windows := generateWindows(cfg, series, collectDateUnion(series), p)
+
+	// Assert — 多個視窗、起點皆 2 檔可交易、長度約 12 月、起點嚴格遞增。
 	if len(windows) < 3 {
 		t.Fatalf("expected >=3 windows, got %d", len(windows))
 	}
 	for i, w := range windows {
-		// 每個視窗起點皆 2 檔可交易
 		if u := len(tradableAt(cfg, series, w[0])); u != 2 {
 			t.Fatalf("window %d universe = %d, want 2", i, u)
 		}
-		// 視窗長度約 12 個月
-		yrs := yearsBetween(w[0], w[1])
-		if yrs < 0.9 || yrs > 1.1 {
-			t.Fatalf("window %d span = %.3f years, want ~1.0", i, yrs)
+		if yrs := yearsBetween(w[0], w[1]); yrs < 0.9 || yrs > 1.1 {
+			t.Fatalf("window %d span = %.3f yrs, want ~1.0", i, yrs)
 		}
-		// 起點遞增
 		if i > 0 && !w[0].After(windows[i-1][0]) {
 			t.Fatalf("window starts not strictly increasing at %d", i)
 		}
 	}
 }
 
-// 無注資時,B&H「立刻買滿」== 期初一次性買滿:升勢股 100→200 應給 100% MWR、~100% 曝險。
-func TestBHImmediateArm_NoContribEqualsLumpSum(t *testing.T) {
-	start := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
-	prices := make([]float64, 366) // day0..day365
-	for i := range prices {
-		prices[i] = 100 + 100*float64(i)/365.0 // 100 -> 200 線性
+func TestTradableAt_OnlyListedStocks(t *testing.T) {
+	// Arrange — A 已上市、B 之後才上市。
+	series := map[string]*stockSeries{
+		"A": seriesFrom(mustDate(t, "2020-01-01"), constPrices(10, 100)),
+		"B": seriesFrom(mustDate(t, "2020-06-01"), constPrices(10, 100)),
 	}
-	series := map[string]*stockSeries{"A": buildSeries(start, prices)}
-	windowDates := series["A"].dates
-	cfg := wfCfg([]string{"A"}) // InitialCash 100000
-	contribOnDay := make([]float64, len(windowDates))
-	arm := bhImmediateArm(cfg, series, windowDates, contribOnDay)
+	cfg := baseCfg("A", "B")
 
-	// 起點 px=100 -> 1000 股 = 100000;終點 px=200 -> 200000
-	if math.Abs(arm.curve[0]-100000) > 1 {
-		t.Fatalf("bh start equity = %.2f, want ~100000", arm.curve[0])
-	}
-	if math.Abs(arm.finalEquity-200000) > 1 {
-		t.Fatalf("bh final equity = %.2f, want ~200000", arm.finalEquity)
-	}
-	m := armMetrics(arm, cfg.InitialCash)
-	if math.Abs(m.MWR-1.0) > 0.02 {
-		t.Fatalf("bh MWR = %.4f, want ~1.0 (+100%%/yr, 無注資 → == 池 CAGR)", m.MWR)
-	}
-	if m.AvgExp < 0.99 {
-		t.Fatalf("bh exposure = %.4f, want ~1.0 (立刻買滿)", m.AvgExp)
+	// Act + Assert — 2020-01-05 只有 A 可交易。
+	if got := tradableAt(cfg, series, mustDate(t, "2020-01-05")); len(got) != 1 || got[0] != "A" {
+		t.Fatalf("tradableAt = %v, want [A]", got)
 	}
 }
 
-// 同曝險 Blend:w=0 → 全現金、淨值平盤 (MWR 0、回撤 0);w=1 → 完全複製 B&H NAV。
+func TestDeployAllCash_EqualWeightWholeShares(t *testing.T) {
+	// Arrange — 兩檔等權買滿;整股、餘額留現金。
+	series := map[string]*stockSeries{
+		"A": seriesFrom(mustDate(t, "2020-01-01"), constPrices(5, 100)),
+		"B": seriesFrom(mustDate(t, "2020-01-01"), constPrices(5, 50)),
+	}
+	cfg := baseCfg("A", "B")
+	positions := map[string]int{}
+	cash := 1000.0
+
+	// Act — 每檔分得 500:A@100→5 股、B@50→10 股,花 1000、餘 0。
+	bought := deployAllCash(cfg, series, mustDate(t, "2020-01-01"), positions, &cash)
+
+	// Assert
+	if !bought || positions["A"] != 5 || positions["B"] != 10 || cash != 0 {
+		t.Fatalf("deployAllCash: bought=%v A=%d B=%d cash=%.2f, want true/5/10/0", bought, positions["A"], positions["B"], cash)
+	}
+}
+
+func TestBHImmediateArm_NoContribEqualsLumpSum(t *testing.T) {
+	// Arrange — 升勢股 100→200,無注資。
+	start := mustDate(t, "2020-01-01")
+	series := map[string]*stockSeries{"A": seriesFrom(start, linRamp(366, 100, 200))}
+	windowDates := series["A"].dates
+	cfg := baseCfg("A")
+	contribOnDay := make([]float64, len(windowDates))
+
+	// Act
+	arm := bhImmediateArm(cfg, series, windowDates, contribOnDay)
+	m := armMetrics(arm, cfg.InitialCash)
+
+	// Assert — 期初買滿 ~1,000,000、期末 ~2,000,000、MWR ~+100%/yr、曝險 ~100%。
+	if !approxEq(arm.curve[0], 1_000_000, 1) {
+		t.Fatalf("bh start equity = %.2f, want ~1000000", arm.curve[0])
+	}
+	if !approxEq(arm.finalEquity, 2_000_000, 1) {
+		t.Fatalf("bh final equity = %.2f, want ~2000000", arm.finalEquity)
+	}
+	if !approxEq(m.MWR, 1.0, 0.02) {
+		t.Fatalf("bh MWR = %.4f, want ~1.0", m.MWR)
+	}
+	if m.AvgExp < 0.99 {
+		t.Fatalf("bh exposure = %.4f, want ~1.0", m.AvgExp)
+	}
+}
+
 func TestBlendMetrics_WeightBounds(t *testing.T) {
+	// Arrange
 	bhNav := []float64{1.0, 1.2, 0.9, 1.3}
-	base := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	base := mustDate(t, "2020-01-01")
 	dates := []time.Time{base, base.AddDate(0, 0, 120), base.AddDate(0, 0, 240), base.AddDate(0, 0, 360)}
 	contribOnDay := make([]float64, len(bhNav))
 
+	// Act + Assert — w=0:全現金平盤 (MWR≈0、回撤 0)。
 	m0 := blendMetrics(bhNav, 0.0, contribOnDay, 100000, dates)
-	if m0.MaxDD != 0 {
-		t.Fatalf("blend(w=0) MaxDD = %v, want 0 (全現金平盤)", m0.MaxDD)
+	if m0.MaxDD != 0 || !approxEq(m0.MWR, 0, 1e-6) {
+		t.Fatalf("blend(w=0) = MDD %.4f MWR %.6f, want 0/0", m0.MaxDD, m0.MWR)
 	}
-	if math.Abs(m0.MWR-0.0) > 1e-6 {
-		t.Fatalf("blend(w=0) MWR = %.6f, want ~0", m0.MWR)
-	}
-
+	// w=1:完全複製 B&H NAV (回撤、曝險相同)。
 	m1 := blendMetrics(bhNav, 1.0, contribOnDay, 100000, dates)
-	if math.Abs(m1.MaxDD-maxDrawdown(bhNav)) > 1e-9 {
-		t.Fatalf("blend(w=1) MaxDD = %.6f, want %.6f (複製 B&H NAV)", m1.MaxDD, maxDrawdown(bhNav))
+	if !approxEq(m1.MaxDD, maxDrawdown(bhNav), 1e-9) || !approxEq(m1.AvgExp, 1.0, 1e-12) {
+		t.Fatalf("blend(w=1) = MDD %.6f AvgExp %.6f, want %.6f/1.0", m1.MaxDD, m1.AvgExp, maxDrawdown(bhNav))
 	}
-	if math.Abs(m1.AvgExp-1.0) > 1e-12 {
-		t.Fatalf("blend(w=1) AvgExp = %.6f, want 1.0", m1.AvgExp)
+}
+
+func TestFlowsFromNav(t *testing.T) {
+	// Arrange — NAV 翻倍、期中注資 50 (以前一日 NAV 換單位)。
+	nav := []float64{1.0, 1.0, 2.0}
+	base := mustDate(t, "2020-01-01")
+	dates := []time.Time{base, base.AddDate(0, 0, 1), base.AddDate(0, 0, 2)}
+	contribOnDay := []float64{0, 50, 0}
+
+	// Act
+	flows, finalEq, totalIn := flowsFromNav(nav, contribOnDay, 100, dates)
+
+	// Assert — units = 100 + 50/1.0 = 150;finalEq = 150×2 = 300;totalIn = 150。
+	if !approxEq(finalEq, 300, 1e-9) || !approxEq(totalIn, 150, 1e-9) {
+		t.Fatalf("flowsFromNav finalEq=%.2f totalIn=%.2f, want 300/150", finalEq, totalIn)
+	}
+	// 現金流:期初 -100、注資 -50、期末 +300 共 3 筆。
+	if len(flows) != 3 || flows[0].Amount != -100 || flows[len(flows)-1].Amount != 300 {
+		t.Fatalf("flows = %+v, want [-100, -50, +300]", flows)
 	}
 }
 
@@ -186,73 +191,213 @@ func TestCalmarWin(t *testing.T) {
 	}{
 		{1.2, 0.9, true, true},
 		{0.5, 0.9, false, true},
-		{math.Inf(1), 5.0, true, true},           // 策略無回撤、benchmark 有 -> 策略贏且可比
-		{math.Inf(1), math.Inf(1), false, false}, // 雙方皆無回撤 -> 不可比 (排除)
-		{math.NaN(), 1.0, false, false},          // NaN -> 不可比
+		{math.Inf(1), 5.0, true, true},           // 策略無回撤、benchmark 有 → 策略贏且可比
+		{math.Inf(1), math.Inf(1), false, false}, // 雙方皆無回撤 → 不可比
+		{math.NaN(), 1.0, false, false},          // NaN → 不可比
 	}
 	for i, c := range cases {
 		win, comp := calmarWin(c.s, c.b)
 		if win != c.wantWin || comp != c.wantC {
-			t.Fatalf("case %d calmarWin(%v,%v) = (%v,%v), want (%v,%v)", i, c.s, c.b, win, comp, c.wantWin, c.wantC)
+			t.Fatalf("case %d calmarWin(%v,%v)=(%v,%v), want (%v,%v)", i, c.s, c.b, win, comp, c.wantWin, c.wantC)
 		}
 	}
 }
 
-// mkReport 建立一個只填 G1 相關欄位 (Strat/BH MWR、MaxDD) 的最小 WindowReport。
-func mkReport(stratMWR, bhMWR float64) WindowReport {
+// mkReport 建立可調的 WindowReport,供 aggregate 關卡測試精準控制輸入。
+func mkReport(stratMWR, bhMWR, stratMDD, bhMDD, blendMWR float64, calmarBeatsBH, beatsBlend bool) WindowReport {
+	part := math.NaN()
+	if bhMWR != 0 {
+		part = stratMWR / bhMWR
+	}
 	return WindowReport{
-		Strat: SeriesMetrics{MWR: stratMWR, MaxDD: -0.10},
-		BH:    SeriesMetrics{MWR: bhMWR, MaxDD: -0.20},
+		Strat:            SeriesMetrics{MWR: stratMWR, MaxDD: stratMDD, Calmar: calmar(stratMWR, stratMDD), AvgExp: 0.5},
+		BH:               SeriesMetrics{MWR: bhMWR, MaxDD: bhMDD, Calmar: calmar(bhMWR, bhMDD)},
+		Blend:            SeriesMetrics{MWR: blendMWR},
+		CalmarBeatsBH:    calmarBeatsBH,
+		BeatsBlendBoth:   beatsBlend,
+		RetParticipation: part,
 	}
 }
 
-// G1「守住 B&H 七成報酬」在空頭 (B&H 中位 CAGR <= 0) 時必須改用方向性比較,
-// 不可因 0.75×負值抬高門檻而把『少賠的策略』誤判 FAIL。
-func TestAggregateG1_DownMarketGuard(t *testing.T) {
-	// 空頭:B&H -10%,策略 -8% (少賠) -> G1 應 PASS
-	down := aggregate([]WindowReport{mkReport(-0.08, -0.10), mkReport(-0.08, -0.10), mkReport(-0.08, -0.10)})
+func TestAggregate_G1DownMarketGuard(t *testing.T) {
+	// 空頭 (B&H 中位 <=0):改用方向性比較,少賠即 PASS。
+	down := aggregate([]WindowReport{
+		mkReport(-0.08, -0.10, -0.1, -0.2, 0, true, true),
+		mkReport(-0.08, -0.10, -0.1, -0.2, 0, true, true),
+	})
 	if !down.G1RetParticipation {
-		t.Fatalf("down-market: strat(-8%%) beats BH(-10%%), G1 should PASS, got FAIL")
+		t.Fatalf("down-market: strat(-8%%) beats BH(-10%%) → G1 should PASS")
 	}
-	// 空頭:策略賠更多 (-15% vs -10%) -> G1 應 FAIL
-	worse := aggregate([]WindowReport{mkReport(-0.15, -0.10), mkReport(-0.15, -0.10), mkReport(-0.15, -0.10)})
+	worse := aggregate([]WindowReport{
+		mkReport(-0.15, -0.10, -0.1, -0.2, 0, false, false),
+		mkReport(-0.15, -0.10, -0.1, -0.2, 0, false, false),
+	})
 	if worse.G1RetParticipation {
-		t.Fatalf("down-market: strat(-15%%) worse than BH(-10%%), G1 should FAIL, got PASS")
+		t.Fatalf("down-market: strat(-15%%) worse than BH(-10%%) → G1 should FAIL")
 	}
-	// 多頭參與率語意維持:+9% vs +10% (>=75%) PASS;+5% vs +10% (<75%) FAIL
-	up := aggregate([]WindowReport{mkReport(0.09, 0.10), mkReport(0.09, 0.10), mkReport(0.09, 0.10)})
+	// 多頭參與率語意:>=75% PASS;<75% FAIL。
+	up := aggregate([]WindowReport{mkReport(0.09, 0.10, -0.1, -0.2, 0, true, true)})
 	if !up.G1RetParticipation {
-		t.Fatalf("up-market: strat 9%% >= 75%% of BH 10%%, G1 should PASS")
+		t.Fatalf("up-market: 9%% >= 75%% of 10%% → G1 should PASS")
 	}
-	low := aggregate([]WindowReport{mkReport(0.05, 0.10), mkReport(0.05, 0.10), mkReport(0.05, 0.10)})
+	low := aggregate([]WindowReport{mkReport(0.05, 0.10, -0.1, -0.2, 0, false, false)})
 	if low.G1RetParticipation {
-		t.Fatalf("up-market: strat 5%% < 75%% of BH 10%%, G1 should FAIL")
+		t.Fatalf("up-market: 5%% < 75%% of 10%% → G1 should FAIL")
 	}
 }
 
-// 全平盤序列 (策略零成交) 不可造成 panic,且能正常產生彙整。
-func TestWalkForward_FlatSeries_NoPanic(t *testing.T) {
-	start := time.Date(2019, 1, 1, 0, 0, 0, 0, time.UTC)
-	series := map[string]*stockSeries{
-		"A": buildSeries(start, constPrices(800, 100)),
-		"B": buildSeries(start, constPrices(800, 100)),
+func TestAggregate_AllGatesPassAndFail(t *testing.T) {
+	// Arrange — 全勝情境:報酬參與足、回撤遠小、Calmar 全勝、雙贏 Blend、最差回撤更淺。
+	good := []WindowReport{
+		mkReport(0.20, 0.20, -0.10, -0.40, 0.05, true, true),
+		mkReport(0.18, 0.22, -0.12, -0.45, 0.04, true, true),
+		mkReport(0.25, 0.20, -0.08, -0.50, 0.06, true, true),
 	}
-	cfg := wfCfg([]string{"A", "B"})
+	// Act
+	a := aggregate(good)
+	// Assert — 五道關卡 + 綜合皆 PASS。
+	if !(a.G1RetParticipation && a.G2RiskReduction && a.G3CalmarVsBH && a.G4Skill && a.G5Robustness && a.OverallPass) {
+		t.Fatalf("expected all gates PASS, got %+v", a)
+	}
+
+	// Arrange — 全敗情境:回撤跟 B&H 一樣大、無 Calmar 勝、無 Blend 雙贏。
+	bad := []WindowReport{
+		mkReport(0.05, 0.20, -0.40, -0.40, 0.30, false, false),
+		mkReport(0.04, 0.22, -0.45, -0.42, 0.28, false, false),
+	}
+	b := aggregate(bad)
+	if b.G2RiskReduction || b.G3CalmarVsBH || b.G4Skill || b.OverallPass {
+		t.Fatalf("expected risk/calmar/skill gates FAIL, got %+v", b)
+	}
+}
+
+func TestAggregate_EmptyReports(t *testing.T) {
+	// Arrange + Act
+	a := aggregate(nil)
+	// Assert — 不可 panic,視窗數 0。
+	if a.NWindows != 0 {
+		t.Fatalf("empty aggregate NWindows = %d, want 0", a.NWindows)
+	}
+}
+
+func TestEvaluateWindow_StrategyVsBenchmarks(t *testing.T) {
+	// Arrange — 升勢雙標的、含每月注資。
+	start := mustDate(t, "2019-01-01")
+	series := map[string]*stockSeries{
+		"A": seriesFrom(start, linRamp(500, 50, 150)),
+		"B": seriesFrom(start, linRamp(500, 30, 90)),
+	}
+	cfg := baseCfg("A", "B")
+	cfg.MonthlyContribution = 2500
+	allDates := collectDateUnion(series)
+
+	// Act
+	rep, err := evaluateWindow(cfg, series, allDates, allDates[0], allDates[len(allDates)-1])
+	if err != nil {
+		t.Fatalf("evaluateWindow: %v", err)
+	}
+
+	// Assert — 兩檔皆可交易、交易日數正確、B&H 幾乎滿倉、策略曝險 < B&H。
+	if rep.Universe != 2 {
+		t.Fatalf("universe = %d, want 2", rep.Universe)
+	}
+	if rep.TradeDays != len(allDates) {
+		t.Fatalf("trade days = %d, want %d", rep.TradeDays, len(allDates))
+	}
+	if rep.BH.AvgExp < 0.95 {
+		t.Fatalf("B&H exposure = %.3f, want ~1.0", rep.BH.AvgExp)
+	}
+	if rep.Strat.AvgExp >= rep.BH.AvgExp {
+		t.Fatalf("strategy exposure %.3f should be below B&H %.3f", rep.Strat.AvgExp, rep.BH.AvgExp)
+	}
+}
+
+func TestEvaluateFullSpan(t *testing.T) {
+	// Arrange
+	start := mustDate(t, "2019-01-01")
+	series := map[string]*stockSeries{
+		"A": seriesFrom(start, linRamp(400, 50, 150)),
+		"B": seriesFrom(start, linRamp(400, 30, 90)),
+	}
+	cfg := baseCfg("A", "B")
+
+	// Act
+	rep, err := EvaluateFullSpan(cfg, series)
+	if err != nil {
+		t.Fatalf("EvaluateFullSpan: %v", err)
+	}
+
+	// Assert — 起點 = 共同有效起點 (含 MA 暖身),終點 = 最後資料日。
+	cs, _ := commonSupportStart(cfg, series)
+	if !rep.Start.Equal(cs) {
+		t.Fatalf("full-span start = %s, want commonSupportStart %s", rep.Start.Format("2006-01-02"), cs.Format("2006-01-02"))
+	}
+}
+
+func TestWalkForwardOnSeries_FlatSeriesNoTrades(t *testing.T) {
+	// Arrange — 全平盤:策略零成交。
+	start := mustDate(t, "2019-01-01")
+	series := map[string]*stockSeries{
+		"A": seriesFrom(start, constPrices(800, 100)),
+		"B": seriesFrom(start, constPrices(800, 100)),
+	}
+	cfg := baseCfg("A", "B")
 	p := WalkForwardParams{WindowMonths: 12, StepMonths: 6, MinTradeDays: 100}
+
+	// Act
 	reports, agg, err := walkForwardOnSeries(cfg, series, p)
 	if err != nil {
-		t.Fatalf("walkForwardOnSeries err: %v", err)
+		t.Fatalf("walkForwardOnSeries: %v", err)
 	}
+
+	// Assert — 有視窗、且每個視窗策略零成交、回撤 0。
 	if agg.NWindows == 0 || len(reports) == 0 {
 		t.Fatalf("expected >=1 window")
 	}
-	// 策略零成交 -> 曲線平盤 -> MaxDD 0、Calmar 非有限;不應 panic 已由跑到這裡證明。
 	for _, r := range reports {
-		if r.Buys != 0 || r.Sells != 0 {
-			t.Fatalf("flat series should yield no trades, got buys=%d sells=%d", r.Buys, r.Sells)
+		if r.Buys != 0 || r.Sells != 0 || r.Strat.MaxDD != 0 {
+			t.Fatalf("flat series should not trade, got buys=%d sells=%d mdd=%v", r.Buys, r.Sells, r.Strat.MaxDD)
 		}
-		if r.Strat.MaxDD != 0 {
-			t.Fatalf("flat strat MaxDD = %v, want 0", r.Strat.MaxDD)
-		}
+	}
+}
+
+func TestWalkForwardOnSeries_AppliesDefaultParams(t *testing.T) {
+	// Arrange — 傳零值參數,應套用預設 (24 月 / 3 月 / 200 日)。
+	start := mustDate(t, "2019-01-01")
+	series := map[string]*stockSeries{
+		"A": seriesFrom(start, constPrices(900, 100)),
+		"B": seriesFrom(start, constPrices(900, 100)),
+	}
+	cfg := baseCfg("A", "B")
+
+	// Act
+	_, agg, err := walkForwardOnSeries(cfg, series, WalkForwardParams{})
+
+	// Assert — 預設參數下仍能切出視窗。
+	if err != nil || agg.NWindows == 0 {
+		t.Fatalf("default params should yield windows, got NWindows=%d err=%v", agg.NWindows, err)
+	}
+}
+
+func TestWalkForwardOnSeries_InsufficientDataErrors(t *testing.T) {
+	// Arrange — 資料過短,湊不出任何視窗。
+	cfg := baseCfg("A")
+	series := map[string]*stockSeries{"A": seriesFrom(mustDate(t, "2019-01-01"), constPrices(60, 100))}
+
+	// Act + Assert
+	if _, _, err := walkForwardOnSeries(cfg, series, WalkForwardParams{WindowMonths: 24, StepMonths: 3, MinTradeDays: 200}); err == nil {
+		t.Fatalf("expected error when no window can be formed")
+	}
+}
+
+func TestWalkForwardOnSeries_RejectsNonBaseline(t *testing.T) {
+	// Arrange
+	cfg := baseCfg("A")
+	cfg.ScalingStrategy = "X"
+	series := map[string]*stockSeries{"A": seriesFrom(mustDate(t, "2019-01-01"), constPrices(400, 100))}
+
+	// Act + Assert
+	if _, _, err := walkForwardOnSeries(cfg, series, WalkForwardParams{}); err == nil {
+		t.Fatalf("expected error for non-Baseline strategy")
 	}
 }

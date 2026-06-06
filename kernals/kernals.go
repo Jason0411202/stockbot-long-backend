@@ -33,7 +33,7 @@ func runBacktestMode(appCtx *app_context.AppContext) {
 		appCtx.Log.Error("回測模式出錯,UpdataDatebase 錯誤:", err)
 		return
 	}
-	result, err := RunBacktest(appCtx, appCtx.Cfg.BackTestingMonths)
+	result, err := RunBacktest(appCtx)
 	if err != nil {
 		appCtx.Log.Error("回測執行錯誤:", err)
 		return

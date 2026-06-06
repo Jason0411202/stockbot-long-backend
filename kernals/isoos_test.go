@@ -9,10 +9,10 @@ import (
 func TestEvaluateRollingOOS_AnchorsAndFolds(t *testing.T) {
 	start := time.Date(2019, 1, 1, 0, 0, 0, 0, time.UTC)
 	series := map[string]*stockSeries{
-		"A": buildSeries(start, constPrices(1500, 100)),
-		"B": buildSeries(start, constPrices(1500, 100)),
+		"A": seriesFrom(start, constPrices(1500, 100)),
+		"B": seriesFrom(start, constPrices(1500, 100)),
 	}
-	cfg := wfCfg([]string{"A", "B"})
+	cfg := baseCfg("A", "B")
 	p := WalkForwardParams{WindowMonths: 12, StepMonths: 3, MinTradeDays: 100}
 
 	rep, err := EvaluateRollingOOS(cfg, series, p, 18, 6)

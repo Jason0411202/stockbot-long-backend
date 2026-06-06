@@ -160,21 +160,8 @@ func reorderTime(src []time.Time, idxs []int) []time.Time {
 	return out
 }
 
-// EvaluateWalkForward 是 walkForwardOnSeries 的匯出包裝,供 cmd/optimize 對給定 cfg 取得 scorecard。
+// EvaluateWalkForward 是 walkForwardOnSeries 的匯出包裝,供 cmd 對給定 cfg 取得 scorecard。
 // 回傳跨視窗彙整 (AggregateReport) 與每視窗明細。
 func EvaluateWalkForward(cfg *config.Config, series map[string]*stockSeries, p WalkForwardParams) ([]WindowReport, AggregateReport, error) {
 	return walkForwardOnSeries(cfg, series, p)
-}
-
-// BacktestStats 對整段資料跑一次回測,回傳累計事件統計 (含各賣出原因的觸發次數),供診斷用。
-func BacktestStats(cfg *config.Config, series map[string]*stockSeries) (EngineStats, error) {
-	allDates := collectDateUnion(series)
-	if len(allDates) == 0 {
-		return EngineStats{}, fmt.Errorf("無任何日期可供回測")
-	}
-	engine := NewEngine(cfg)
-	if err := engine.ProcessDates(allDates, series, noopExecutor{}); err != nil {
-		return EngineStats{}, err
-	}
-	return engine.Stats(), nil
 }
