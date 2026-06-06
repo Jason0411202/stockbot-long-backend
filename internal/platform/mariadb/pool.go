@@ -25,7 +25,11 @@ const defaultSchema = "StockLongData"
 //   - 若未指定 DBName,補上 "StockLongData" → 連線池一律 scope 到該 schema,
 //     消除舊程式每次呼叫的 `USE StockLongData`。
 //   - 設定 multiStatements=true → 讓內嵌的多語句 schema.sql 能一次執行。
-//   - 設定 ParseTime=true → DATE/DATETIME 欄位可直接掃描成 time.Time。
+//
+// 刻意「不」設定 ParseTime:舊程式以 raw sql.Open 讀取,DATE/DATETIME 欄位以原始字串
+// 回傳 (repository 全部掃描成 string)。若開啟 ParseTime,DATE 欄位會被轉成 time.Time 再
+// 格式化為 RFC3339 ("2024-01-02T00:00:00Z"),會改變 /api/get_realized_gains_losses 的
+// buy_date/sell_date wire 格式 —— 故維持與舊行為一致,不開啟。
 //
 // 既有的 DB_DSN 值 (不論是否已含這些參數) 都會被保留並正確化。
 func OpenPool(dsn string) (*sql.DB, error) {
@@ -44,7 +48,6 @@ func OpenPool(dsn string) (*sql.DB, error) {
 		cfg.Params = make(map[string]string)
 	}
 	cfg.Params["multiStatements"] = "true"
-	cfg.ParseTime = true
 	dsn = cfg.FormatDSN()
 
 	db, err := sql.Open("mysql", dsn)
