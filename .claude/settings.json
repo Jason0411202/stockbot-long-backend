@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(go test *)",
-      "Bash(go tool *)"
+      "Bash(go tool *)",
+      "PowerShell(go test -v ./internal/client/discord/)"
     ]
   }
 }
