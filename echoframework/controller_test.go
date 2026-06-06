@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/Jason0411202/stockbot-long-backend/app_context"
-	"github.com/Jason0411202/stockbot-long-backend/config"
+	"github.com/Jason0411202/stockbot-long-backend/internal/config"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/labstack/echo/v4"

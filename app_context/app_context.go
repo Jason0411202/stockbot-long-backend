@@ -2,8 +2,8 @@ package app_context
 
 import (
 	"database/sql"
-	"github.com/Jason0411202/stockbot-long-backend/config"
-	"github.com/Jason0411202/stockbot-long-backend/logs"
+	"github.com/Jason0411202/stockbot-long-backend/internal/config"
+	"github.com/Jason0411202/stockbot-long-backend/internal/logging"
 	"os"
 
 	"github.com/bwmarrin/discordgo"
@@ -26,7 +26,7 @@ func configPath() string {
 }
 
 func NewAppContext() *AppContext {
-	log := logs.InitLogger()
+	log := logging.InitLogger()
 
 	cfg, err := config.Load(configPath())
 	if err != nil {

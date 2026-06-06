@@ -3,7 +3,7 @@ package kernals
 import (
 	"fmt"
 	"github.com/Jason0411202/stockbot-long-backend/app_context"
-	"github.com/Jason0411202/stockbot-long-backend/config"
+	"github.com/Jason0411202/stockbot-long-backend/internal/config"
 	"sort"
 	"time"
 )

@@ -14,7 +14,7 @@ import (
 	"math"
 	"os"
 
-	"github.com/Jason0411202/stockbot-long-backend/config"
+	"github.com/Jason0411202/stockbot-long-backend/internal/config"
 	"github.com/Jason0411202/stockbot-long-backend/kernals"
 )
 
