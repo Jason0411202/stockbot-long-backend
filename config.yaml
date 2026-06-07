@@ -1,42 +1,75 @@
 # 不私密的超參數 — 可被 commit 進 git
 # 私密設定 (DB_DSN, DISCORD_BOT_TOKEN, DISCORD_BOT_CHANNELID) 仍放在 .env
+#
+# 本檔為「牛熊 regime 感知逢低加碼」最終策略 (詳見 docs/optimization/BEST-STRATEGY.md)。
+# 每個旋鈕都經 walk-forward 掃描驗證採納;證實無效的旋鈕已從程式碼移除。
 
 # 追蹤的股票清單，每一檔都有各自獨立的冷卻期
 track_stocks:
-  - "006208"
+  - "00631L"
   - "00830"
 
-# 加減碼策略，目前僅支援 Baseline
 scaling_strategy: Baseline
 
-# 加減碼金額乘數 (隨本金擴大時用來等比例放大買賣金額)
-buy_and_sell_multiplier: 2.0
+# 決策成交價基準:open = 當天開盤即時決策 (指標只看到前一交易日收盤,無未來資訊);
+# close = 盤後用收盤價決策 (舊行為)。線上與回測共用此基準,使回測忠實反映線上行為。
+decision_price_basis: open
 
 # 資料回補相關
 max_back_months: 1
 init_db_back_months: 60
-
-# 回測模式：若 > 0 則開啟並模擬「往前 N 個日曆月」；-1 代表關閉
-# 上限 = init_db_back_months;若超過會被 config sanity check 擋下
 back_testing_months: 60
 
-# 單檔股票買/賣後的冷卻天數 (買進 14 天內不會再買進同檔股票)
-cooldown_days: 14
-
-# Baseline 策略的加碼級距 (依序檢查，第一個符合條件的 tier 決定買入金額)
-# 判斷值 = (今日股價 - 當前持有最高買入價) / 當前持有最高買入價
-baseline_buy_tiers:
-  - { above: -0.1, amount: 500 }
-  - { above: -0.2, amount: 750 }
-  - { above: -0.3, amount: 1300 }
-  - { above: -0.4, amount: 2000 }
-# 若沒有任何 tier 符合 (股價相對最高買入價跌超過 40%)，採用以下金額
-baseline_buy_fallback_amount: 3000
-
-# 當 "今日股價 / 持有最低買入價 - 1" 超過下列閾值時，觸發賣出，
-# 賣出目標金額即為 baseline_sell_amount (套用 buy_and_sell_multiplier)。
-baseline_sell_threshold: 1.0
-baseline_sell_amount: 10000
-
-# 回測起始現金 (只影響回測最終「持有現金」指標)
+# 起始現金
 initial_cash: 100000
+
+# ── 問題設定:每月解鎖一筆新可用資金 (定期定額注資) ──
+# 除期初現金外,回測/評估在「每個日曆月第一個交易日」再注入這麼多元 (起始月不注入)。
+# 報酬改用資金加權 (XIRR/MWR)、回撤用 NAV 單位淨值。0 = 關閉,退化回「期初一次性資金」舊行為。
+monthly_contribution: 2500
+
+# ── 進場均線 & 牛熊判定 ──────────────────────────────────────────────
+ma_window: 10              # 進場均線長度 (10 日)
+regime_method: ma_pos     # 牛熊判定:收盤 > regime_ma_window 日均線 → 牛市
+regime_ma_window: 85      # 牛熊分界 (開盤價基準重調:由 95 再縮短,補償開盤決策只看到前一日收盤的較慢翻空)
+
+# ── 買進冷卻 (每檔同股最短間隔, 牛熊皆 14 天) ──
+cooldown_days: 14         # 空頭冷卻
+bull_cooldown_days: 14    # 牛市冷卻 (與空頭同,規則最簡;實測 12 vs 14 差異在雜訊內)
+
+# ── 部位大小:全程「現金比例」買入 (idea-1;買剩餘現金的一定比例,不是固定金額) ──
+# 花現金的某個 % 在數學上永遠歸不了零 → 每個更深更便宜的跌點都還有錢買;
+# 也讓買入隨現金遞減自然減速,是把回撤壓在 ~21% 的主煞車,並根治「深跌沒銀彈」(深跌沒錢 79→0)。
+bull_buy_band: 0.05       # 牛市:收盤 < 10MA×1.05 即可買 (熊市維持嚴格 <10MA)
+buy_frac_basis: cash      # 買入基準 = 當前剩餘現金
+bull_buy_frac: 0.20       # 牛市每次買「現金的 20%」(2x 槓桿調校:由 25% 略降,降低槓桿曝險回撤)
+bear_buy_frac: 0.02       # 熊市每次買「現金的 2% × 跌幅深度權重」(取代固定幾何 tier 金額)
+
+# ── 冷卻:打破冷卻額度 (idea-2;滾動視窗;撿回被 14 天冷卻錯過的深跌買點) ──
+cooldown_break_budget: 2        # 每檔「近 365 日內最多 2 次」可無視冷卻提前買入
+cooldown_break_window_days: 365 # 滾動視窗 (日曆日≈252 交易日≈1 年);回測/連續/上線三模式語意一致
+
+# ── 熊市加碼深度:決定「跌越深買越大比例」的權重曲線 ──
+buy_depth_basis: peak     # 深度基準:距近 252 日最高點的回撤 (比相對自己成本更客觀)
+buy_tier_ratio: 2.5       # 深度權重 = ratio^命中tier索引 → 1/2.5/6.25/15.6/39 (跌越深、現金比例放越大)
+baseline_buy_tiers:       # 深度分界 (-10%/-20%/-30%/-40%);命中索引決定 buy_tier_ratio^i 權重
+  - { above: -0.1 }
+  - { above: -0.2 }
+  - { above: -0.3 }
+  - { above: -0.4 }
+
+# ── 賣出:獲利了結 (分批) + 熊市移動停利 ──
+baseline_sell_threshold: 1.0   # 持倉最低成本獲利 ≥ 100% 觸發獲利了結 (僅多頭;實測空頭從未達成翻倍)
+sell_frac_of_position: 0.33    # 獲利了結改賣「當前持股的 33%」(分批出場,取代固定金額)
+trail_stop_bear: 0.08          # 熊市移動停利:從持有期間峰值回落 8% 全數出場 (開盤價基準重調:由 10% 收緊,補回較慢翻空的回撤保護)
+trail_min_gain: 0.10           # 移動停利在曾獲利 ≥ 10% 後即武裝 (2x 調校:由 20% 降低,更早鎖住獲利)
+
+# ── Per-stock 量身訂做 (僅採用經 IS/OOS 驗證、樣本外不退化的覆寫) ──
+# 上面的旗標為「共用值」(套用 00830);個股可在此覆寫。
+# 00631L (2x 槓桿) 用更短的 regime MA (60 vs 共用 85):槓桿大跌更兇,更快翻空保護。
+#   開盤價基準重調 (decision_price_basis=open) 後重新掃描確認:reg{80~85}×bull{0.18~0.22}×trail 0.08 為一片皆過五關的平台 (非單點),
+#   00631L 維持覆寫 60 在此平台 OOS 保留 91~100% (不退化) → 採用;r631=50 OOS 掉到 ~58% (過擬合) 被護欄擋下。
+# 00830 (1x) 不覆寫:沿用共用 85。
+stock_overrides:
+  "00631L":
+    regime_ma_window: 60

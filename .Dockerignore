@@ -1,9 +1,0 @@
-.env
-cert.pem
-privkey.pem
-.git
-.github
-*.md
-tmp/
-deploy/
-docker-compose.yml

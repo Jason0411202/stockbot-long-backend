@@ -1,3 +1,13 @@
 .env
 cert.pem
 privkey.pem
+
+# 本機回測資料快取 (由 cmd/fetch_data 產生,不入庫)
+data/
+# 根目錄誤建的編譯產物 (go run / go build 殘留;bin/ 下的 .exe 不受影響)
+/*.exe
+
+# 測試覆蓋率產物
+cover.out
+coverage.out
+*.coverprofile
