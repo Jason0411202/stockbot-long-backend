@@ -39,8 +39,6 @@ curl http://localhost:8080/metrics
 > **網域 + HTTPS**：先把 DNS A record 指到本機並對外開放 80/443，於 `.env` 設
 > `SITE_ADDRESS=your-domain.com` 與 `ACME_EMAIL`，Caddy 會自動向 Let's Encrypt 申請憑證。
 >
-> **GHCR image 為私有時**：先 `docker login ghcr.io`（用具 `read:packages` 的 PAT）再 `docker compose pull`。
->
 > 完整部署、維運命令與 HTTPS 細節見 [docs/deployment.md](docs/deployment.md)。
 
 ## 文件導覽

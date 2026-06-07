@@ -18,8 +18,7 @@ curl -fsSL  https://raw.githubusercontent.com/Jason0411202/stockbot-long-backend
 
 `.env.example` 預設可在本機直接使用。正式環境請至少調整 DB 密碼、Discord token、`SITE_ADDRESS` 與 Caddy port。
 
-> - GHCR package 若為私有，需先 `docker login ghcr.io`（使用具 `read:packages` 的 PAT）。
-> - 策略參數（`config.yaml`）已隨 image 版本固定；要調整請改 repo 的 `config.yaml` 重新發版，或在 `app` service 掛載一份覆寫。
+> 策略參數（`config.yaml`）已隨 image 版本固定；要調整請改 repo 的 `config.yaml` 重新發版，或在 `app` service 掛載一份覆寫。
 
 ## 主要環境變數
 
