@@ -1,3 +1,5 @@
+# docker-compose.yml 以 GHCR app image 在正式機部署 MariaDB + app + Caddy。
+# Caddyfile、init.sql 以 inline configs 內嵌,config.yaml 已烤進 image;正式機只需本檔 + .env。
 services:
   mariadb:
     image: mariadb:11.4
@@ -10,7 +12,9 @@ services:
       MARIADB_PASSWORD: ${MARIADB_PASSWORD:-examplepassword}
     volumes:
       - mariadb_data:/var/lib/mysql
-      - ./deploy/mariadb:/docker-entrypoint-initdb.d:ro
+    configs:
+      - source: db_init
+        target: /docker-entrypoint-initdb.d/init.sql
     healthcheck:
       test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
       interval: 5s
@@ -21,10 +25,7 @@ services:
       - stockbot
 
   app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: stockbot-long-backend:local
+    image: ghcr.io/jason0411202/stockbot-long-backend:latest
     container_name: stockbot-app
     restart: unless-stopped
     depends_on:
@@ -34,9 +35,6 @@ services:
       DB_DSN: ${MARIADB_USER:-exampleuser}:${MARIADB_PASSWORD:-examplepassword}@tcp(mariadb:3306)/?multiStatements=true
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
       DISCORD_BOT_CHANNELID: ${DISCORD_BOT_CHANNELID:-}
-      CONFIG_PATH: /app/config.yaml
-    volumes:
-      - ./config.yaml:/app/config.yaml:ro
     expose:
       - "8080"
     networks:
@@ -48,19 +46,39 @@ services:
     restart: unless-stopped
     depends_on:
       - app
-    environment:
-      # 兩個變數都要保證非空字串,否則 Caddyfile 會因為 directive 沒參數而 parse error。
-      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
-      ACME_EMAIL: ${ACME_EMAIL:-admin@localhost}
     ports:
       - "${CADDY_HTTP_PORT:-80}:80"
       - "${CADDY_HTTPS_PORT:-443}:443"
+    configs:
+      - source: caddyfile
+        target: /etc/caddy/Caddyfile
     volumes:
-      - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
     networks:
       - stockbot
+
+configs:
+  # Caddy 設定;SITE_ADDRESS=:80 為純 HTTP,設網域則自動 HTTPS (值由 compose 從 .env 代入)。
+  caddyfile:
+    content: |
+      {
+          email ${ACME_EMAIL:-admin@localhost}
+      }
+
+      ${SITE_ADDRESS:-:80} {
+          reverse_proxy app:8080
+          encode gzip
+          log {
+              output stdout
+              format console
+          }
+      }
+  # MariaDB 首次初始化時授權 app 帳號 (帳號隨 .env 的 MARIADB_USER 代換)。
+  db_init:
+    content: |
+      GRANT ALL PRIVILEGES ON *.* TO '${MARIADB_USER:-exampleuser}'@'%';
+      FLUSH PRIVILEGES;
 
 volumes:
   mariadb_data:

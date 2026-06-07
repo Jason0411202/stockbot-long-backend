@@ -22,6 +22,9 @@ RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /app
 COPY --from=builder /app/server .
 
+# 將策略設定 config.yaml 烤進 image，部署機器不必另外掛載。
+COPY --from=builder /app/config.yaml .
+
 # 對外提供 Echo HTTP server port。
 EXPOSE 8080
 ENTRYPOINT ["./server"]
