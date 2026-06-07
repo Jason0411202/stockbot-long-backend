@@ -79,6 +79,11 @@ type Config struct {
 	TrailStopBear      float64 `yaml:"trail_stop_bear"`
 	TrailMinGain       float64 `yaml:"trail_min_gain"`
 
+	// TrailReentryCooldownDays>0:移動停利出場後,該檔在此日曆日內暫停逢低買入,打斷空頭「停損→隔日又逢低買→再停損」
+	//   的 whipsaw 循環 (跨過「反彈→再跌」那一段震盪再進場)。<=0 (預設) = 不暫停,行為與舊版一致。
+	//   ⚠️ 與 peakSinceHold 同屬引擎記憶體狀態、未持久化;上線重啟靠 catch-up 回放重建,故 init_db_back_months 須夠長。
+	TrailReentryCooldownDays int `yaml:"trail_reentry_cooldown_days"`
+
 	// ── 部位大小:買入「現金 / 權益基準的固定比例」(像獲利了結賣固定比例那樣) ──
 	//   BuyFracBasis: "cash" = 比例基準為現金 (定版);"equity" = 比例基準為總權益。
 	//   BullBuyFrac:牛市買入金額 = BuyFracBasis 基準 × BullBuyFrac。
@@ -105,18 +110,19 @@ type Config struct {
 
 // StockParams 為單一個股可覆寫的策略旋鈕 (指標型;nil = 繼承共用值,YAML 省略即 nil)。
 type StockParams struct {
-	MAWindow              *int     `yaml:"ma_window"`               // 覆寫進場均線長度
-	RegimeMAWindow        *int     `yaml:"regime_ma_window"`        // 覆寫牛熊判定均線長度
-	BullBuyBand           *float64 `yaml:"bull_buy_band"`           // 覆寫牛市買入帶寬
-	CooldownDays          *int     `yaml:"cooldown_days"`           // 覆寫冷卻天數
-	BullCooldownDays      *int     `yaml:"bull_cooldown_days"`      // 覆寫牛市冷卻天數
-	BullBuyFrac           *float64 `yaml:"bull_buy_frac"`           // 覆寫牛市買入現金比例
-	BearBuyFrac           *float64 `yaml:"bear_buy_frac"`           // 覆寫熊市買入現金比例
-	BuyTierRatio          *float64 `yaml:"buy_tier_ratio"`          // 覆寫加碼幾何權重底數
-	BaselineSellThreshold *float64 `yaml:"baseline_sell_threshold"` // 覆寫獲利了結觸發門檻
-	SellFracOfPosition    *float64 `yaml:"sell_frac_of_position"`   // 覆寫獲利了結賣出比例
-	TrailStopBear         *float64 `yaml:"trail_stop_bear"`         // 覆寫熊市移動停利回撤幅度
-	TrailMinGain          *float64 `yaml:"trail_min_gain"`          // 覆寫移動停利啟動最低獲利門檻
+	MAWindow                 *int     `yaml:"ma_window"`                   // 覆寫進場均線長度
+	RegimeMAWindow           *int     `yaml:"regime_ma_window"`            // 覆寫牛熊判定均線長度
+	BullBuyBand              *float64 `yaml:"bull_buy_band"`               // 覆寫牛市買入帶寬
+	CooldownDays             *int     `yaml:"cooldown_days"`               // 覆寫冷卻天數
+	BullCooldownDays         *int     `yaml:"bull_cooldown_days"`          // 覆寫牛市冷卻天數
+	BullBuyFrac              *float64 `yaml:"bull_buy_frac"`               // 覆寫牛市買入現金比例
+	BearBuyFrac              *float64 `yaml:"bear_buy_frac"`               // 覆寫熊市買入現金比例
+	BuyTierRatio             *float64 `yaml:"buy_tier_ratio"`              // 覆寫加碼幾何權重底數
+	BaselineSellThreshold    *float64 `yaml:"baseline_sell_threshold"`     // 覆寫獲利了結觸發門檻
+	SellFracOfPosition       *float64 `yaml:"sell_frac_of_position"`       // 覆寫獲利了結賣出比例
+	TrailStopBear            *float64 `yaml:"trail_stop_bear"`             // 覆寫熊市移動停利回撤幅度
+	TrailMinGain             *float64 `yaml:"trail_min_gain"`              // 覆寫移動停利啟動最低獲利門檻
+	TrailReentryCooldownDays *int     `yaml:"trail_reentry_cooldown_days"` // 覆寫移動停利出場後的暫停買入天數
 }
 
 // ForStock 回傳「套用該股 override 後」的有效設定。無 override 時回傳原指標 (零成本)。
@@ -162,6 +168,9 @@ func (c *Config) ForStock(stockID string) *Config {
 	}
 	if ov.TrailMinGain != nil {
 		cp.TrailMinGain = *ov.TrailMinGain
+	}
+	if ov.TrailReentryCooldownDays != nil {
+		cp.TrailReentryCooldownDays = *ov.TrailReentryCooldownDays
 	}
 	return &cp
 }

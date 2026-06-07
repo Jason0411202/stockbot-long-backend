@@ -9,6 +9,13 @@
 > 落在 reg{80~85}×trail 0.08 一整片皆通過的平台 (非單點)。結果:全期 Calmar **1.34**、wf 四關全過 / Calmar 勝率 **100%** /
 > 真擇時 **90.5%**、**OOS 保留 93%「穩健」**。**下方第一節績效表與規則細節為更早的收盤基準歷史值;現行值一律以 config.yaml + `go run ./cmd/eval_csv` 為準。**
 >
+> 🛡️ **2026-06 賣出規則調查 → 採納「00631L 移動停利再進場冷卻 42 日」(`trail_reentry_cooldown_days: 42`):**
+> 逐筆稽核發現移動停利在空頭反覆 whipsaw (停損→又接刀→再停損);市場結構實證熊市 62~64% 為「震盪向下」(段內 ≥8% 反彈)。
+> 掃過 5 類賣出修法 (連續確認 / 分批出場 / 平均成本武裝 / 賣反彈〔多頭·空頭·不分〕/ 獲利了結門檻與 per-lot),
+> **唯一通過全部護欄的是「停損後暫停買入 42 日」**——它不賭續跌 vs 反彈 (實證約 50/50),而是出場後跳過「反彈→再跌」震盪再進場。
+> 只套 00631L (2x):全期 Calmar **1.34→1.79**、MWR +40.5→**+45.9%**、回撤 −30.2→**−25.7%**、18/24/30 月三視窗回撤一致下降、
+> **OOS 保留 ~153%「穩健」**、四關全過。全股套用 30 月視窗報酬退化 (過擬合)、00830(1x) 幾乎無感 → 不採用。其餘修法實證皆不如現狀,已移除。
+>
 > ⚠️ **本文件是 006208(1x 大盤 ETF)+ 00830、「每月解鎖新資金」設定下的調校記錄與基準** (評估用資金加權報酬 MWR/XIRR
 > + NAV 單位淨值回撤,見 [../backtest.md](../backtest.md))。下方第一節績效表為更早「期初一次性資金、無注資」的歷史值。
 > 後續經 Task 2 把 `bull_buy_frac` 上調到 0.25 解決 1x 注資情境的「現金尾巴」(利用率 74%→80%)。
@@ -122,6 +129,11 @@ baseline_sell_threshold: 1.0 # +100% 獲利了結 (僅多頭觸發)
 sell_frac_of_position: 0.33  # 獲利了結賣當前持股 33% (分批)
 trail_stop_bear: 0.08        # 熊市移動停利 (開盤基準重調:由 0.10 收緊,補回較慢翻空的回撤保護)
 trail_min_gain: 0.10         # 賺過 10% 才武裝 (2x 調校:由 0.20 降低,更早鎖利)
+
+stock_overrides:             # 僅採用 IS/OOS 不退化的 per-stock 覆寫
+  "00631L":
+    regime_ma_window: 60              # 2x 槓桿:更短 regime MA,更快翻空保護
+    trail_reentry_cooldown_days: 42   # 移動停利出場後暫停買入 ≈42 日,打斷空頭 whipsaw (Calmar 1.34→1.79)
 ```
 
 驗證:`go run ./cmd/fetch_data` 抓資料,再 `go run ./cmd/eval_csv` 看 scorecard。
@@ -158,4 +170,10 @@ avg/per-lot 基準、牛熊統一進場 band、牛熊判定加遲滯緩衝、RSI
 深跌無視冷卻 (big_dip_bypass,回撤災難 −30%)、冷卻隨跌幅縮短 (dip_cooldown_scale)、買入金額上下限夾取
 (buy_amount_floor/cap)、跳過淺跌 (bear_min_dip,效果不如現金比例)、**保留乾火藥 dry-powder (reserve_frac,
 兩度實測無效:釋放後仍被固定 tier 抄光,唯有自我調節的現金比例有效)**。
+
+**2026-06 賣出規則調查實測無效、已移除的旋鈕** (開盤基準+reentry 年代重測;唯一採納為上述 reentry cooldown):
+移動停利「連續熊市確認」(trail_confirm_days,延遲出場 = 放掉崩盤保護,回撤變大)、移動停利分批出場
+(trail_sell_frac,Calmar/OOS 退化、交易爆量)、移動停利改平均成本武裝 (trail_arm_basis=avg,武裝變晚→回撤 −42%)、
+熊市/多頭/不分「賣反彈」(bear_rally_sell,取代停損→回撤 −49% 無崩盤保護;並存→過度減碼)、
+獲利了結門檻掃描 (降門檻剁贏家、升門檻≈關閉皆不優於 1.0)、獲利了結 per-lot 出場 (與賣 33% 整倉無顯著差異)。
 詳見 [optimization-directions-100.md](optimization-directions-100.md)。

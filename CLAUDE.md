@@ -80,8 +80,8 @@ cmd/*            程式進入點（server 與各 CLI 工具）
   **前一交易日收盤**（無未來資訊）；線上經 TWSE MIS 取即時開盤、回測/CSV 用歷史 `open_price`，兩邊同基準。
   帳本成交價由引擎決策價寫入（`PortfolioService.BuyShares/SellShares` 收 `price` 參數），**不可**改回
   `GetPriceAsOf` 查 DB（開盤決策當下 DB 尚無當日 K 棒，會誤拿 T-1 收盤）。現行參數為**開盤基準專調**
-  （`regime_ma_window 85`、`trail_stop_bear 0.08`，00631L override 維持 60）；改回收盤基準或改決策基準
-  都需重新以 `cmd/eval_csv` 跑 walk-forward / IS-OOS 調參並重釘指紋。
+  （`regime_ma_window 85`、`trail_stop_bear 0.08`，00631L override `regime_ma_window 60` + `trail_reentry_cooldown_days 42`）；
+  改回收盤基準或改決策基準都需重新以 `cmd/eval_csv` 跑 walk-forward / IS-OOS 調參並重釘指紋。
 - **API wire keys 不可變。** `internal/dto` 的 JSON tag 是前端既有契約（含唯一的 camelCase
   `todayClosePrice`），不得更名。
 - **realized-P&L 端點的日期格式。** DSN 不得加 `parseTime`；`RealizedGainsLosses` 的 `DATE` 欄位
@@ -89,7 +89,10 @@ cmd/*            程式進入點（server 與各 CLI 工具）
 - **策略單一來源。** 目前只有 `Baseline` 現金比例策略；舊的固定金額金字塔已整組移除。
   所有可調參數集中在 `config.yaml`，不要在程式碼硬編策略數字。
 - **per-stock override 採用準則。** `config.yaml` 的 `stock_overrides` 僅採用通過 IS/OOS 樣本內外
-  驗證、樣本外不退化的覆寫（現行只有 `00631L: regime_ma_window 60`）。
+  驗證、樣本外不退化的覆寫（現行 `00631L: regime_ma_window 60` + `trail_reentry_cooldown_days 42`；後者僅套 2x 槓桿股，
+  全股套用會過擬合）。
+- **引擎記憶體狀態未持久化。** `peakSinceHold`、`lastTrailSell`（移動停利再進場冷卻用）等為純記憶體狀態，
+  不寫入 DB；上線重啟靠 catch-up 回放重建，故 `init_db_back_months` 須涵蓋足夠回看（≥ 冷卻天數）才能正確還原。
 
 ## 程式碼與註解規範
 

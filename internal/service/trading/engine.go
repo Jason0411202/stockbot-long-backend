@@ -57,6 +57,7 @@ type Engine struct {
 	lastBuy       map[string]time.Time
 	peakSinceHold map[string]float64     // 持倉期間最高收盤 (移動停利用);全出後歸零
 	breakDates    map[string][]time.Time // 每檔歷次「動用打破冷卻額度」的日期 (滾動視窗計數用)
+	lastTrailSell map[string]time.Time   // 每檔最後一次移動停利出場日 (出場後暫停買入用);未持久化,重啟靠 catch-up 回放重建
 
 	totalBuys   int
 	totalSells  int
@@ -86,6 +87,7 @@ func NewEngine(cfg *config.Config) *Engine {
 		lastBuy:       make(map[string]time.Time, len(cfg.TrackStocks)),
 		peakSinceHold: make(map[string]float64, len(cfg.TrackStocks)),
 		breakDates:    make(map[string][]time.Time, len(cfg.TrackStocks)),
+		lastTrailSell: make(map[string]time.Time, len(cfg.TrackStocks)),
 	}
 }
 
@@ -289,9 +291,19 @@ func (e *Engine) processStock(stockID string, today time.Time, decisionPrice flo
 	if eff.CooldownBreakBudget > 0 {
 		snap.CooldownBreaksLeft = eff.CooldownBreakBudget - e.breaksInWindow(eff, stockID, today)
 	}
-	if buy := DecideBuy(eff, snap); buy.Should {
-		if err := e.applyBuy(stockID, today, buy, exec); err != nil {
-			return err
+	// 移動停利出場後的「暫停買入」閘:避免空頭中「停損→隔日又逢低買→再停損」的 whipsaw 循環 (zero-value 不暫停)。
+	reentryBlocked := false
+	if eff.TrailReentryCooldownDays > 0 {
+		if ts, ok := e.lastTrailSell[stockID]; ok &&
+			today.Sub(ts) < time.Duration(eff.TrailReentryCooldownDays)*24*time.Hour {
+			reentryBlocked = true
+		}
+	}
+	if !reentryBlocked {
+		if buy := DecideBuy(eff, snap); buy.Should {
+			if err := e.applyBuy(stockID, today, buy, exec); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -507,6 +519,7 @@ func (e *Engine) applySell(stockID string, today time.Time, intent SellIntent, e
 	if soldShares > 0 {
 		if intent.Reason == "trail" {
 			e.trailSells++
+			e.lastTrailSell[stockID] = today // 記錄出場日,供「暫停買入」閘判定
 		} else {
 			e.profitSells++
 		}
