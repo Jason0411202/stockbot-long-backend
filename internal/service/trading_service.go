@@ -34,10 +34,11 @@ type TradingService struct {
 	log       *logrus.Logger
 }
 
-// BotState 鍵值常數，對應跨重啟持久化的水位線與現金欄位。
+// BotState 鍵值常數，對應跨重啟持久化的水位線、現金與累計注資欄位。
 const (
-	stateKeyWatermark = "last_processed_date"
-	stateKeyCash      = "current_cash"
+	stateKeyWatermark        = "last_processed_date"
+	stateKeyCash             = "current_cash"
+	stateKeyTotalContributed = "total_contributed"
 )
 
 // dateLayout / datetimeLayout 是 seed 路徑需相容的兩種日期字串格式
@@ -232,19 +233,35 @@ func (s *TradingService) CatchUp(ctx context.Context, series map[string]*trading
 		catchupDates[0].Format(dateLayout),
 		catchupDates[len(catchupDates)-1].Format(dateLayout))
 
-	// 使用靜默 executor 回放（寫入 DB 但不發 Discord 通知）。
+	// 使用靜默 executor 回放（寫入 DB 但不發 Discord 通知）;每月第一個交易日先注入定額資金。
+	// 注資排程以 backtest.ContributionDue 為單一事實來源,prev 起始為水位線 (首次啟動為零值,故起始日不注資),
+	// 與回測 ContributionAmounts 對同一段交易日序列逐日完全一致,使線上首跑帳本忠實重現回測情境。
 	silent := &tradingExecutor{svc: s, ctx: ctx, notify: false}
-	if err := s.engine.ProcessDates(catchupDates, series, silent); err != nil {
-		return fmt.Errorf("ProcessDates: %w", err)
+	prev := watermark
+	runContrib := 0.0
+	for _, d := range catchupDates {
+		if c := backtest.ContributionDue(prev, d, s.cfg.MonthlyContribution); c > 0 {
+			s.engine.AddCash(c)
+			runContrib += c
+		}
+		if err := s.engine.ProcessDay(d, series, silent); err != nil {
+			return fmt.Errorf("ProcessDay(%s): %w", d.Format(dateLayout), err)
+		}
+		prev = d
 	}
 
-	// 持久化回放後的水位線與現金。
+	// 持久化回放後的水位線、現金與本次新增的累計注資。
 	newWatermark := catchupDates[len(catchupDates)-1]
 	if err := s.saveWatermark(ctx, newWatermark); err != nil {
 		s.log.Warn("saveWatermark 失敗 (不致命):", err)
 	}
 	if err := s.saveCash(ctx, s.engine.Cash()); err != nil {
 		s.log.Warn("saveCash 失敗 (不致命):", err)
+	}
+	if runContrib > 0 {
+		if err := s.addTotalContributed(ctx, runContrib); err != nil {
+			s.log.Warn("addTotalContributed 失敗 (不致命):", err)
+		}
 	}
 	stats := s.engine.Stats()
 	s.log.Infof("catch-up 完成: cash=%.2f, buys=%d, sells=%d, skipped=%d",
@@ -339,12 +356,26 @@ func (s *TradingService) runOneDayAtOpen(ctx context.Context, exec trading.Execu
 		s.log.Infof("開盤價尚未全部就緒 (%d/%d),時段內稍後重試", len(opens), needed)
 		return nil // 不前進水位線,下一分鐘再試
 	}
+	// 開盤價完全未就緒:今日不前進水位線、不注資 → 下次成功處理時 prev 仍停在上月,注資自然遞延補上。
+	// 切勿在此路徑前進水位線,否則會跳過該月注資。
 	if len(opens) == 0 {
 		s.log.Error("逾時仍無任何即時開盤價,今日略過開盤決策 (留待下次重啟由 catch-up 以 DB 開盤價回放)")
 		return nil
 	}
 	if len(opens) < needed {
 		s.log.Warnf("逾時僅 %d/%d 檔開盤價就緒,以現有開盤價決策 (缺漏股今日不交易)", len(opens), needed)
+	}
+
+	// 每月第一個交易日 (相對前一個已處理交易日跨月) 先注入定額資金,注資後當日即可動用;
+	// 與回測 / catch-up 共用 backtest.ContributionDue 排程。水位線去重保證同一天只會注資一次。
+	// loadWatermark 失敗時 prev 為零值 → 本日不注資 (遞延至下次),記錄警告以利察覺。
+	prev, err := s.loadWatermark(ctx)
+	if err != nil {
+		s.log.Warn("loadWatermark (注資判定) 失敗 (不致命,本日不注資):", err)
+	}
+	contrib := backtest.ContributionDue(prev, today, s.cfg.MonthlyContribution)
+	if contrib > 0 {
+		s.engine.AddCash(contrib)
 	}
 
 	// 以即時開盤價執行當日決策並持久化狀態。
@@ -356,6 +387,11 @@ func (s *TradingService) runOneDayAtOpen(ctx context.Context, exec trading.Execu
 	}
 	if err := s.saveCash(ctx, s.engine.Cash()); err != nil {
 		s.log.Warn("saveCash 失敗 (不致命):", err)
+	}
+	if contrib > 0 {
+		if err := s.addTotalContributed(ctx, contrib); err != nil {
+			s.log.Warn("addTotalContributed 失敗 (不致命):", err)
+		}
 	}
 	return nil
 }
@@ -395,6 +431,34 @@ func (s *TradingService) loadCash(ctx context.Context) (float64, bool, error) {
 // saveCash 持久化引擎當前現金至 BotState。
 func (s *TradingService) saveCash(ctx context.Context, cash float64) error {
 	return s.state.Set(ctx, stateKeyCash, strconv.FormatFloat(cash, 'f', -1, 64))
+}
+
+// loadTotalContributed 讀取 BotState 的 total_contributed (除期初現金外、累計從外部注入的定額資金);
+// 無紀錄時回傳 0 (尚未注資過,或關閉每月注資)。
+func (s *TradingService) loadTotalContributed(ctx context.Context) (float64, error) {
+	v, ok, err := s.state.Get(ctx, stateKeyTotalContributed)
+	if err != nil || !ok {
+		return 0, err
+	}
+	c, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse total_contributed %q: %w", v, err)
+	}
+	return c, nil
+}
+
+// saveTotalContributed 持久化累計注資總額至 BotState。
+func (s *TradingService) saveTotalContributed(ctx context.Context, total float64) error {
+	return s.state.Set(ctx, stateKeyTotalContributed, strconv.FormatFloat(total, 'f', -1, 64))
+}
+
+// addTotalContributed 把本次新增的注資額累加到 BotState 既有的 total_contributed 上後寫回。
+func (s *TradingService) addTotalContributed(ctx context.Context, amount float64) error {
+	cur, err := s.loadTotalContributed(ctx)
+	if err != nil {
+		return fmt.Errorf("loadTotalContributed: %w", err)
+	}
+	return s.saveTotalContributed(ctx, cur+amount)
 }
 
 // tradingExecutor 是線上模式的 trading.Executor 實作：

@@ -34,19 +34,26 @@ type StockHistoryService interface {
 	StockHistoryData(ctx context.Context, stockID string) ([]dto.StockHistoryPoint, error)
 }
 
-// Controller wires the three business services + a logger into Echo handler
+// PerformanceReporter is the consumer-side view of the strategy performance
+// summary: principal breakdown + live portfolio state + backtest metrics.
+type PerformanceReporter interface {
+	Summary(ctx context.Context) (dto.PerformanceSummary, error)
+}
+
+// Controller wires the four business services + a logger into Echo handler
 // methods. Dependencies are constructor-injected so handlers stay unit-testable
 // with fakes (no DB, no server).
 type Controller struct {
-	log       *logrus.Logger
-	portfolio PortfolioService
-	statistic StatisticService
-	history   StockHistoryService
+	log         *logrus.Logger
+	portfolio   PortfolioService
+	statistic   StatisticService
+	history     StockHistoryService
+	performance PerformanceReporter
 }
 
-// New constructs a Controller from its logger and the three business services.
-func New(log *logrus.Logger, p PortfolioService, s StatisticService, h StockHistoryService) *Controller {
-	return &Controller{log: log, portfolio: p, statistic: s, history: h}
+// New constructs a Controller from its logger and the four business services.
+func New(log *logrus.Logger, p PortfolioService, s StatisticService, h StockHistoryService, perf PerformanceReporter) *Controller {
+	return &Controller{log: log, portfolio: p, statistic: s, history: h, performance: perf}
 }
 
 // Home replies with the static landing string (always 200).
@@ -92,6 +99,21 @@ func (ctl *Controller) StockStatisticData(c echo.Context) error {
 		return c.JSONPretty(http.StatusOK, []dto.StockStatistic{}, "  ")
 	}
 	return c.JSONPretty(http.StatusOK, rows, "  ")
+}
+
+// PerformanceSummary returns the strategy performance summary (principal
+// breakdown + live portfolio state + backtest metrics). On service error it logs
+// and returns 200 + an empty typed object (error swallowed), matching the other
+// handlers' lenient contract.
+func (ctl *Controller) PerformanceSummary(c echo.Context) error {
+	ctl.log.Info("GET /api/get_performance_summary")
+	// 呼叫 service 取得績效摘要;發生錯誤時回傳空物件維持前端寬鬆契約。
+	summary, err := ctl.performance.Summary(c.Request().Context())
+	if err != nil {
+		ctl.log.Error("PerformanceSummary 發生錯誤:", err)
+		return c.JSONPretty(http.StatusOK, dto.PerformanceSummary{}, "  ")
+	}
+	return c.JSONPretty(http.StatusOK, summary, "  ")
 }
 
 // StockHistoryData returns the close-price series for the stockId query param.

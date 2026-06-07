@@ -111,6 +111,28 @@ func TestRunBacktestWindow_EmptyWindowErrors(t *testing.T) {
 	}
 }
 
+// TestContributionDue 驗證單日注資判定:前一日為零值或同月 → 0、跨月 → monthly、monthly<=0 → 0。
+func TestContributionDue(t *testing.T) {
+	d := func(y int, m time.Month, day int) time.Time { return time.Date(y, m, day, 0, 0, 0, 0, time.UTC) }
+	cases := []struct {
+		name    string
+		prev, d time.Time
+		monthly float64
+		want    float64
+	}{
+		{"零值前一日不注資", time.Time{}, d(2020, time.January, 1), 2500, 0},
+		{"同月不注資", d(2020, time.January, 5), d(2020, time.January, 31), 2500, 0},
+		{"跨月注資", d(2020, time.January, 31), d(2020, time.February, 3), 2500, 2500},
+		{"跨年注資", d(2019, time.December, 31), d(2020, time.January, 2), 2500, 2500},
+		{"monthly<=0 關閉", d(2020, time.January, 31), d(2020, time.February, 3), 0, 0},
+	}
+	for _, c := range cases {
+		if got := ContributionDue(c.prev, c.d, c.monthly); got != c.want {
+			t.Fatalf("%s: ContributionDue = %.0f, want %.0f", c.name, got, c.want)
+		}
+	}
+}
+
 // TestContributionAmounts 驗證注資金額切片:起始日為 0、每逢月份切換注資一次、monthly<=0 時全為 0。
 func TestContributionAmounts(t *testing.T) {
 	// Arrange — 90 連續日從 2020-01-01。

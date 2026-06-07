@@ -98,7 +98,8 @@ func (e *Engine) SetRecorder(r *DayRecorder) { e.rec = r }
 func (e *Engine) SeedCash(cash float64) { e.cash = cash }
 
 // AddCash 把一筆外部注資 (定期定額) 加進現金池,當日即可動用。amount <= 0 為 no-op。
-// 用於回測/評估的「每月解鎖新資金」問題設定;上線真實餘額另由 BotState 還原,不經此注入。
+// 用於「每月解鎖新資金」問題設定;回測由 backtest 逐視窗注入,上線由 TradingService 在 catch-up
+// 回放與每日 loop 依同一排程 (backtest.ContributionDue) 注入,兩邊現金軌跡一致。
 func (e *Engine) AddCash(amount float64) {
 	if amount > 0 {
 		e.cash += amount

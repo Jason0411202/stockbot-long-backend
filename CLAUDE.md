@@ -64,6 +64,11 @@ cmd/*            程式進入點（server 與各 CLI 工具）
 `open_price` 同基準回放。即時報價來源為 `internal/client/twse.RealtimeClient`（MIS getStockInfo.jsp，
 經 `RealtimeFetcher` port 注入）。
 
+**每月定額注資（與回測同排程）**：catch-up 回放與每日 loop 都會在「每個日曆月第一個交易日」注入
+`monthly_contribution`（排程單一事實來源 `backtest.ContributionDue`，與回測 `ContributionAmounts` 逐日一致），
+累計注資額持久化於 BotState `total_contributed`。首次啟動（無水位線）從 common issuance 起 catch-up，
+其現金軌跡與帳本與回測全期完全一致；已在運行的部署只對「新月份」注資（過往未注資的月份不回填）。
+
 ## 不可破壞的不變量（CRITICAL）
 
 改動前務必確認下列規則不被破壞，否則行為會錯且測試會紅：
@@ -83,7 +88,8 @@ cmd/*            程式進入點（server 與各 CLI 工具）
   （`regime_ma_window 85`、`trail_stop_bear 0.08`，00631L override `regime_ma_window 60` + `trail_reentry_cooldown_days 42`）；
   改回收盤基準或改決策基準都需重新以 `cmd/eval_csv` 跑 walk-forward / IS-OOS 調參並重釘指紋。
 - **API wire keys 不可變。** `internal/dto` 的 JSON tag 是前端既有契約（含唯一的 camelCase
-  `todayClosePrice`），不得更名。
+  `todayClosePrice`），不得更名。新增端點 `/api/get_performance_summary`（`dto/performance.go`）的欄位為
+  增量擴充；其比率欄位用 `dto.JSONFloat`（NaN/±Inf → `null`），不要改回裸 `float64`（`encoding/json` 無法編 NaN/Inf 會回錯）。
 - **realized-P&L 端點的日期格式。** DSN 不得加 `parseTime`；`RealizedGainsLosses` 的 `DATE` 欄位
   需維持既有 wire 格式（見近期 commit 402cd71）。
 - **策略單一來源。** 目前只有 `Baseline` 現金比例策略；舊的固定金額金字塔已整組移除。
@@ -93,6 +99,9 @@ cmd/*            程式進入點（server 與各 CLI 工具）
   全股套用會過擬合）。
 - **引擎記憶體狀態未持久化。** `peakSinceHold`、`lastTrailSell`（移動停利再進場冷卻用）等為純記憶體狀態，
   不寫入 DB；上線重啟靠 catch-up 回放重建，故 `init_db_back_months` 須涵蓋足夠回看（≥ 冷卻天數）才能正確還原。
+- **BotState 持久化欄位。** 跨重啟持久化於 `BotState` 的鍵為 `last_processed_date`（水位線）、`current_cash`、
+  `total_contributed`（累計每月注資，供 API 本金明細）。`total_contributed` 只在「有新注資的月份」累加，
+  既有部署升級後不回填過往未注資月份；要與回測完全對齊請清空 BotState + 帳本讓其從 common issuance 重新 catch-up。
 
 ## 程式碼與註解規範
 
