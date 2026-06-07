@@ -1,5 +1,4 @@
--- Grant the application user full privileges so it can run
--- `CREATE DATABASE IF NOT EXISTS StockLongData;` (executed from sqls/SQLcommend.sql)
--- and operate on any database the app needs.
+-- deploy/mariadb/init.sql 在 MariaDB container 第一次初始化時執行。
+-- 這段授權 app 使用者建立與操作 StockLongData schema。
 GRANT ALL PRIVILEGES ON *.* TO 'exampleuser'@'%';
 FLUSH PRIVILEGES;
