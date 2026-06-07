@@ -1,3 +1,4 @@
+// internal/server/server_test.go 驗證 BuildEcho 路由組裝及各端點的狀態碼回傳。
 package server
 
 import (
@@ -52,6 +53,7 @@ func newTestController() *controller.Controller {
 	return controller.New(log, fakePortfolio{}, fakeStatistic{}, fakeHistory{})
 }
 
+// TestBuildEcho_OpsRoutes 驗證 BuildEcho 正確掛載 /health、/ready、/metrics 及業務路由，並回傳預期狀態碼。
 func TestBuildEcho_OpsRoutes(t *testing.T) {
 	// Arrange — pingable mock DB so /ready returns 200; controller from fakes.
 	db, mock, err := sqlmock.New(sqlmock.MonitorPingsOption(true))
@@ -87,6 +89,7 @@ func TestBuildEcho_OpsRoutes(t *testing.T) {
 	}
 }
 
+// TestRegisterRoutes_WiresHome 驗證 registerRoutes 將 "/" 對應至 Home handler 並回傳正確 body。
 func TestRegisterRoutes_WiresHome(t *testing.T) {
 	// Arrange
 	e := echo.New()

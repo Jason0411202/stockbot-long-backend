@@ -1,3 +1,4 @@
+// internal/service/trading/helpers_test.go 提供 trading 測試共用的設定與序列建構函式。
 package trading
 
 import (
@@ -9,6 +10,7 @@ import (
 // helpers_test.go 收錄 trading 套件白箱測試共用的建構工具 (factory / builder)。
 // 這些工廠由原 kernals/helpers_test.go 拆分而來;只保留 trading 層測試實際需要的部分。
 
+// iptr 將整數值包裝為指標,供需要 *int 欄位的測試資料使用。
 func iptr(v int) *int { return &v }
 
 // mustDate 解析 "2006-01-02";失敗即 t.Fatal (測試資料寫錯應立刻爆)。

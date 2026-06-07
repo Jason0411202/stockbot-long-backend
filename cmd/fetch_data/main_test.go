@@ -1,3 +1,4 @@
+// cmd/fetch_data/main_test.go 驗證 fetch_data 指令自有的 CSV 寫出邏輯（依日期升冪、含表頭）。
 package main
 
 import (
@@ -14,6 +15,7 @@ import (
 
 // --- writeCSV: 依日期升冪寫出含表頭的 CSV ---
 
+// TestWriteCSV 驗證 writeCSV 函式以日期升冪順序寫出含表頭的 CSV 並與預期內容完全一致。
 func TestWriteCSV(t *testing.T) {
 	// Arrange: 故意亂序的 bars,驗證輸出有排序
 	dir := t.TempDir()

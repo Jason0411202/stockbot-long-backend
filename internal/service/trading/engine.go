@@ -1,3 +1,4 @@
+// internal/service/trading/engine.go 實作上線與回測共用的純記憶體交易引擎。
 package trading
 
 import (
@@ -36,7 +37,10 @@ type Executor interface {
 // NoopExecutor 是回測用,什麼副作用都不做。
 type NoopExecutor struct{}
 
-func (NoopExecutor) OnBuyApplied(string, time.Time, int, float64, float64) error  { return nil }
+// OnBuyApplied 接收買進成交但不執行任何副作用。
+func (NoopExecutor) OnBuyApplied(string, time.Time, int, float64, float64) error { return nil }
+
+// OnSellApplied 接收賣出成交但不執行任何副作用。
 func (NoopExecutor) OnSellApplied(string, time.Time, int, float64, float64) error { return nil }
 
 // Engine 是上線與回測共用的 in-memory 模擬器。
@@ -252,6 +256,7 @@ func (e *Engine) ProcessDates(dates []time.Time, series map[string]*StockSeries,
 	return nil
 }
 
+// buildSnapshot 依目前現金、持倉與價格建立單檔股票的決策輸入。
 func (e *Engine) buildSnapshot(stockID string, today time.Time, todayPrice, ma20 float64) Snapshot {
 	highest := -1.0
 	lowest := math.MaxFloat64
@@ -348,6 +353,7 @@ func regimeBull(c *config.Config, s *StockSeries, idx int) bool {
 	return false
 }
 
+// applyBuy 將買進意圖套用到現金與持倉，並通知 executor 寫入副作用。
 func (e *Engine) applyBuy(stockID string, today time.Time, intent BuyIntent, exec Executor) error {
 	shares := intent.Shares
 	// === 防作弊現金夾取:可利用資金僅為當前持有現金,不得借錢 ===
@@ -385,6 +391,7 @@ func (e *Engine) applyBuy(stockID string, today time.Time, intent BuyIntent, exe
 	return exec.OnBuyApplied(stockID, today, shares, intent.Price, e.cash)
 }
 
+// applySell 將賣出意圖套用到現金與持倉，並通知 executor 寫入副作用。
 func (e *Engine) applySell(stockID string, today time.Time, intent SellIntent, exec Executor) error {
 	pos := e.positions[stockID]
 	if len(pos) == 0 {

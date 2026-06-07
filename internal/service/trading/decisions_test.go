@@ -1,3 +1,4 @@
+// internal/service/trading/decisions_test.go 驗證買賣決策規則、冷卻、深度權重與 regime 判定。
 package trading
 
 import (
@@ -11,6 +12,7 @@ import (
 
 // --- DecideBuy ---
 
+// TestDecideBuy_RejectsInvalidPriceOrMA 驗證價格為零或 MA 為 NaN 時 DecideBuy 不產生買入決策。
 func TestDecideBuy_RejectsInvalidPriceOrMA(t *testing.T) {
 	cfg := decideCfg()
 	cases := []struct {
@@ -33,6 +35,7 @@ func TestDecideBuy_RejectsInvalidPriceOrMA(t *testing.T) {
 	}
 }
 
+// TestDecideBuy_BandGate 驗證牛熊市 band 閘門:空頭要求嚴格低於 MA,牛市允許在 MA×(1+band) 內買入。
 func TestDecideBuy_BandGate(t *testing.T) {
 	cfg := decideCfg()
 	cfg.BullBuyBand = 0.05
@@ -61,6 +64,7 @@ func TestDecideBuy_BandGate(t *testing.T) {
 	}
 }
 
+// TestDecideBuy_CooldownBlocksThenAllowsAtBoundary 驗證冷卻天數內阻擋買入,恰好達冷卻邊界時放行。
 func TestDecideBuy_CooldownBlocksThenAllowsAtBoundary(t *testing.T) {
 	cfg := decideCfg() // CooldownDays 14
 	base := Snapshot{TodayPrice: 90, MA20: 100, Cash: 1_000_000, LowestHeldPrice: 100, HasLastBuy: true}
@@ -84,6 +88,7 @@ func TestDecideBuy_CooldownBlocksThenAllowsAtBoundary(t *testing.T) {
 	}
 }
 
+// TestDecideBuy_BreakBudgetOverridesCooldown 驗證冷卻期內有打破冷卻額度時可放行並標記 BrokeCooldown。
 func TestDecideBuy_BreakBudgetOverridesCooldown(t *testing.T) {
 	cfg := decideCfg()
 	cfg.CooldownBreakBudget = 2
@@ -105,6 +110,7 @@ func TestDecideBuy_BreakBudgetOverridesCooldown(t *testing.T) {
 	}
 }
 
+// TestDecideBuy_NoCashNoBuy 驗證現金為零時 DecideBuy 不產生買入決策。
 func TestDecideBuy_NoCashNoBuy(t *testing.T) {
 	cfg := decideCfg()
 	// Arrange — 現金基準為 0 → buyAmount 0 → 0 股。
@@ -115,6 +121,7 @@ func TestDecideBuy_NoCashNoBuy(t *testing.T) {
 	}
 }
 
+// TestDecideBuy_BullSharesFromCashFraction 驗證牛市依現金比例計算買入股數 (20% 現金 ÷ 價格,四捨五入)。
 func TestDecideBuy_BullSharesFromCashFraction(t *testing.T) {
 	cfg := decideCfg() // BullBuyFrac 0.20
 	// Arrange — bull、現金 1,000,000、價 100 → 目標 200,000 → 2000 股。
@@ -130,6 +137,7 @@ func TestDecideBuy_BullSharesFromCashFraction(t *testing.T) {
 
 // --- DecideSell ---
 
+// TestDecideSell_NoPositions 驗證無持倉時 DecideSell 不產生賣出決策。
 func TestDecideSell_NoPositions(t *testing.T) {
 	cfg := decideCfg()
 	// Arrange — LowestHeldPrice<=0 表示無持倉。
@@ -140,6 +148,7 @@ func TestDecideSell_NoPositions(t *testing.T) {
 	}
 }
 
+// TestDecideSell_ProfitTakeOnlyInBull 驗證獲利了結僅在牛市且漲幅達門檻時觸發,空頭不啟動獲利了結。
 func TestDecideSell_ProfitTakeOnlyInBull(t *testing.T) {
 	cfg := decideCfg() // threshold 1.0 (翻倍), SellFracOfPosition 0.33
 	cases := []struct {
@@ -171,6 +180,7 @@ func TestDecideSell_ProfitTakeOnlyInBull(t *testing.T) {
 	}
 }
 
+// TestDecideSell_SellFractionRoundsUpToOne 驗證持股量極小時賣出股數四捨五入後至少為 1 股。
 func TestDecideSell_SellFractionRoundsUpToOne(t *testing.T) {
 	cfg := decideCfg()
 	// Arrange — 持股 2,round(0.33*2)=round(0.66)=1。
@@ -183,6 +193,7 @@ func TestDecideSell_SellFractionRoundsUpToOne(t *testing.T) {
 	}
 }
 
+// TestDecideSell_BearTrailStop 驗證空頭移動停利:峰值漲幅達門檻後武裝,價格跌破峰值×(1-trail%) 時全出。
 func TestDecideSell_BearTrailStop(t *testing.T) {
 	cfg := decideCfg()
 	cfg.TrailStopBear = 0.10
@@ -224,6 +235,7 @@ func TestDecideSell_BearTrailStop(t *testing.T) {
 
 // --- sub-functions ---
 
+// TestFracBasis 驗證 fracBasis 依 BuyFracBasis 設定正確回傳現金、總權益或零作為買入基準。
 func TestFracBasis(t *testing.T) {
 	snap := Snapshot{Cash: 500, Equity: 1200}
 
@@ -246,6 +258,7 @@ func TestFracBasis(t *testing.T) {
 	}
 }
 
+// TestBearDepthWeight 驗證 bearDepthWeight 依跌幅分層回傳正確的倍率權重 (淺→1,中→ratio,深→ratio²)。
 func TestBearDepthWeight(t *testing.T) {
 	cfg := decideCfg() // ratio 2.5, tiers above -0.1/-0.2
 	// depthPct > -0.1 (淺) → 命中 tier0 → ratio^0 = 1。
@@ -262,6 +275,7 @@ func TestBearDepthWeight(t *testing.T) {
 	}
 }
 
+// TestBuyDepthPct 驗證 buyDepthPct 依 BuyDepthBasis 設定,以持高、MA 或近期峰值計算跌幅百分比。
 func TestBuyDepthPct(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -285,6 +299,7 @@ func TestBuyDepthPct(t *testing.T) {
 	}
 }
 
+// TestAmountToShares 驗證 amountToShares 將金額除以單價後四捨五入,價格或金額為零時回傳零。
 func TestAmountToShares(t *testing.T) {
 	cases := []struct {
 		amount, price float64
@@ -302,6 +317,7 @@ func TestAmountToShares(t *testing.T) {
 	}
 }
 
+// TestPassesCooldown 驗證 passesCooldown 在各種冷卻狀態 (無紀錄/已過/未過/有額度) 的放行與阻擋行為。
 func TestPassesCooldown(t *testing.T) {
 	cfg := decideCfg() // CooldownDays 14
 	today := mustDate(t, "2024-06-20")
@@ -329,6 +345,7 @@ func TestPassesCooldown(t *testing.T) {
 	}
 }
 
+// TestPassesCooldown_BullUsesBullCooldown 驗證牛市採用較短的 BullCooldownDays,與空頭的 CooldownDays 互相獨立。
 func TestPassesCooldown_BullUsesBullCooldown(t *testing.T) {
 	cfg := decideCfg()
 	cfg.CooldownDays = 30
@@ -344,6 +361,7 @@ func TestPassesCooldown_BullUsesBullCooldown(t *testing.T) {
 	}
 }
 
+// TestRegimeBull 驗證 regimeBull 在 ma_pos 與 mom 方法下正確判斷牛熊市,資料不足時回傳 false。
 func TestRegimeBull(t *testing.T) {
 	// Arrange — 上升序列,maAt 在足夠資料後有效。
 	up := seriesFrom(mustDate(t, "2020-01-01"), linRamp(120, 50, 170))

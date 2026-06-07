@@ -1,3 +1,4 @@
+// internal/service/backtest/walkforward_test.go 驗證 walk-forward 視窗生成、評估與 scorecard 聚合。
 package backtest
 
 import (
@@ -10,6 +11,7 @@ import (
 // walkforward_test.go 為 walk-forward 評估與對照組的整合測試:as-of 查價、視窗產生、
 // B&H / 同曝險 Blend 對照組、Calmar 比較、五道關卡彙整。
 
+// TestCloseAsOf 驗證 CloseAsOf 在非交易日取前一交易日收盤、上市前回傳 false、精確交易日正常查價。
 func TestCloseAsOf(t *testing.T) {
 	// Arrange — 含非交易日空隙。
 	s := &trading.StockSeries{
@@ -38,6 +40,7 @@ func TestCloseAsOf(t *testing.T) {
 	}
 }
 
+// TestCommonSupportStart 驗證 commonSupportStart 以最晚上市標的的第 MAWindow 個交易日為共同有效起點。
 func TestCommonSupportStart(t *testing.T) {
 	// Arrange — B 較晚上市,其第 20 個交易日決定共同有效起點。
 	series := map[string]*trading.StockSeries{
@@ -56,6 +59,7 @@ func TestCommonSupportStart(t *testing.T) {
 	}
 }
 
+// TestGenerateWindows_UniverseAndStep 驗證 generateWindows 產生多個視窗,每個視窗涵蓋所有可交易標的、長度約為 WindowMonths 月且起點嚴格遞增。
 func TestGenerateWindows_UniverseAndStep(t *testing.T) {
 	// Arrange
 	start := mustDate(t, "2019-01-01")
@@ -86,6 +90,7 @@ func TestGenerateWindows_UniverseAndStep(t *testing.T) {
 	}
 }
 
+// TestTradableAt_OnlyListedStocks 驗證 tradableAt 在指定日期只回傳已上市的標的。
 func TestTradableAt_OnlyListedStocks(t *testing.T) {
 	// Arrange — A 已上市、B 之後才上市。
 	series := map[string]*trading.StockSeries{
@@ -100,6 +105,7 @@ func TestTradableAt_OnlyListedStocks(t *testing.T) {
 	}
 }
 
+// TestDeployAllCash_EqualWeightWholeShares 驗證 deployAllCash 等權買入各標的整股,餘額留現金。
 func TestDeployAllCash_EqualWeightWholeShares(t *testing.T) {
 	// Arrange — 兩檔等權買滿;整股、餘額留現金。
 	series := map[string]*trading.StockSeries{
@@ -119,6 +125,7 @@ func TestDeployAllCash_EqualWeightWholeShares(t *testing.T) {
 	}
 }
 
+// TestBHImmediateArm_NoContribEqualsLumpSum 驗證 bhImmediateArm 在無注資情況下期初一次性買滿並持有至期末,最終權益近似 B&H 報酬。
 func TestBHImmediateArm_NoContribEqualsLumpSum(t *testing.T) {
 	// Arrange — 升勢股 100→200,無注資。
 	start := mustDate(t, "2020-01-01")
@@ -146,6 +153,7 @@ func TestBHImmediateArm_NoContribEqualsLumpSum(t *testing.T) {
 	}
 }
 
+// TestBlendMetrics_WeightBounds 驗證 blendMetrics 在權重 0 (全現金) 與 1 (完全複製 B&H) 兩端的回撤及曝險邊界值。
 func TestBlendMetrics_WeightBounds(t *testing.T) {
 	// Arrange
 	bhNav := []float64{1.0, 1.2, 0.9, 1.3}
@@ -165,6 +173,7 @@ func TestBlendMetrics_WeightBounds(t *testing.T) {
 	}
 }
 
+// TestFlowsFromNav 驗證 flowsFromNav 依 NAV 單位正確換算注資、期末總值及現金流列表。
 func TestFlowsFromNav(t *testing.T) {
 	// Arrange — NAV 翻倍、期中注資 50 (以前一日 NAV 換單位)。
 	nav := []float64{1.0, 1.0, 2.0}
@@ -185,6 +194,7 @@ func TestFlowsFromNav(t *testing.T) {
 	}
 }
 
+// TestCalmarWin 驗證 calmarWin 在策略勝出、不及格、無回撤及 NaN 等情境的勝負與可比性回傳值。
 func TestCalmarWin(t *testing.T) {
 	cases := []struct {
 		s, b           float64
@@ -220,6 +230,7 @@ func mkReport(stratMWR, bhMWR, stratMDD, bhMDD, blendMWR float64, calmarBeatsBH,
 	}
 }
 
+// TestAggregate_G1DownMarketGuard 驗證 aggregate 的 G1 關卡在空頭市場以方向性比較 (少賠即通過),在多頭市場以 75% 參與率為門檻。
 func TestAggregate_G1DownMarketGuard(t *testing.T) {
 	// 空頭 (B&H 中位 <=0):改用方向性比較,少賠即 PASS。
 	down := aggregate([]WindowReport{
@@ -247,6 +258,7 @@ func TestAggregate_G1DownMarketGuard(t *testing.T) {
 	}
 }
 
+// TestAggregate_AllGatesPassAndFail 驗證 aggregate 在全勝情境五道關卡皆通過,全敗情境風控/Calmar/技巧關卡皆失敗。
 func TestAggregate_AllGatesPassAndFail(t *testing.T) {
 	// Arrange — 全勝情境:報酬參與足、回撤遠小、Calmar 全勝、雙贏 Blend、最差回撤更淺。
 	good := []WindowReport{
@@ -272,6 +284,7 @@ func TestAggregate_AllGatesPassAndFail(t *testing.T) {
 	}
 }
 
+// TestAggregate_EmptyReports 驗證 aggregate 接受空視窗列表時不 panic 且 NWindows 為 0。
 func TestAggregate_EmptyReports(t *testing.T) {
 	// Arrange + Act
 	a := aggregate(nil)
@@ -281,6 +294,7 @@ func TestAggregate_EmptyReports(t *testing.T) {
 	}
 }
 
+// TestEvaluateWindow_StrategyVsBenchmarks 驗證 evaluateWindow 在升勢雙標的下策略曝險低於 B&H、宇宙正確且交易日數完整。
 func TestEvaluateWindow_StrategyVsBenchmarks(t *testing.T) {
 	// Arrange — 升勢雙標的、含每月注資。
 	start := mustDate(t, "2019-01-01")
@@ -313,6 +327,7 @@ func TestEvaluateWindow_StrategyVsBenchmarks(t *testing.T) {
 	}
 }
 
+// TestEvaluateFullSpan 驗證 EvaluateFullSpan 起點等於 commonSupportStart 所計算的共同有效起點。
 func TestEvaluateFullSpan(t *testing.T) {
 	// Arrange
 	start := mustDate(t, "2019-01-01")
@@ -335,6 +350,7 @@ func TestEvaluateFullSpan(t *testing.T) {
 	}
 }
 
+// TestWalkForwardOnSeries_FlatSeriesNoTrades 驗證全平盤序列下 walk-forward 每個視窗策略零成交且回撤為 0。
 func TestWalkForwardOnSeries_FlatSeriesNoTrades(t *testing.T) {
 	// Arrange — 全平盤:策略零成交。
 	start := mustDate(t, "2019-01-01")
@@ -362,6 +378,7 @@ func TestWalkForwardOnSeries_FlatSeriesNoTrades(t *testing.T) {
 	}
 }
 
+// TestWalkForwardOnSeries_AppliesDefaultParams 驗證傳入零值參數時套用預設值 (24 月/3 月/200 日) 仍能正常切出視窗。
 func TestWalkForwardOnSeries_AppliesDefaultParams(t *testing.T) {
 	// Arrange — 傳零值參數,應套用預設 (24 月 / 3 月 / 200 日)。
 	start := mustDate(t, "2019-01-01")
@@ -380,6 +397,7 @@ func TestWalkForwardOnSeries_AppliesDefaultParams(t *testing.T) {
 	}
 }
 
+// TestWalkForwardOnSeries_InsufficientDataErrors 驗證資料不足以產生任何視窗時回傳錯誤。
 func TestWalkForwardOnSeries_InsufficientDataErrors(t *testing.T) {
 	// Arrange — 資料過短,湊不出任何視窗。
 	cfg := baseCfg("A")
@@ -391,6 +409,7 @@ func TestWalkForwardOnSeries_InsufficientDataErrors(t *testing.T) {
 	}
 }
 
+// TestWalkForwardOnSeries_RejectsNonBaseline 驗證非 Baseline 策略設定時 walkForwardOnSeries 回傳錯誤。
 func TestWalkForwardOnSeries_RejectsNonBaseline(t *testing.T) {
 	// Arrange
 	cfg := baseCfg("A")

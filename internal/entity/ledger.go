@@ -1,3 +1,4 @@
+// internal/entity/ledger.go 定義投資組合 ledger 資料表的資料模型。
 package entity
 
 // UnrealizedGainsLoss 對應 UnrealizedGainsLosses table,PK (transaction_date, stock_id)。

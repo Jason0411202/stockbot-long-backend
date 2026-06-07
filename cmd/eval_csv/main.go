@@ -1,3 +1,4 @@
+// cmd/eval_csv/main.go 讀取本機 CSV 快取執行全期回測與 walk-forward 評估並印出 scorecard。
 package main
 
 // cmd/eval_csv 用本機 CSV 快取 (由 cmd/fetch_data 產生) 對 config.yaml 跑「每月定期定額注資」問題設定下的
@@ -18,7 +19,9 @@ import (
 	"github.com/Jason0411202/stockbot-long-backend/internal/service/backtest"
 )
 
+// main 解析旗標、載入設定與 CSV 快取，依序執行三項評估並印出報告。
 func main() {
+	// 定義並解析命令列旗標。
 	dataDir := flag.String("data", "data", "CSV 快取目錄")
 	cfgPath := flag.String("config", "config.yaml", "設定檔")
 	window := flag.Int("window", 24, "walk-forward 視窗 (月)")
@@ -28,6 +31,7 @@ func main() {
 	foldMonths := flag.Int("fold-months", 12, "滾動 OOS:每折月數")
 	flag.Parse()
 
+	// 載入設定與 CSV 快取。
 	cfg, err := config.Load(*cfgPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "載入 config 失敗:", err)
@@ -39,6 +43,7 @@ func main() {
 		os.Exit(1)
 	}
 
+	// 執行全期、walk-forward 及滾動 OOS 三項評估。
 	full, err := backtest.EvaluateFullSpan(cfg, series)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "全期評估失敗:", err)
@@ -56,6 +61,7 @@ func main() {
 		os.Exit(1)
 	}
 
+	// 依序印出三份報告。
 	printHeadline(cfg, full)
 	printWalkForward(cfg, *window, *step, agg)
 	printRollingOOS(isoos)
@@ -63,6 +69,7 @@ func main() {
 
 // printRollingOOS 印出滾動式 walk-forward 樣本外驗證 (反過擬合)。
 func printRollingOOS(r backtest.RollingOOSReport) {
+	// 印出整體 IS vs OOS 彙整指標。
 	fmt.Println()
 	fmt.Printf("滾動 walk-forward OOS (初始 IS 錨定 %d 月;分界日 %s,其後每窗皆樣本外)\n",
 		r.ISMonths, r.Anchor.Format("2006-01-02"))
@@ -74,6 +81,8 @@ func printRollingOOS(r backtest.RollingOOSReport) {
 	row2("中位 Calmar", ratio(r.IS.MedStratCalmar), ratio(r.OOS.MedStratCalmar))
 	row2("Calmar 勝率", pct(r.IS.CalmarWinRate), pct(r.OOS.CalmarWinRate))
 	row2("五道關卡(G1~5)", gateStr(r.IS), gateStr(r.OOS))
+
+	// 逐折印出 OOS 指標並追蹤最差折 Calmar。
 	fmt.Println("── 每折 OOS (跨期一致性) ──")
 	minFold := math.Inf(1)
 	for _, f := range r.Folds {
@@ -83,6 +92,8 @@ func printRollingOOS(r backtest.RollingOOSReport) {
 			minFold = f.Calmar
 		}
 	}
+
+	// 計算 OOS/IS Calmar 保留比並輸出判讀結論。
 	fmt.Println("──────────────────────────────────────────────")
 	retain := r.OOS.MedStratCalmar / r.IS.MedStratCalmar
 	verdict := "穩健 ✅ (OOS 接近 IS、各折皆不崩)"
@@ -94,8 +105,10 @@ func printRollingOOS(r backtest.RollingOOSReport) {
 	fmt.Printf("判讀:OOS Calmar 為 IS 的 %.0f%%、最差折 Calmar %s → %s\n", retain*100, ratio(minFold), verdict)
 }
 
+// row2 以固定欄寬印出三欄標籤列 (用於 IS vs OOS 對照表)。
 func row2(label, a, b string) { fmt.Printf("%-16s %12s %12s\n", label, a, b) }
 
+// gateStr 計算 AggregateReport 中通過的關卡數並回傳 "n/5" 格式字串。
 func gateStr(a backtest.AggregateReport) string {
 	n := 0
 	for _, g := range []bool{a.G1RetParticipation, a.G2RiskReduction, a.G3CalmarVsBH, a.G4Skill, a.G5Robustness} {
@@ -106,6 +119,7 @@ func gateStr(a backtest.AggregateReport) string {
 	return fmt.Sprintf("%d/5", n)
 }
 
+// printHeadline 印出全期連續回測的 headline 指標對照表 (策略 vs B&H)。
 func printHeadline(cfg *config.Config, r backtest.WindowReport) {
 	fmt.Printf("問題設定:期初 %s + 每月解鎖 %s,標的 %v\n",
 		money(cfg.InitialCash), money(cfg.MonthlyContribution), cfg.TrackStocks)
@@ -127,6 +141,7 @@ func printHeadline(cfg *config.Config, r backtest.WindowReport) {
 	fmt.Println()
 }
 
+// printWalkForward 印出 walk-forward 穩健性摘要與五道關卡通過情形。
 func printWalkForward(cfg *config.Config, window, step int, agg backtest.AggregateReport) {
 	fmt.Printf("Walk-forward 穩健性 — 視窗 %d 月 / 步進 %d 月 / %d 個視窗 (每窗獨立注資)\n", window, step, agg.NWindows)
 	fmt.Println("──────────────────────────────────────────────")
@@ -143,8 +158,10 @@ func printWalkForward(cfg *config.Config, window, step int, agg backtest.Aggrega
 	fmt.Printf("綜合 (G1~G4): %s\n", passFail(agg.OverallPass))
 }
 
+// row 以固定欄寬印出三欄標籤列 (用於策略 vs B&H 對照表)。
 func row(label, a, b string) { fmt.Printf("%-20s %16s %16s\n", label, a, b) }
 
+// passFail 將布林值轉換為 "PASS ✅" 或 "FAIL ❌" 字串。
 func passFail(b bool) string {
 	if b {
 		return "PASS ✅"
@@ -152,6 +169,7 @@ func passFail(b bool) string {
 	return "FAIL ❌"
 }
 
+// pct 將小數比率格式化為帶正負號的百分比字串;NaN/Inf 回傳特殊標示。
 func pct(x float64) string {
 	if math.IsNaN(x) {
 		return "n/a"
@@ -162,6 +180,7 @@ func pct(x float64) string {
 	return fmt.Sprintf("%+.1f%%", x*100)
 }
 
+// ratio 將浮點數格式化為兩位小數字串;NaN/Inf 回傳特殊標示。
 func ratio(x float64) string {
 	if math.IsNaN(x) {
 		return "n/a"
@@ -175,6 +194,7 @@ func ratio(x float64) string {
 	return fmt.Sprintf("%.2f", x)
 }
 
+// money 將金額格式化為千位分隔的貨幣字串 (如 $1,234,567)。
 func money(x float64) string {
 	neg := x < 0
 	if neg {

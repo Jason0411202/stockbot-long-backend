@@ -1,3 +1,4 @@
+// cmd/fetch_data/main.go 逐月向 TWSE 抓取追蹤標的的 OHLCV 並寫成本機 CSV 快取。
 package main
 
 // cmd/fetch_data 是一個獨立的歷史資料抓取器：
@@ -19,7 +20,9 @@ import (
 	"github.com/Jason0411202/stockbot-long-backend/internal/entity"
 )
 
+// main 解析旗標、建立輸出目錄，並對每檔標的逐月向 TWSE 抓取資料後寫出 CSV。
 func main() {
+	// 解析命令列旗標。
 	months := flag.Int("months", 90, "往前抓幾個月")
 	outDir := flag.String("out", "data", "CSV 輸出目錄")
 	stocksCSV := flag.String("stocks", "00631L,00830", "追蹤標的 (逗號分隔)")
@@ -31,6 +34,7 @@ func main() {
 		os.Exit(1)
 	}
 
+	// 解析追蹤標的清單。
 	var stocks []string
 	for _, s := range strings.Split(*stocksCSV, ",") {
 		if s = strings.TrimSpace(s); s != "" {
@@ -46,6 +50,7 @@ func main() {
 		anchors = append(anchors, fmt.Sprintf("%04d%02d01", t.Year(), int(t.Month())))
 	}
 
+	// 對每檔標的逐月呼叫 TWSE，合併去重後寫出 CSV。
 	client := twse.NewClient()
 	for _, stockID := range stocks {
 		bars := make(map[string]entity.Bar, 2048)

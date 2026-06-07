@@ -74,10 +74,12 @@ func WithHTTPClient(httpClient *http.Client) Option {
 
 // NewClient 建立 TWSE 客戶端;預設端點為真實 TWSE,預設 http.Client timeout 為 30s。
 func NewClient(opts ...Option) *Client {
+	// 以預設 timeout 與正式端點初始化 Client。
 	c := &Client{
 		httpClient: &http.Client{Timeout: defaultTimeout},
 		baseURL:    defaultBaseURL,
 	}
+	// 依序套用呼叫端傳入的 Option 覆寫預設值。
 	for _, opt := range opts {
 		opt(c)
 	}
@@ -90,6 +92,7 @@ func NewClient(opts ...Option) *Client {
 // 流程:GET 端點 → 要求 stat=="OK" 且存在 data key → 逐列去逗號 / 去 'X'、
 // ROC 轉 AD 日期、解析型別化 float、丟棄無法解析或 close<=0 的列。
 func (c *Client) FetchMonth(date, stockID string) (bars []entity.Bar, stockName string, err error) {
+	// 組裝查詢 URL 並設定 Mozilla User-Agent 以符合 TWSE 要求。
 	url := fmt.Sprintf("%s?response=json&date=%s&stockNo=%s", c.baseURL, date, stockID)
 
 	req, err := http.NewRequest(http.MethodGet, url, nil)
@@ -98,6 +101,7 @@ func (c *Client) FetchMonth(date, stockID string) (bars []entity.Bar, stockName 
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0")
 
+	// 發送 HTTP GET 請求並驗證 HTTP 狀態碼。
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, "", fmt.Errorf("twse: http get %s: %w", stockID, err)
@@ -108,6 +112,7 @@ func (c *Client) FetchMonth(date, stockID string) (bars []entity.Bar, stockName 
 		return nil, "", fmt.Errorf("twse: unexpected status %d for %s", resp.StatusCode, stockID)
 	}
 
+	// 解碼 JSON 回應並驗證 stat 欄位與 data 欄位是否存在。
 	var payload map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		return nil, "", fmt.Errorf("twse: decode json: %w", err)
@@ -122,6 +127,7 @@ func (c *Client) FetchMonth(date, stockID string) (bars []entity.Bar, stockName 
 		return nil, "", fmt.Errorf("twse: 回傳資料缺少 data 欄位")
 	}
 
+	// 解析列資料並從 title 欄位取得股票名稱。
 	bars = parseRows(rawData)
 	stockName = extractStockName(payload)
 	return bars, stockName, nil
@@ -132,27 +138,32 @@ func (c *Client) FetchMonth(date, stockID string) (bars []entity.Bar, stockName 
 func parseRows(rawData []interface{}) []entity.Bar {
 	bars := make([]entity.Bar, 0, len(rawData))
 	for _, r := range rawData {
+		// 跳過型別不符或欄位數不足的列。
 		row, ok := r.([]interface{})
 		if !ok || len(row) < minColumns {
 			continue
 		}
 
+		// 將每個欄位轉字串並清洗千分位逗號與 'X' 標記。
 		cells := make([]string, len(row))
 		for i, raw := range row {
 			s, _ := raw.(string)
 			cells[i] = cleanCell(s)
 		}
 
+		// 將民國年日期轉為西元年;轉換失敗則跳過該列。
 		adDate, err := helper.ROCToAD(cells[colDate])
 		if err != nil {
 			continue
 		}
 
+		// 收盤價無效 (停牌 "--" 等) 直接跳過,避免寫入無意義資料。
 		closePrice := parseFloat(cells[colClose])
 		if closePrice <= 0 { // 收盤價無效 (停牌 "--" 等) 直接跳過
 			continue
 		}
 
+		// 組裝 entity.Bar 並加入結果切片。
 		bars = append(bars, entity.Bar{
 			Date:   adDate,
 			Open:   parseFloat(cells[colOpen]),

@@ -1,3 +1,4 @@
+// internal/service/trading/splits.go 偵測並還原股票分割造成的價格跳空。
 package trading
 
 // splits.go 處理股票分割 (split):TWSE STOCK_DAY 提供「未還原」原始價,分割會在價格序列造成大幅隔日跳空
@@ -20,10 +21,13 @@ func splitAdjustFactors(closes []float64) []float64 {
 	if n == 0 {
 		return factors
 	}
+	// 最新一筆基準因子為 1;累乘器 cum 從最新往最舊回溯。
 	cum := 1.0
 	factors[n-1] = 1.0
 	for i := n - 1; i >= 1; i-- {
+		// 計算隔日比例;兩側皆有效才判定。
 		if closes[i] > 0 && closes[i-1] > 0 {
+			// 比例超出正常漲跌幅門檻即視為分割事件,將此次比例累入乘數。
 			if r := closes[i] / closes[i-1]; r < splitDownRatio || r > splitUpRatio {
 				cum *= r
 			}
@@ -36,10 +40,13 @@ func splitAdjustFactors(closes []float64) []float64 {
 // ApplySplitAdjust 就地把 closes (必填) 與其他同長度價格序列 (highs/lows…) 依分割因子 back-adjust。
 // 須在「日期升冪」且「計算 MA / 前綴和之前」呼叫。
 func ApplySplitAdjust(closes []float64, others ...[]float64) {
+	// 先以收盤序列計算各日乘數。
 	f := splitAdjustFactors(closes)
+	// 就地縮放收盤序列。
 	for i := range closes {
 		closes[i] *= f[i]
 	}
+	// 以相同乘數就地縮放其他同長度序列 (highs/lows 等);長度不符則略過。
 	for _, s := range others {
 		if len(s) == len(f) {
 			for i := range s {

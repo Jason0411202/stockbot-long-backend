@@ -1,3 +1,4 @@
+// internal/service/trading/series.go 定義交易引擎使用的單檔股票時間序列。
 package trading
 
 import (
@@ -39,10 +40,12 @@ type StockSeries struct {
 // 完全相同的方式」預先計算 MA20 = RollingMA(closes,20) 與 PrefixClose = BuildPrefixClose(closes)。
 // highs/lows/vols 可為 nil (DB 路徑)。呼叫端須先完成 split-adjust 與排序。
 func NewStockSeries(dates []time.Time, closes, highs, lows, vols []float64) *StockSeries {
+	// 建立日期字串 → 索引的反查表,供 ProcessDay 以 O(1) 定位當日位置。
 	idx := make(map[string]int, len(dates))
 	for i, d := range dates {
 		idx[d.Format("2006-01-02")] = i
 	}
+	// 一併預算 MA20 與前綴和,使後續指標查詢皆為 O(1)。
 	return &StockSeries{
 		Dates:       dates,
 		DateIndex:   idx,
@@ -63,7 +66,9 @@ func NewStockSeries(dates []time.Time, closes, highs, lows, vols []float64) *Sto
 // 只看過去資料,絕無未來資訊洩漏;O(log n) 走既有已排序的 Dates。
 // 注意:不可用 DateIndex (只含精確交易日),也不可用 ClosePrices[len-1] (那是全序列最後價)。
 func (s *StockSeries) CloseAsOf(day time.Time) (float64, bool) {
+	// 二分搜尋找出第一個嚴格晚於 day 的位置;i-1 即最近的 <= day 交易日。
 	i := sort.Search(len(s.Dates), func(i int) bool { return s.Dates[i].After(day) })
+	// i==0 代表 day 早於所有資料 (尚未上市),無法估值。
 	if i == 0 {
 		return 0, false
 	}
@@ -72,12 +77,14 @@ func (s *StockSeries) CloseAsOf(day time.Time) (float64, bool) {
 
 // CollectDateUnion 回傳所有股票日期的聯集,升冪排序。
 func CollectDateUnion(series map[string]*StockSeries) []time.Time {
+	// 以字串 set 去重;預估容量 2048 以減少 map 擴容。
 	seen := make(map[string]struct{}, 2048)
 	for _, s := range series {
 		for _, d := range s.Dates {
 			seen[d.Format("2006-01-02")] = struct{}{}
 		}
 	}
+	// 將去重後的日期字串解析回 time.Time。
 	out := make([]time.Time, 0, len(seen))
 	for k := range seen {
 		t, err := time.Parse("2006-01-02", k)
@@ -86,6 +93,7 @@ func CollectDateUnion(series map[string]*StockSeries) []time.Time {
 		}
 		out = append(out, t)
 	}
+	// 升冪排序後回傳,供 ProcessDates 依序處理。
 	sort.Slice(out, func(i, j int) bool { return out[i].Before(out[j]) })
 	return out
 }

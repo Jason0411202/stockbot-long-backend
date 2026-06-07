@@ -37,6 +37,7 @@ func OpenPool(dsn string) (*sql.DB, error) {
 		return nil, fmt.Errorf("OpenPool: dsn 不可為空字串")
 	}
 
+	// 解析 DSN 並補齊 DBName 與 multiStatements 參數後重新序列化。
 	cfg, err := mysql.ParseDSN(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("OpenPool: 解析 dsn 失敗: %w", err)
@@ -50,6 +51,7 @@ func OpenPool(dsn string) (*sql.DB, error) {
 	cfg.Params["multiStatements"] = "true"
 	dsn = cfg.FormatDSN()
 
+	// 開啟連線池並設定最大連線數、閒置連線數與連線存活時間。
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("OpenPool: sql.Open 失敗: %w", err)
@@ -59,6 +61,7 @@ func OpenPool(dsn string) (*sql.DB, error) {
 	db.SetMaxIdleConns(5)
 	db.SetConnMaxLifetime(time.Hour)
 
+	// 以 Ping 驗證連線是否成功。
 	if err := db.Ping(); err != nil {
 		return nil, fmt.Errorf("OpenPool: db.Ping 失敗: %w", err)
 	}

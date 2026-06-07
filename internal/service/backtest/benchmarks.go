@@ -1,3 +1,4 @@
+// internal/service/backtest/benchmarks.go 實作 B&H 與同曝險 Blend 對照組。
 package backtest
 
 import (
@@ -70,16 +71,19 @@ func holdingValue(series map[string]*trading.StockSeries, positions map[string]i
 // bhImmediateArm:期初把期初資金等權買滿,其後每個注資日把當前所有現金 (新注入 + 整股餘額)
 // 立刻等權買滿,持有到底、永不賣 —— 即「資金一解鎖就立刻買」的 Buy & Hold。
 func bhImmediateArm(cfg *config.Config, series map[string]*trading.StockSeries, windowDates []time.Time, contribOnDay []float64) armResult {
+	// 初始化現金池、持倉與現金流記錄,以期初資金為第一筆負向現金流。
 	positions := make(map[string]int, len(cfg.TrackStocks))
 	cash := cfg.InitialCash
 	totalIn := cfg.InitialCash
 	flows := []Cashflow{{Date: windowDates[0], Amount: -cfg.InitialCash}}
 
+	// 期初立刻把全部現金等權買滿可交易股票。
 	buys := 0
 	if deployAllCash(cfg, series, windowDates[0], positions, &cash) {
 		buys++
 	}
 
+	// 逐日記錄權益曲線與平均曝險;每個注資日把新現金立刻再次等權買滿。
 	curve := make([]float64, len(windowDates))
 	expSum, expN := 0.0, 0
 	for i, d := range windowDates {
@@ -100,6 +104,7 @@ func bhImmediateArm(cfg *config.Config, series map[string]*trading.StockSeries, 
 		}
 	}
 
+	// 以期末 as-of 市值結算,追加期末正向現金流並組裝結果。
 	end := windowDates[len(windowDates)-1]
 	finalEq := holdingValue(series, positions, end) + cash
 	flows = append(flows, Cashflow{Date: end, Amount: finalEq})
@@ -142,6 +147,7 @@ func blendMetrics(bhNav []float64, w float64, contribOnDay []float64, initial fl
 	if n == 0 {
 		return SeriesMetrics{AvgExp: w}
 	}
+	// 以 B&H NAV 的逐日報酬乘上權重 w 合成混合 NAV 序列,起始值為 1。
 	blendNav := make([]float64, n)
 	blendNav[0] = 1
 	for i := 1; i < n; i++ {
@@ -151,6 +157,7 @@ func blendMetrics(bhNav []float64, w float64, contribOnDay []float64, initial fl
 		}
 		blendNav[i] = blendNav[i-1] * (1 + w*r)
 	}
+	// 由混合 NAV 序列還原現金流並計算資金加權報酬、回撤與 Calmar。
 	flows, finalEq, totalIn := flowsFromNav(blendNav, contribOnDay, initial, dates)
 	mwr, ok := xirr(flows)
 	mdd := maxDrawdown(blendNav)
@@ -168,9 +175,11 @@ func blendMetrics(bhNav []float64, w float64, contribOnDay []float64, initial fl
 // flowsFromNav 把「期初 initial + 注資時程 contribOnDay」投入一條 NAV 序列 (注資以前一日 NAV 換單位),
 // 回傳外部現金流 (期初/每月為負、期末清算為正)、期末權益、投入本金總額。供合成對照組 (Blend) 算資金加權報酬。
 func flowsFromNav(nav, contribOnDay []float64, initial float64, dates []time.Time) (flows []Cashflow, finalEquity, totalIn float64) {
+	// 以期初資金作為單位數基準,並記錄期初負向現金流。
 	units := initial
 	totalIn = initial
 	flows = []Cashflow{{Date: dates[0], Amount: -initial}}
+	// 逐日把注資以前一日 NAV 換成新單位,累計投入本金與現金流。
 	for i := 1; i < len(nav); i++ {
 		if contribOnDay[i] > 0 {
 			if nav[i-1] > 0 {
@@ -180,11 +189,13 @@ func flowsFromNav(nav, contribOnDay []float64, initial float64, dates []time.Tim
 			flows = append(flows, Cashflow{Date: dates[i], Amount: -contribOnDay[i]})
 		}
 	}
+	// 以期末 NAV 換算持有單位的最終市值,追加期末正向現金流。
 	finalEquity = units * nav[len(nav)-1]
 	flows = append(flows, Cashflow{Date: dates[len(dates)-1], Amount: finalEquity})
 	return flows, finalEquity, totalIn
 }
 
+// safeMean 在 n 為 0 時回傳 0，避免平均值計算除以 0。
 func safeMean(sum float64, n int) float64 {
 	if n == 0 {
 		return 0
@@ -192,6 +203,7 @@ func safeMean(sum float64, n int) float64 {
 	return sum / float64(n)
 }
 
+// safeDiv 在分母為 0 時回傳 0，避免倍數或比例計算產生 Inf。
 func safeDiv(a, b float64) float64 {
 	if b == 0 {
 		return 0

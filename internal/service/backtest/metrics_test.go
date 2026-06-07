@@ -1,3 +1,4 @@
+// internal/service/backtest/metrics_test.go 驗證 XIRR/CAGR/回撤/Calmar 等績效指標計算。
 package backtest
 
 import (
@@ -10,6 +11,7 @@ import (
 
 const tol = 1e-9
 
+// approx 以指定容忍度比較兩個浮點數,不符合時以 Fatal 報告差值。
 func approx(t *testing.T, name string, got, want, tolerance float64) {
 	t.Helper()
 	if math.Abs(got-want) > tolerance {
@@ -19,11 +21,12 @@ func approx(t *testing.T, name string, got, want, tolerance float64) {
 
 var flowBase = time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 
-// cf 以 flowBase 為 t=0,建立一筆位於第 days 天的現金流。
+// cf 以 flowBase 為 t=0,建立位於第 days 天、金額為 amount 的現金流,供 XIRR 測試組裝輸入。
 func cf(amount float64, days int) Cashflow {
 	return Cashflow{Date: flowBase.AddDate(0, 0, days), Amount: amount}
 }
 
+// TestXIRR_CanonicalDoubling 驗證資金兩年翻倍的 XIRR 解為 √2-1 ≈ 41.42%。
 func TestXIRR_CanonicalDoubling(t *testing.T) {
 	got, ok := xirr([]Cashflow{cf(-100000, 0), cf(200000, 730)})
 	if !ok {
@@ -32,6 +35,7 @@ func TestXIRR_CanonicalDoubling(t *testing.T) {
 	approx(t, "XIRR doubling", got, 0.41421356237309515, 1e-7)
 }
 
+// TestXIRR_WithIntermediateSell 驗證含中途賣出現金流的 XIRR 收斂至正確年化報酬率。
 func TestXIRR_WithIntermediateSell(t *testing.T) {
 	got, ok := xirr([]Cashflow{cf(-100000, 0), cf(50000, 365), cf(60000, 730)})
 	if !ok {
@@ -40,6 +44,7 @@ func TestXIRR_WithIntermediateSell(t *testing.T) {
 	approx(t, "XIRR w/ sell", got, 0.06394102980498532, 1e-7)
 }
 
+// TestXIRR_TotalLossZeroSells 驗證部分虧損現金流的 XIRR 為正確負報酬率。
 func TestXIRR_TotalLossZeroSells(t *testing.T) {
 	got, ok := xirr([]Cashflow{cf(-100000, 0), cf(40000, 730)})
 	if !ok {
@@ -48,6 +53,7 @@ func TestXIRR_TotalLossZeroSells(t *testing.T) {
 	approx(t, "XIRR loss", got, -0.3675444679663241, 1e-7)
 }
 
+// TestXIRR_NoSignChange_Undefined 驗證現金流無正值時 XIRR 無解,回傳 ok=false。
 func TestXIRR_NoSignChange_Undefined(t *testing.T) {
 	_, ok := xirr([]Cashflow{cf(-100000, 0), cf(-5000, 90)})
 	if ok {
@@ -55,6 +61,7 @@ func TestXIRR_NoSignChange_Undefined(t *testing.T) {
 	}
 }
 
+// TestXIRR_MultiRoot_Ambiguous 驗證多重變號現金流 (NPV 多根) 時 XIRR 判定不唯一並回傳 (NaN, false)。
 // 多重變號現金流 (賣出後再買進) -> NPV 多根 -> 資金加權報酬不唯一 -> 回傳 (NaN, false)。
 // 沒有這道防呆,舊版會回傳貼著 -0.9999 邊界的人為根 (把現金流誤報成 ~-99%)。
 // 經典雙根樣本 [-1,+5,-6] (t=0,1,2y) 的根為 r=1.0 與 r=2.0,兩者皆在掃描範圍內 -> 應判定不唯一。
@@ -65,6 +72,7 @@ func TestXIRR_MultiRoot_Ambiguous(t *testing.T) {
 	}
 }
 
+// TestXIRR_EqualsPoolCAGR 驗證封閉資金池 (僅期初買入/期末賣出) 的 XIRR 等於對應 CAGR。
 // 鎖定「封閉資金池 CAGR == 資金加權 IRR」的恆等式:唯二外部現金流為期初 -E0 與期末 +EN 時,
 // XIRR 解必等於 CAGR。任何未來引入手續費/外部金流而破壞此恆等式都會被這個測試抓到。
 func TestXIRR_EqualsPoolCAGR(t *testing.T) {
@@ -75,12 +83,14 @@ func TestXIRR_EqualsPoolCAGR(t *testing.T) {
 	approx(t, "pool XIRR vs CAGR", x, cagr(100000, 200000, 2.0), 1e-6)
 }
 
+// TestCAGR 驗證 cagr 在正常、短期獲利及短期虧損情境下的年化計算精度。
 func TestCAGR(t *testing.T) {
 	approx(t, "CAGR 2y", cagr(100000, 137000, 2.0), 0.17046999107196248, 1e-12)
 	approx(t, "CAGR short up", cagr(100000, 110000, 30.0/365.0), 2.188680476905307, 1e-9)
 	approx(t, "CAGR short loss", cagr(100000, 80000, 274.0/365.0), -0.2571441552424847, 1e-9)
 }
 
+// TestPeriodReturn 驗證 periodReturn 計算期間報酬率,起始值 <=0 時回傳 NaN。
 func TestPeriodReturn(t *testing.T) {
 	approx(t, "period", periodReturn(100000, 110000), 0.10, tol)
 	if !math.IsNaN(periodReturn(0, 100)) {
@@ -88,6 +98,7 @@ func TestPeriodReturn(t *testing.T) {
 	}
 }
 
+// TestMaxDrawdown 驗證 maxDrawdown 在典型回撤、雙峰及單調上漲序列中的計算正確性。
 func TestMaxDrawdown(t *testing.T) {
 	approx(t, "mdd 10pct",
 		maxDrawdown([]float64{100000, 100000, 105000, 98000, 110000, 99000, 99000, 120000}),
@@ -100,6 +111,7 @@ func TestMaxDrawdown(t *testing.T) {
 		0.0, 1e-12)
 }
 
+// TestSortino 驗證下行標準差、逐期 Sortino 及年化 Sortino 的計算精度。
 func TestSortino(t *testing.T) {
 	rets := []float64{0.01, -0.02, 0.015, -0.01, 0.00, 0.02, -0.03}
 	approx(t, "downsideDev", downsideDeviation(rets, 0), 0.01414213562373095, 1e-12)
@@ -109,6 +121,7 @@ func TestSortino(t *testing.T) {
 	approx(t, "sortino annualized", sortino(rets, 0, 252), -2.4053511772118195, 1e-6)
 }
 
+// TestCalmar 驗證 calmar 在正常、負報酬、零回撤 (+Inf) 及負報酬零回撤 (NaN) 情境的回傳值。
 func TestCalmar(t *testing.T) {
 	approx(t, "calmar std", calmar(0.12, -0.10), 1.2, 1e-12)
 	approx(t, "calmar negative", calmar(-0.05, -0.20), -0.25, 1e-12)
@@ -120,6 +133,7 @@ func TestCalmar(t *testing.T) {
 	}
 }
 
+// TestNavCurveFromEquity 驗證 NAV 曲線正確剔除注資造成的假報酬,並在無注資時退化等同原始權益回撤。
 func TestNavCurveFromEquity(t *testing.T) {
 	// 注資不可製造假報酬:day1 注入 50 使權益 100→150,但市場沒動 → NAV 應維持 1.0;
 	// day2 市場翻倍 (無注資) → NAV = 2.0。
@@ -140,6 +154,7 @@ func TestNavCurveFromEquity(t *testing.T) {
 	approx(t, "nav reveals true drop", nav2[1], 60.0/110.0, 1e-12)
 }
 
+// TestMedianStdev 驗證 median 在奇偶數序列的中位數計算,以及 stdev 的母體標準差計算精度。
 func TestMedianStdev(t *testing.T) {
 	approx(t, "median odd", median([]float64{3, 1, 2}), 2, tol)
 	approx(t, "median even", median([]float64{4, 1, 3, 2}), 2.5, tol)

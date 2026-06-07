@@ -1,6 +1,4 @@
-// Package entity holds domain models that map to database tables and external
-// market data. It is a leaf package: it imports nothing else internal, so every
-// other layer (repository, service, dto) may depend on it freely.
+// internal/entity/stock.go 定義股票歷史行情與 TWSE 原始 K 棒的資料模型。
 package entity
 
 // StockHistory 對應 StockHistory table,PK (stock_id, date)。
@@ -23,10 +21,10 @@ type StockHistory struct {
 // Bar 為單一交易日的 OHLCV,由 TWSE client 解析後回傳 (取代 cmd/fetch_data 的私有 bar
 // 與 sqls.TWSEapi 的 [][]string 原始字串路徑)。Date 為 AD "YYYY-MM-DD"。
 type Bar struct {
-	Date   string
-	Open   float64
-	High   float64
-	Low    float64
-	Close  float64
-	Volume float64
+	Date   string  // 交易日期 (西元 YYYY-MM-DD)
+	Open   float64 // 開盤價
+	High   float64 // 最高價
+	Low    float64 // 最低價
+	Close  float64 // 收盤價
+	Volume float64 // 成交量 (股)
 }

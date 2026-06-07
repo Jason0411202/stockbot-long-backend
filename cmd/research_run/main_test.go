@@ -1,3 +1,4 @@
+// cmd/research_run/main_test.go 驗證回測結果的輸出格式，包含 PnL 百分比計算與零本金防呆邏輯。
 package main
 
 import (
@@ -9,8 +10,7 @@ import (
 	"github.com/Jason0411202/stockbot-long-backend/internal/service/backtest"
 )
 
-// main_test.go 驗證回測結果輸出格式 (含 PnL 百分比與零本金防呆)。
-
+// TestPrintResult 驗證 printResult 函式輸出包含正確的欄位名稱、股票代號及 PnL 百分比計算結果。
 func TestPrintResult(t *testing.T) {
 	// Arrange
 	res := &backtest.BacktestResult{
@@ -32,6 +32,7 @@ func TestPrintResult(t *testing.T) {
 	}
 }
 
+// TestPrintResult_ZeroInvestedNoDivByZero 驗證本金為零時 printResult 不發生除零 panic 且輸出正確百分比。
 func TestPrintResult_ZeroInvestedNoDivByZero(t *testing.T) {
 	// Arrange — 本金為 0 不可除零 panic。
 	res := &backtest.BacktestResult{}

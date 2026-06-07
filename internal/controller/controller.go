@@ -59,6 +59,7 @@ func (ctl *Controller) Home(c echo.Context) error {
 // swallowed, not surfaced), preserving the original handler behavior.
 func (ctl *Controller) UnrealizedGainsLosses(c echo.Context) error {
 	ctl.log.Info("GET /api/get_unrealized_gains_losses")
+	// 呼叫 service 取得未實現損益列表;發生錯誤時回傳空陣列維持原有行為。
 	rows, err := ctl.portfolio.UnrealizedGainsLosses(c.Request().Context())
 	if err != nil {
 		ctl.log.Error("GetAllUnrealizedGainsLosses 發生錯誤:", err)
@@ -71,6 +72,7 @@ func (ctl *Controller) UnrealizedGainsLosses(c echo.Context) error {
 // and returns 200 + an empty typed slice.
 func (ctl *Controller) RealizedGainsLosses(c echo.Context) error {
 	ctl.log.Info("GET /api/get_realized_gains_losses")
+	// 呼叫 service 取得已實現損益列表;發生錯誤時回傳空陣列維持原有行為。
 	rows, err := ctl.portfolio.RealizedGainsLosses(c.Request().Context())
 	if err != nil {
 		ctl.log.Error("GetAllRealizedGainsLosses 發生錯誤:", err)
@@ -83,6 +85,7 @@ func (ctl *Controller) RealizedGainsLosses(c echo.Context) error {
 // it logs and returns 200 + an empty typed slice.
 func (ctl *Controller) StockStatisticData(c echo.Context) error {
 	ctl.log.Info("GET /api/get_stock_statistic_data")
+	// 呼叫 service 取得各追蹤股票的顯示資料;發生錯誤時回傳空陣列維持原有行為。
 	rows, err := ctl.statistic.StockStatisticData(c.Request().Context())
 	if err != nil {
 		ctl.log.Error("GetStockStatisticData 發生錯誤:", err)
@@ -95,11 +98,13 @@ func (ctl *Controller) StockStatisticData(c echo.Context) error {
 // A missing stockId is a 400 client error; a service error is swallowed to a
 // 200 + empty typed slice (same as the original handler).
 func (ctl *Controller) StockHistoryData(c echo.Context) error {
+	// 讀取必要的 stockId query 參數;缺少時回傳 400。
 	stockID := c.QueryParam("stockId")
 	if stockID == "" {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "stockId 參數是必要的"})
 	}
 	ctl.log.Infof("GET /api/get_stock_history_data?stockId=%s", stockID)
+	// 呼叫 service 取得收盤價歷史序列;發生錯誤時回傳空陣列維持原有行為。
 	rows, err := ctl.history.StockHistoryData(c.Request().Context(), stockID)
 	if err != nil {
 		ctl.log.Error("GetStockHistoryData 發生錯誤:", err)

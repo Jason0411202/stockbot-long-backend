@@ -1,3 +1,4 @@
+// internal/config/config.go 定義 config.yaml 的資料模型與載入驗證流程。
 package config
 
 import (
@@ -11,7 +12,7 @@ import (
 // 當「跌幅深度判斷值」> Above 時命中此級距 (由淺至深取第一筆滿足者),
 // 用來決定 bearDepthWeight 的幾何權重 (ratio^命中索引) → 跌越深、買入現金比例放越大。
 type BaselineBuyTier struct {
-	Above float64 `yaml:"above"`
+	Above float64 `yaml:"above"` // 深度門檻;跌幅超過此值即命中本級距
 }
 
 // Config 為不私密的超參數，由 config.yaml 讀入後供全 app 使用。
@@ -98,18 +99,18 @@ type Config struct {
 
 // StockParams 為單一個股可覆寫的策略旋鈕 (指標型;nil = 繼承共用值,YAML 省略即 nil)。
 type StockParams struct {
-	MAWindow              *int     `yaml:"ma_window"`
-	RegimeMAWindow        *int     `yaml:"regime_ma_window"`
-	BullBuyBand           *float64 `yaml:"bull_buy_band"`
-	CooldownDays          *int     `yaml:"cooldown_days"`
-	BullCooldownDays      *int     `yaml:"bull_cooldown_days"`
-	BullBuyFrac           *float64 `yaml:"bull_buy_frac"`
-	BearBuyFrac           *float64 `yaml:"bear_buy_frac"`
-	BuyTierRatio          *float64 `yaml:"buy_tier_ratio"`
-	BaselineSellThreshold *float64 `yaml:"baseline_sell_threshold"`
-	SellFracOfPosition    *float64 `yaml:"sell_frac_of_position"`
-	TrailStopBear         *float64 `yaml:"trail_stop_bear"`
-	TrailMinGain          *float64 `yaml:"trail_min_gain"`
+	MAWindow              *int     `yaml:"ma_window"`               // 覆寫進場均線長度
+	RegimeMAWindow        *int     `yaml:"regime_ma_window"`        // 覆寫牛熊判定均線長度
+	BullBuyBand           *float64 `yaml:"bull_buy_band"`           // 覆寫牛市買入帶寬
+	CooldownDays          *int     `yaml:"cooldown_days"`           // 覆寫冷卻天數
+	BullCooldownDays      *int     `yaml:"bull_cooldown_days"`      // 覆寫牛市冷卻天數
+	BullBuyFrac           *float64 `yaml:"bull_buy_frac"`           // 覆寫牛市買入現金比例
+	BearBuyFrac           *float64 `yaml:"bear_buy_frac"`           // 覆寫熊市買入現金比例
+	BuyTierRatio          *float64 `yaml:"buy_tier_ratio"`          // 覆寫加碼幾何權重底數
+	BaselineSellThreshold *float64 `yaml:"baseline_sell_threshold"` // 覆寫獲利了結觸發門檻
+	SellFracOfPosition    *float64 `yaml:"sell_frac_of_position"`   // 覆寫獲利了結賣出比例
+	TrailStopBear         *float64 `yaml:"trail_stop_bear"`         // 覆寫熊市移動停利回撤幅度
+	TrailMinGain          *float64 `yaml:"trail_min_gain"`          // 覆寫移動停利啟動最低獲利門檻
 }
 
 // ForStock 回傳「套用該股 override 後」的有效設定。無 override 時回傳原指標 (零成本)。

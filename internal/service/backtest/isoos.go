@@ -1,3 +1,4 @@
+// internal/service/backtest/isoos.go 實作滾動式樣本內外 walk-forward 驗證。
 package backtest
 
 // isoos.go 提供「滾動式 walk-forward 樣本外驗證 (rolling / anchored walk-forward OOS)」:
@@ -46,6 +47,7 @@ func EvaluateRollingOOS(cfg *config.Config, series map[string]*trading.StockSeri
 	if cfg.ScalingStrategy != "Baseline" {
 		return RollingOOSReport{}, fmt.Errorf("評估目前僅支援 Scaling_Strategy=Baseline")
 	}
+	// 套用各參數的合理預設值。
 	if p.WindowMonths <= 0 {
 		p.WindowMonths = 24
 	}
@@ -62,6 +64,7 @@ func EvaluateRollingOOS(cfg *config.Config, series map[string]*trading.StockSeri
 		foldMonths = 12
 	}
 
+	// 取得全序列日期並確認共同有效資料期存在,再以 isMonths 計算錨定日。
 	allDates := trading.CollectDateUnion(series)
 	if len(allDates) == 0 {
 		return RollingOOSReport{}, fmt.Errorf("無任何日期可供評估")
@@ -72,6 +75,7 @@ func EvaluateRollingOOS(cfg *config.Config, series map[string]*trading.StockSeri
 	}
 	anchor := csStart.AddDate(0, isMonths, 0)
 
+	// 產生所有滾動視窗,依錨定日分成 IS (訓練段) 與 OOS (保留段) 兩組。
 	windows := generateWindows(cfg, series, allDates, p)
 	var isW [][2]time.Time
 	var oosW [][2]time.Time
@@ -84,6 +88,7 @@ func EvaluateRollingOOS(cfg *config.Config, series map[string]*trading.StockSeri
 		}
 	}
 
+	// 分別評估 IS 與 OOS 視窗組。
 	isReports, err := evalWindowSet(cfg, series, allDates, isW)
 	if err != nil {
 		return RollingOOSReport{}, err
@@ -93,6 +98,7 @@ func EvaluateRollingOOS(cfg *config.Config, series map[string]*trading.StockSeri
 		return RollingOOSReport{}, err
 	}
 
+	// 組裝頂層報告:IS / OOS 整體彙整。
 	rep := RollingOOSReport{
 		ISMonths: isMonths, FoldMonths: foldMonths, Anchor: anchor,
 		NIS: len(isReports), NOOS: len(oosReports),
@@ -109,6 +115,7 @@ func EvaluateRollingOOS(cfg *config.Config, series map[string]*trading.StockSeri
 		}
 		groups[k] = append(groups[k], r)
 	}
+	// 依折序號排序後逐折彙整,計算通過的關卡數並附加到 Folds。
 	sortInts(order)
 	for _, k := range order {
 		g := groups[k]
@@ -127,6 +134,7 @@ func EvaluateRollingOOS(cfg *config.Config, series map[string]*trading.StockSeri
 	return rep, nil
 }
 
+// evalWindowSet 逐一評估一組 walk-forward 視窗並回傳各視窗報告。
 func evalWindowSet(cfg *config.Config, series map[string]*trading.StockSeries, allDates []time.Time, ws [][2]time.Time) ([]WindowReport, error) {
 	out := make([]WindowReport, 0, len(ws))
 	for _, w := range ws {
@@ -148,6 +156,7 @@ func monthsBetween(a, b time.Time) int {
 	return m
 }
 
+// sortInts 以插入排序就地排序小型整數切片。
 func sortInts(xs []int) {
 	for i := 1; i < len(xs); i++ {
 		for j := i; j > 0 && xs[j-1] > xs[j]; j-- {

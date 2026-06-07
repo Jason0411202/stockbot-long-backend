@@ -1,3 +1,4 @@
+// internal/service/trading/engine_test.go 驗證交易引擎的買賣套用、狀態還原與不變量。
 package trading
 
 import (
@@ -9,6 +10,7 @@ import (
 // (現金夾取、持倉增減、峰值追蹤、打破冷卻計數、狀態還原、as-of 估值)。
 // per-stock 隔離測試因依賴 backtest 視窗核心,移至 backtest 套件。
 
+// TestEngine_BuysInBullNeverGoesNegative 驗證多頭行情下引擎至少成交一筆買入,且現金不跌為負,現金耗盡後出現 skipped。
 func TestEngine_BuysInBullNeverGoesNegative(t *testing.T) {
 	// Arrange — 現金很少但 BullBuyFrac 誇張 (想買遠超現金),測現金夾取與 skipped。
 	cfg := baseCfg("TEST")
@@ -37,6 +39,7 @@ func TestEngine_BuysInBullNeverGoesNegative(t *testing.T) {
 	}
 }
 
+// TestEngine_ProcessDay_SkipsUntradeableInputs 驗證未追蹤股票、非交易日及零價格日不產生任何成交紀錄。
 func TestEngine_ProcessDay_SkipsUntradeableInputs(t *testing.T) {
 	// Arrange — 未追蹤的股票 / 非交易日 / 非正價格都不可成交。
 	cfg := baseCfg("TEST")
@@ -60,6 +63,7 @@ func TestEngine_ProcessDay_SkipsUntradeableInputs(t *testing.T) {
 	}
 }
 
+// TestEngine_TrailStopExitsInBearAfterPeak 驗證先大漲建倉再崩跌轉空後,移動停利觸發至少一次全出。
 func TestEngine_TrailStopExitsInBearAfterPeak(t *testing.T) {
 	// Arrange — 先大漲 (建倉 + 武裝峰值),再崩跌轉空 (觸發移動停利全出)。
 	cfg := baseCfg("TEST")
@@ -81,6 +85,7 @@ func TestEngine_TrailStopExitsInBearAfterPeak(t *testing.T) {
 	}
 }
 
+// TestEngine_AddCashOnlyPositive 驗證 AddCash 僅接受正數注資,負值與零皆為 no-op。
 func TestEngine_AddCashOnlyPositive(t *testing.T) {
 	// Arrange
 	engine := NewEngine(baseCfg("TEST")) // 起始現金 = InitialCash
@@ -97,6 +102,7 @@ func TestEngine_AddCashOnlyPositive(t *testing.T) {
 	}
 }
 
+// TestEngine_SeedRestoresState 驗證 SeedCash / SeedPosition / SeedLastBuy 正確還原引擎重啟後的現金與持倉狀態。
 func TestEngine_SeedRestoresState(t *testing.T) {
 	// Arrange — 模擬上線重啟:從 DB 還原現金 / 持倉 / 最後買入日。
 	cfg := baseCfg("TEST")
@@ -118,6 +124,7 @@ func TestEngine_SeedRestoresState(t *testing.T) {
 	}
 }
 
+// TestEngine_HoldingValueAsOf_PreListingIsZero 驗證持倉股在尚未上市的日期估值貢獻為零,不引入未來資訊。
 func TestEngine_HoldingValueAsOf_PreListingIsZero(t *testing.T) {
 	// Arrange — 持倉估值在「該股尚未上市」的日期應貢獻 0 (無未來資訊)。
 	cfg := baseCfg("TEST")
@@ -131,6 +138,7 @@ func TestEngine_HoldingValueAsOf_PreListingIsZero(t *testing.T) {
 	}
 }
 
+// TestEngine_BreaksInWindow_RollingCount 驗證 breaksInWindow 僅計算滾動視窗內的打破冷卻次數,視窗外記錄不列入。
 func TestEngine_BreaksInWindow_RollingCount(t *testing.T) {
 	// Arrange — 直接填入歷次打破冷卻日期 (同套件可存取未匯出欄位)。
 	cfg := baseCfg("TEST")
@@ -152,6 +160,7 @@ func TestEngine_BreaksInWindow_RollingCount(t *testing.T) {
 	}
 }
 
+// TestRegimeBull_MaSlope 驗證 ma_slope 方法在上升序列中判為牛市,回看越界時判為空頭。
 func TestRegimeBull_MaSlope(t *testing.T) {
 	// Arrange — 上升序列;ma_slope:當前 MA > lb 日前 MA → bull。
 	up := seriesFrom(mustDate(t, "2020-01-01"), linRamp(160, 50, 200))

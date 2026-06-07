@@ -1,3 +1,4 @@
+// internal/service/trading_service.go 負責線上交易模式的啟動、回放、每日 loop 與成交副作用。
 package service
 
 import (
@@ -14,16 +15,11 @@ import (
 	"github.com/Jason0411202/stockbot-long-backend/internal/service/trading"
 )
 
-// TradingService is the online-trading orchestration (the imperative shell). It
-// ports the online logic that previously lived in the kernals shim
-// (DailyCheck / runOnlineMode / seedEngineFromDB / runCatchUp / runDailyLoop /
-// runOneDay / dbExecutor) onto the layered dependencies: the pure trading engine,
-// the portfolio/market services, and the repository/notifier ports.
-//
-// The pure decision logic stays in *trading.Engine; this shell only loads price
-// series from the DB, restores engine state at startup, persists the
-// watermark/cash, and routes applied buys/sells to the portfolio service and
-// Discord.
+// TradingService 是線上交易模式的命令式外殼（imperative shell）。
+// 它將純交易引擎、投資組合／市場資料服務，以及 repository／notifier port 組合在一起，
+// 負責從 DB 載入價格序列、於啟動時還原引擎狀態、持久化水位線與現金，
+// 並將成交事件路由至 portfolio service 與 Discord。
+// 純決策邏輯保留在 *trading.Engine 中，TradingService 本身只處理 I/O 協調。
 type TradingService struct {
 	engine    *trading.Engine
 	portfolio *PortfolioService
@@ -36,22 +32,20 @@ type TradingService struct {
 	log       *logrus.Logger
 }
 
-// BotState keys persisted across restarts (mirror sqls.go Load/SaveWatermark and
-// Load/SaveCash).
+// BotState 鍵值常數，對應跨重啟持久化的水位線與現金欄位。
 const (
 	stateKeyWatermark = "last_processed_date"
 	stateKeyCash      = "current_cash"
 )
 
-// dateLayout / datetimeLayout are the two stored date formats the seed path must
-// tolerate (DATE columns vs legacy DATETIME), preserved from seedEngineFromDB.
+// dateLayout / datetimeLayout 是 seed 路徑需相容的兩種日期字串格式
+// （DATE 欄位格式與舊版 DATETIME 欄位格式）。
 const (
 	dateLayout     = "2006-01-02"
 	datetimeLayout = "2006-01-02 15:04:05"
 )
 
-// NewTradingService wires a TradingService to its engine, services, ports,
-// config and logger.
+// NewTradingService 建立並回傳一個已完成依賴注入的 TradingService。
 func NewTradingService(
 	engine *trading.Engine,
 	portfolio *PortfolioService,
@@ -76,35 +70,29 @@ func NewTradingService(
 	}
 }
 
-// DailyCheck is the entrypoint after server boot: it enters online mode (startup
-// catch-up replay of historical trades, then the daily 14:00 decision loop).
-//
-// The BackTestingMonths backtest branch that the old kernals.DailyCheck carried
-// was already removed in phase 7, so DailyCheck simply delegates to RunOnline.
+// DailyCheck 是伺服器啟動後的進入點，委派給 RunOnline 執行線上模式的完整啟動流程。
 func (s *TradingService) DailyCheck(ctx context.Context) error {
 	s.log.Info("DailyCheck 開始執行")
 	return s.RunOnline(ctx)
 }
 
-// RunOnline starts online mode (ports runOnlineMode):
-//  1. fetch latest TWSE data (a failure is non-fatal — keep using the existing DB).
-//  2. load the price series.
-//  3. restore engine state from the DB (BotState + UnrealizedGainsLosses).
-//  4. catch-up: replay [watermark+1, latest] through the engine, writing the DB
-//     but NOT sending per-trade Discord embeds.
-//  5. enter the daily loop: every day at 14:00 Taipei, fetch + run one day + notify.
-//
-// The only semantic difference between online and backtest is whether step 5 runs
-// after step 4.
+// RunOnline 啟動線上模式，依序執行以下步驟：
+//  1. 抓取最新 TWSE 資料（失敗為非致命，沿用既有 DB）。
+//  2. 從 DB 載入價格序列。
+//  3. 從 DB（BotState + UnrealizedGainsLosses）還原引擎狀態。
+//  4. Catch-up：靜默回放 [水位線+1, 最新日] 區間，寫入 DB 但不發 Discord 通知。
+//  5. 進入每日 loop：每天 14:00 台灣時間抓取資料、執行當日決策並發送通知。
 func (s *TradingService) RunOnline(ctx context.Context) error {
 	if s.cfg.ScalingStrategy != "Baseline" {
 		return fmt.Errorf("目前僅支援 Scaling_Strategy=Baseline, got %s", s.cfg.ScalingStrategy)
 	}
 
+	// 更新最新 TWSE 資料；失敗時記錄錯誤但繼續使用既有 DB 資料。
 	if err := s.market.UpdateDatabase(ctx); err != nil {
 		s.log.Error("UpdateDatabase 錯誤 (不致命,沿用既有 DB):", err)
 	}
 
+	// 載入所有追蹤股票的價格序列。
 	series, err := s.loadSeries(ctx)
 	if err != nil {
 		return fmt.Errorf("loadSeries: %w", err)
@@ -113,10 +101,12 @@ func (s *TradingService) RunOnline(ctx context.Context) error {
 		return fmt.Errorf("無任何股票歷史資料")
 	}
 
+	// 從 DB 還原引擎的現金、持倉與冷卻錨點。
 	if err := s.SeedFromDB(ctx); err != nil {
 		return fmt.Errorf("SeedFromDB: %w", err)
 	}
 
+	// 靜默回放未處理的歷史日期。
 	if err := s.CatchUp(ctx, series); err != nil {
 		return fmt.Errorf("catch-up: %w", err)
 	}
@@ -124,16 +114,14 @@ func (s *TradingService) RunOnline(ctx context.Context) error {
 	return s.runDailyLoop(ctx)
 }
 
-// loadSeries loads every tracked stock's history from the DB and builds a
-// trading.StockSeries per stock. It delegates the DB-rows→StockSeries
-// construction to the shared LoadTradingSeries helper (no behavior change), then
-// warns about any tracked stock that produced no series (preserving the OLD
-// loadStockSeries logging).
+// loadSeries 從 DB 載入每檔追蹤股票的歷史資料，並建構 trading.StockSeries map。
+// 對沒有任何歷史資料的股票記錄警告後略過。
 func (s *TradingService) loadSeries(ctx context.Context) (map[string]*trading.StockSeries, error) {
 	series, err := LoadTradingSeries(ctx, s.series, s.cfg.TrackStocks)
 	if err != nil {
 		return nil, err
 	}
+	// 對缺少歷史資料的追蹤股票記錄警告。
 	for _, stockID := range s.cfg.TrackStocks {
 		if _, ok := series[stockID]; !ok {
 			s.log.Warn("無歷史資料 stockID=", stockID)
@@ -142,11 +130,11 @@ func (s *TradingService) loadSeries(ctx context.Context) (map[string]*trading.St
 	return series, nil
 }
 
-// SeedFromDB restores the engine's cash, positions and per-stock cooldown anchor
-// from the DB (ports seedEngineFromDB). Cash falls back to cfg.InitialCash when
-// BotState has no record (first start). Lot dates tolerate both DATE and DATETIME
-// layouts.
+// SeedFromDB 從 DB 還原引擎的現金、持倉與各股冷卻錨點。
+// 現金以 BotState 為準；無紀錄時退回 cfg.InitialCash（首次啟動）。
+// lot 日期同時相容 DATE 與 DATETIME 兩種格式。
 func (s *TradingService) SeedFromDB(ctx context.Context) error {
+	// 讀取持久化的現金值；無紀錄時使用設定的起始現金。
 	cash, hasCash, err := s.loadCash(ctx)
 	if err != nil {
 		return fmt.Errorf("loadCash: %w", err)
@@ -158,6 +146,7 @@ func (s *TradingService) SeedFromDB(ctx context.Context) error {
 		s.log.Infof("BotState 無現金紀錄,使用 cfg.InitialCash=%.2f", s.cfg.InitialCash)
 	}
 
+	// 從 UnrealizedGainsLosses 讀取所有持倉，還原引擎持倉狀態。
 	lots, err := s.ledger.LoadAllUnrealized(ctx)
 	if err != nil {
 		return fmt.Errorf("LoadAllUnrealized: %w", err)
@@ -175,6 +164,7 @@ func (s *TradingService) SeedFromDB(ctx context.Context) error {
 	}
 	s.log.Infof("從 UnrealizedGainsLosses 還原 %d 筆持倉", len(lots))
 
+	// 還原各股最後買入日（冷卻計算的時間錨點）。
 	for _, stockID := range s.cfg.TrackStocks {
 		raw, has, err := s.ledger.LastBuyDateRaw(ctx, stockID)
 		if err != nil {
@@ -196,22 +186,22 @@ func (s *TradingService) SeedFromDB(ctx context.Context) error {
 	return nil
 }
 
-// CatchUp replays [watermark+1, latest series date] through the engine (ports
-// runCatchUp). It uses a SILENT executor (writes DB but no per-trade Discord, to
-// avoid flooding notifications on historical replay), then persists the new
-// watermark and cash.
+// CatchUp 以靜默 executor 回放 [水位線+1, 序列最新日] 區間的歷史決策，
+// 寫入 DB 但不發送 Discord 通知，回放完成後更新水位線與現金。
 func (s *TradingService) CatchUp(ctx context.Context, series map[string]*trading.StockSeries) error {
 	watermark, err := s.loadWatermark(ctx)
 	if err != nil {
 		return fmt.Errorf("loadWatermark: %w", err)
 	}
 
+	// 收集所有股票的日期聯集並確認不為空。
 	allDates := trading.CollectDateUnion(series)
 	if len(allDates) == 0 {
 		s.log.Warn("series 為空,跳過 catch-up")
 		return nil
 	}
 
+	// 依水位線決定 catch-up 起始日期。
 	var catchupDates []time.Time
 	if watermark.IsZero() {
 		// 首次啟動:從「所有追蹤股票都已發行」的那一天起 catch-up (不在某檔尚未上市的空窗期做決策)。
@@ -238,11 +228,13 @@ func (s *TradingService) CatchUp(ctx context.Context, series map[string]*trading
 		catchupDates[0].Format(dateLayout),
 		catchupDates[len(catchupDates)-1].Format(dateLayout))
 
+	// 使用靜默 executor 回放（寫入 DB 但不發 Discord 通知）。
 	silent := &tradingExecutor{svc: s, ctx: ctx, notify: false}
 	if err := s.engine.ProcessDates(catchupDates, series, silent); err != nil {
 		return fmt.Errorf("ProcessDates: %w", err)
 	}
 
+	// 持久化回放後的水位線與現金。
 	newWatermark := catchupDates[len(catchupDates)-1]
 	if err := s.saveWatermark(ctx, newWatermark); err != nil {
 		s.log.Warn("saveWatermark 失敗 (不致命):", err)
@@ -256,9 +248,7 @@ func (s *TradingService) CatchUp(ctx context.Context, series map[string]*trading
 	return nil
 }
 
-// runDailyLoop is the body of online mode (ports runDailyLoop): every day at
-// 14:00 Taipei it triggers one day's decisions. The flow is identical to
-// catch-up except it sends per-trade Discord embeds.
+// runDailyLoop 是線上模式的主迴圈：每天台灣時間 14:00 執行一次當日決策，並發送 Discord 通知。
 func (s *TradingService) runDailyLoop(ctx context.Context) error {
 	taiwanTimeZone, err := time.LoadLocation("Asia/Taipei")
 	if err != nil {
@@ -266,6 +256,7 @@ func (s *TradingService) runDailyLoop(ctx context.Context) error {
 	}
 	noisy := &tradingExecutor{svc: s, ctx: ctx, notify: true}
 
+	// 每分鐘檢查一次是否到達 14:00，到達時執行當日決策。
 	for {
 		now := time.Now().In(taiwanTimeZone)
 		if now.Hour() == 14 && now.Minute() == 0 {
@@ -278,9 +269,9 @@ func (s *TradingService) runDailyLoop(ctx context.Context) error {
 	}
 }
 
-// runOneDay fetches today's TWSE data, reloads the series, runs the engine for
-// one day, then persists the watermark/cash (ports runOneDay).
+// runOneDay 抓取當日 TWSE 資料、重新載入序列、執行引擎單日決策，並持久化水位線與現金。
 func (s *TradingService) runOneDay(ctx context.Context, exec trading.Executor, now time.Time) error {
+	// 更新今日 TWSE 資料。
 	if err := s.market.UpdateDatabase(ctx); err != nil {
 		return fmt.Errorf("UpdateDatabase: %w", err)
 	}
@@ -288,6 +279,7 @@ func (s *TradingService) runOneDay(ctx context.Context, exec trading.Executor, n
 	if err != nil {
 		return fmt.Errorf("loadSeries: %w", err)
 	}
+	// 執行引擎單日決策並持久化狀態。
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
 	if err := s.engine.ProcessDay(today, series, exec); err != nil {
 		return fmt.Errorf("ProcessDay: %w", err)
@@ -301,9 +293,8 @@ func (s *TradingService) runOneDay(ctx context.Context, exec trading.Executor, n
 	return nil
 }
 
-// loadWatermark reads BotState.last_processed_date. A missing record yields the
-// zero time, which the caller treats as "catch-up from the earliest data"
-// (ports sqls.LoadWatermark).
+// loadWatermark 讀取 BotState 的 last_processed_date；
+// 無紀錄時回傳零值時間，呼叫端將此視為「從最早資料開始 catch-up」。
 func (s *TradingService) loadWatermark(ctx context.Context) (time.Time, error) {
 	v, ok, err := s.state.Get(ctx, stateKeyWatermark)
 	if err != nil || !ok {
@@ -316,13 +307,12 @@ func (s *TradingService) loadWatermark(ctx context.Context) (time.Time, error) {
 	return t, nil
 }
 
-// saveWatermark persists the last processed day (ports sqls.SaveWatermark).
+// saveWatermark 持久化最後處理日至 BotState。
 func (s *TradingService) saveWatermark(ctx context.Context, t time.Time) error {
 	return s.state.Set(ctx, stateKeyWatermark, t.Format(dateLayout))
 }
 
-// loadCash reads BotState.current_cash. The bool is false when no record exists,
-// so the caller falls back to cfg.InitialCash (ports sqls.LoadCash).
+// loadCash 讀取 BotState 的 current_cash；無紀錄時 bool 為 false，呼叫端退回 cfg.InitialCash。
 func (s *TradingService) loadCash(ctx context.Context) (float64, bool, error) {
 	v, ok, err := s.state.Get(ctx, stateKeyCash)
 	if err != nil || !ok {
@@ -335,24 +325,22 @@ func (s *TradingService) loadCash(ctx context.Context) (float64, bool, error) {
 	return c, true, nil
 }
 
-// saveCash persists the engine's current cash (ports sqls.SaveCash).
+// saveCash 持久化引擎當前現金至 BotState。
 func (s *TradingService) saveCash(ctx context.Context, cash float64) error {
 	return s.state.Set(ctx, stateKeyCash, strconv.FormatFloat(cash, 'f', -1, 64))
 }
 
-// tradingExecutor is the online-mode trading.Executor implementation (ports the
-// kernals dbExecutor): it routes applied buys/sells to the PortfolioService
-// (which writes UnrealizedGainsLosses / RealizedGainsLosses) and, when notify is
-// true, sends a Discord embed. notify=false is used during catch-up replay.
-//
-// The old dbExecutor had no context; here the orchestration's context is carried
-// on the executor so the portfolio writes participate in cancellation.
+// tradingExecutor 是線上模式的 trading.Executor 實作：
+// 將引擎套用後的買進／賣出成交路由至 PortfolioService（寫入 UnrealizedGainsLosses / RealizedGainsLosses），
+// 並在 notify=true 時發送 Discord 嵌入訊息。notify=false 用於 catch-up 靜默回放。
+// orchestration 的 context 保存於 executor 上，使 portfolio 寫入能參與取消機制。
 type tradingExecutor struct {
 	svc    *TradingService
 	ctx    context.Context
 	notify bool
 }
 
+// context 回傳 executor 要用於 portfolio 寫入的 context。
 func (e *tradingExecutor) context() context.Context {
 	if e.ctx != nil {
 		return e.ctx
@@ -360,14 +348,17 @@ func (e *tradingExecutor) context() context.Context {
 	return context.Background()
 }
 
+// OnBuyApplied 將引擎套用後的買進成交寫入 portfolio，並視設定發送通知。
 func (e *tradingExecutor) OnBuyApplied(stockID string, day time.Time, shares int, price float64, cashAfter float64) error {
 	dateStr := day.Format(dateLayout)
+	// 將買進成交寫入未實現帳本。
 	if err := e.svc.portfolio.BuyShares(e.context(), stockID, dateStr, shares); err != nil {
 		return fmt.Errorf("BuyShares: %w", err)
 	}
 	cost := float64(shares) * price
 	e.svc.log.Infof("%s 買入: shares=%d, price=%.2f, cost=%.2f, cash=%.2f",
 		stockID, shares, price, cost, cashAfter)
+	// 通知模式下發送 Discord 買入嵌入訊息。
 	if e.notify {
 		if err := e.svc.notify.SendEmbed("🔴 買入通知",
 			fmt.Sprintf("stockID: %s, 股數: %d, 單價: %.2f, 金額: %.2f\n剩餘現金: %.2f",
@@ -378,14 +369,17 @@ func (e *tradingExecutor) OnBuyApplied(stockID string, day time.Time, shares int
 	return nil
 }
 
+// OnSellApplied 將引擎套用後的賣出成交寫入 portfolio，並視設定發送通知。
 func (e *tradingExecutor) OnSellApplied(stockID string, day time.Time, shares int, price float64, cashAfter float64) error {
 	dateStr := day.Format(dateLayout)
+	// 將賣出成交從未實現帳本轉為已實現損益。
 	if err := e.svc.portfolio.SellShares(e.context(), stockID, dateStr, shares); err != nil {
 		return fmt.Errorf("SellShares: %w", err)
 	}
 	revenue := float64(shares) * price
 	e.svc.log.Infof("%s 賣出: shares=%d, price=%.2f, revenue=%.2f, cash=%.2f",
 		stockID, shares, price, revenue, cashAfter)
+	// 通知模式下發送 Discord 賣出嵌入訊息。
 	if e.notify {
 		if err := e.svc.notify.SendEmbed("🟢 賣出通知",
 			fmt.Sprintf("stockID: %s, 股數: %d, 單價: %.2f, 金額: %.2f\n剩餘現金: %.2f",

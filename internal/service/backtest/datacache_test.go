@@ -1,3 +1,4 @@
+// internal/service/backtest/datacache_test.go 驗證 CSV 載入、解析與 walk-forward 委派。
 package backtest
 
 import (
@@ -10,6 +11,7 @@ import (
 // datacache_test.go 驗證離線 CSV 載入路徑 (walk-forward 掃描用,不依賴 DB):
 // header 略過、壞列略過、亂序重排、分割還原、缺檔報錯。
 
+// writeCSV 在暫存目錄下以 stockID 為檔名寫入 CSV 內容,供各測試建構輸入資料。
 func writeCSV(t *testing.T, dir, stockID, body string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, stockID+".csv"), []byte(body), 0o600); err != nil {
@@ -17,6 +19,7 @@ func writeCSV(t *testing.T, dir, stockID, body string) {
 	}
 }
 
+// TestLoadSeriesFromCSV_ParsesAndSkips 驗證 CSV 載入略過 header、欄位不足列及收盤為零的列,僅保留有效資料列。
 func TestLoadSeriesFromCSV_ParsesAndSkips(t *testing.T) {
 	// Arrange — 含 header、一條壞列 (欄位不足)、一條收盤<=0 列;其餘有效。
 	dir := t.TempDir()
@@ -44,6 +47,7 @@ bad,row,only,three
 	}
 }
 
+// TestLoadSeriesFromCSV_SortsUnordered 驗證亂序 CSV 載入後日期與收盤價同步升冪重排。
 func TestLoadSeriesFromCSV_SortsUnordered(t *testing.T) {
 	// Arrange — 故意亂序;載入後應升冪。
 	dir := t.TempDir()
@@ -71,6 +75,7 @@ func TestLoadSeriesFromCSV_SortsUnordered(t *testing.T) {
 	}
 }
 
+// TestLoadSeriesFromCSV_MissingFileErrors 驗證指定股票代碼的 CSV 檔不存在時回傳錯誤。
 func TestLoadSeriesFromCSV_MissingFileErrors(t *testing.T) {
 	// Arrange + Act + Assert — 缺檔即回錯。
 	if _, err := LoadSeriesFromCSV(t.TempDir(), []string{"NOPE"}); err == nil {
@@ -78,6 +83,7 @@ func TestLoadSeriesFromCSV_MissingFileErrors(t *testing.T) {
 	}
 }
 
+// TestLoadSeriesFromCSV_EmptyFileErrors 驗證僅含 header 而無有效資料列的 CSV 回傳錯誤。
 func TestLoadSeriesFromCSV_EmptyFileErrors(t *testing.T) {
 	// Arrange — 只有 header,無有效資料列。
 	dir := t.TempDir()
@@ -89,6 +95,7 @@ func TestLoadSeriesFromCSV_EmptyFileErrors(t *testing.T) {
 	}
 }
 
+// TestParseFloat 驗證 parseFloat 正確解析數字字串、含空白前後綴、空字串及非數字皆回傳 0。
 func TestParseFloat(t *testing.T) {
 	cases := []struct {
 		in   string
@@ -106,6 +113,7 @@ func TestParseFloat(t *testing.T) {
 	}
 }
 
+// TestEvaluateWalkForward_DelegatesToCore 驗證匯出函式 EvaluateWalkForward 與內部 walkForwardOnSeries 產生相同的視窗數。
 func TestEvaluateWalkForward_DelegatesToCore(t *testing.T) {
 	// Arrange
 	start := mustDate(t, "2019-01-01")

@@ -1,3 +1,4 @@
+// internal/logging/logger.go 建立專案共用的 logrus logger 與輸出格式。
 package logging
 
 import (
@@ -9,9 +10,12 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+// MyFormatter 將 logrus entry 格式化成固定的可讀文字輸出。
 type MyFormatter struct{}
 
+// Format 將單筆 log entry 轉成包含時間、層級與訊息的 byte slice。
 func (m *MyFormatter) Format(entry *logrus.Entry) ([]byte, error) {
+	// 取用 entry 自帶的 buffer 或自行配置一個新的。
 	var b *bytes.Buffer
 	if entry.Buffer != nil {
 		b = entry.Buffer
@@ -19,8 +23,10 @@ func (m *MyFormatter) Format(entry *logrus.Entry) ([]byte, error) {
 		b = &bytes.Buffer{}
 	}
 
+	// 將時間格式化為可讀的字串。
 	timestamp := entry.Time.Format("2006-01-02 15:04:05")
 
+	// 依層級對應帶有 ANSI 顏色碼的標籤字串。
 	var logLevel string
 	switch entry.Level {
 	case logrus.DebugLevel:
@@ -41,7 +47,7 @@ func (m *MyFormatter) Format(entry *logrus.Entry) ([]byte, error) {
 
 	var newLog string
 
-	//HasCaller()為true才會有調用信息
+	// HasCaller() 為 true 時在訊息前附加呼叫檔名與行號。
 	if entry.HasCaller() {
 		fName := filepath.Base(entry.Caller.File)
 		newLog = fmt.Sprintf("[%s][%s][%s:%d] %s\n",
@@ -50,10 +56,12 @@ func (m *MyFormatter) Format(entry *logrus.Entry) ([]byte, error) {
 		newLog = fmt.Sprintf("[%s][%s] %s\n", logLevel, timestamp, entry.Message)
 	}
 
+	// 將格式化後的訊息寫入 buffer 並回傳。
 	b.WriteString(newLog)
 	return b.Bytes(), nil
 }
 
+// InitLogger 建立並回傳專案預設 logger。
 func InitLogger() *logrus.Logger {
 	// 創建一個新的 logrus 實例
 	logger := logrus.New()

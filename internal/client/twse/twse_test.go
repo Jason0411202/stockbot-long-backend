@@ -1,3 +1,4 @@
+// internal/client/twse/twse_test.go 以 httptest 驗證 TWSE client 的抓取、解析與錯誤處理。
 package twse
 
 import (

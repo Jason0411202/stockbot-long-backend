@@ -1,3 +1,4 @@
+// internal/controller/controller_test.go 以 fake service 直接驅動各 handler 方法，驗證狀態碼契約。
 package controller
 
 import (
@@ -76,6 +77,7 @@ func invoke(t *testing.T, h echo.HandlerFunc, target string) *httptest.ResponseR
 	return rec
 }
 
+// TestHomeHandler 驗證 Home handler 回傳 200 且 body 為 "Hello, World!"。
 func TestHomeHandler(t *testing.T) {
 	// Arrange
 	ctl := newController(fakePortfolio{}, fakeStatistic{}, fakeHistory{})
@@ -87,6 +89,7 @@ func TestHomeHandler(t *testing.T) {
 	}
 }
 
+// TestUnrealizedHandler_OK 驗證 UnrealizedGainsLosses handler 在 service 正常時回傳 200。
 func TestUnrealizedHandler_OK(t *testing.T) {
 	// Arrange
 	ctl := newController(fakePortfolio{
@@ -102,6 +105,7 @@ func TestUnrealizedHandler_OK(t *testing.T) {
 	}
 }
 
+// TestUnrealizedHandler_DBErrorReturnsEmpty 驗證 service 失敗時 handler 回傳 200 加空陣列，不外洩錯誤。
 func TestUnrealizedHandler_DBErrorReturnsEmpty(t *testing.T) {
 	// Arrange — service 失敗 → handler 應回 200 + 空陣列 (不外洩錯誤)。
 	ctl := newController(fakePortfolio{unrealizedErr: errFake}, fakeStatistic{}, fakeHistory{})
@@ -115,6 +119,7 @@ func TestUnrealizedHandler_DBErrorReturnsEmpty(t *testing.T) {
 	}
 }
 
+// TestRealizedHandler_OK 驗證 RealizedGainsLosses handler 在 service 正常時回傳 200。
 func TestRealizedHandler_OK(t *testing.T) {
 	// Arrange
 	ctl := newController(fakePortfolio{
@@ -127,6 +132,7 @@ func TestRealizedHandler_OK(t *testing.T) {
 	}
 }
 
+// TestStockHistoryHandler_RequiresStockId 驗證缺少 stockId 查詢參數時 handler 回傳 400。
 func TestStockHistoryHandler_RequiresStockId(t *testing.T) {
 	// Arrange
 	ctl := newController(fakePortfolio{}, fakeStatistic{}, fakeHistory{})
@@ -140,6 +146,7 @@ func TestStockHistoryHandler_RequiresStockId(t *testing.T) {
 	}
 }
 
+// TestStockHistoryHandler_OK 驗證提供有效 stockId 時 handler 回傳 200。
 func TestStockHistoryHandler_OK(t *testing.T) {
 	// Arrange
 	ctl := newController(fakePortfolio{}, fakeStatistic{}, fakeHistory{
@@ -152,6 +159,7 @@ func TestStockHistoryHandler_OK(t *testing.T) {
 	}
 }
 
+// TestStockStatisticHandler_DBErrorReturnsEmpty 驗證 service 失敗時 StockStatisticData handler 回傳 200 加空陣列。
 func TestStockStatisticHandler_DBErrorReturnsEmpty(t *testing.T) {
 	// Arrange — service 失敗 → handler 回 200 空陣列。
 	ctl := newController(fakePortfolio{}, fakeStatistic{err: errFake}, fakeHistory{})

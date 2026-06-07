@@ -1,3 +1,4 @@
+// internal/service/portfolio_service_test.go 驗證 PortfolioService 的買賣股票、未實現損益計算及已實現損益四捨五入邏輯。
 package service
 
 import (
@@ -7,12 +8,14 @@ import (
 	"github.com/Jason0411202/stockbot-long-backend/internal/entity"
 )
 
+// newPortfolioService 建立注入 fakeLedger 與 fakeStock 的 PortfolioService，供各子測試共用。
 func newPortfolioService(ledger *fakeLedger, stock *fakeStock) *PortfolioService {
 	return NewPortfolioService(ledger, stock, newTestLogger())
 }
 
 // --- SellShares: full-lot sale -------------------------------------------------
 
+// TestSellShares_FullLotSale 驗證賣出數量等於單一批次全部股數時，批次被刪除並產生正確的已實現損益記錄。
 func TestSellShares_FullLotSale(t *testing.T) {
 	ledger := &fakeLedger{
 		lots: []entity.UnrealizedGainsLoss{
@@ -51,6 +54,7 @@ func TestSellShares_FullLotSale(t *testing.T) {
 
 // --- SellShares: partial-lot sale ---------------------------------------------
 
+// TestSellShares_PartialLotSale 驗證部分賣出時批次股數與成本被正確更新，並產生對應的已實現損益。
 func TestSellShares_PartialLotSale(t *testing.T) {
 	ledger := &fakeLedger{
 		lots: []entity.UnrealizedGainsLoss{
@@ -91,6 +95,7 @@ func TestSellShares_PartialLotSale(t *testing.T) {
 
 // --- SellShares: multi-lot drain to target ------------------------------------
 
+// TestSellShares_MultiLotDrainToTarget 驗證跨多批次賣出時依序耗盡批次並正確計算各批次的已實現損益。
 func TestSellShares_MultiLotDrainToTarget(t *testing.T) {
 	ledger := &fakeLedger{
 		lots: []entity.UnrealizedGainsLoss{
@@ -133,6 +138,7 @@ func TestSellShares_MultiLotDrainToTarget(t *testing.T) {
 
 // --- SellShares: legacy shares<=0 lot deleted (no infinite loop) ---------------
 
+// TestSellShares_LegacyZeroShareLotDeleted 驗證股數為零的遺留批次被直接刪除，不進入賣出計算，且不造成無限迴圈。
 func TestSellShares_LegacyZeroShareLotDeleted(t *testing.T) {
 	ledger := &fakeLedger{
 		lots: []entity.UnrealizedGainsLoss{
@@ -166,6 +172,7 @@ func TestSellShares_LegacyZeroShareLotDeleted(t *testing.T) {
 
 // --- SellShares: no inventory -> no-op ----------------------------------------
 
+// TestSellShares_NoInventoryNoOp 驗證庫存為空時賣出操作為無動作，不修改任何資料。
 func TestSellShares_NoInventoryNoOp(t *testing.T) {
 	ledger := &fakeLedger{} // empty
 	stock := newFakeStock()
@@ -180,6 +187,7 @@ func TestSellShares_NoInventoryNoOp(t *testing.T) {
 	}
 }
 
+// TestSellShares_NonPositiveTargetNoOp 驗證目標股數為零或負數時賣出操作為無動作且不回傳錯誤。
 func TestSellShares_NonPositiveTargetNoOp(t *testing.T) {
 	ledger := &fakeLedger{
 		lots: []entity.UnrealizedGainsLoss{{TransactionDate: "2024-01-02", StockID: "X", Shares: 100}},
@@ -196,6 +204,7 @@ func TestSellShares_NonPositiveTargetNoOp(t *testing.T) {
 
 // --- BuyShares ----------------------------------------------------------------
 
+// TestBuyShares_NonPositiveSharesError 驗證買入股數為零或負數時回傳錯誤且不插入任何批次。
 func TestBuyShares_NonPositiveSharesError(t *testing.T) {
 	ledger := &fakeLedger{}
 	stock := newFakeStock()
@@ -208,6 +217,7 @@ func TestBuyShares_NonPositiveSharesError(t *testing.T) {
 	}
 }
 
+// TestBuyShares_HappyPathInsertsCorrectCost 驗證買入成功時插入的批次包含正確的成本、價格、股數及身分識別欄位。
 func TestBuyShares_HappyPathInsertsCorrectCost(t *testing.T) {
 	ledger := &fakeLedger{}
 	stock := newFakeStock()
@@ -233,6 +243,7 @@ func TestBuyShares_HappyPathInsertsCorrectCost(t *testing.T) {
 
 // --- UnrealizedGainsLosses ----------------------------------------------------
 
+// TestUnrealizedGainsLosses_PnLMathAndRounding 驗證未實現損益的當前市值、損益金額及損益率計算結果正確。
 func TestUnrealizedGainsLosses_PnLMathAndRounding(t *testing.T) {
 	ledger := &fakeLedger{
 		listU: []entity.UnrealizedGainsLoss{
@@ -260,6 +271,7 @@ func TestUnrealizedGainsLosses_PnLMathAndRounding(t *testing.T) {
 	}
 }
 
+// TestUnrealizedGainsLosses_LegacyZeroSharesBranch 驗證股數為零的遺留批次以價格比例計算市值，結果正確。
 func TestUnrealizedGainsLosses_LegacyZeroSharesBranch(t *testing.T) {
 	ledger := &fakeLedger{
 		listU: []entity.UnrealizedGainsLoss{
@@ -281,6 +293,7 @@ func TestUnrealizedGainsLosses_LegacyZeroSharesBranch(t *testing.T) {
 	}
 }
 
+// TestUnrealizedGainsLosses_PriceErrorUsesZero 驗證取得收盤價失敗時，市值以零計算且整體呼叫不回傳錯誤。
 func TestUnrealizedGainsLosses_PriceErrorUsesZero(t *testing.T) {
 	ledger := &fakeLedger{
 		listU: []entity.UnrealizedGainsLoss{
@@ -302,6 +315,7 @@ func TestUnrealizedGainsLosses_PriceErrorUsesZero(t *testing.T) {
 	}
 }
 
+// TestUnrealizedGainsLosses_ZeroCostGuardsRate 驗證投資成本為零時損益率被保護為 0，避免除以零。
 func TestUnrealizedGainsLosses_ZeroCostGuardsRate(t *testing.T) {
 	ledger := &fakeLedger{
 		listU: []entity.UnrealizedGainsLoss{
@@ -323,6 +337,7 @@ func TestUnrealizedGainsLosses_ZeroCostGuardsRate(t *testing.T) {
 
 // --- RealizedGainsLosses ------------------------------------------------------
 
+// TestRealizedGainsLosses_Rounding 驗證已實現損益的收益、損益金額及損益率皆四捨五入至小數點後兩位。
 func TestRealizedGainsLosses_Rounding(t *testing.T) {
 	ledger := &fakeLedger{
 		listR: []entity.RealizedGainsLoss{

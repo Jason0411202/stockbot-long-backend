@@ -1,3 +1,4 @@
+// internal/service/trading_service_test.go 驗證 TradingService 的序列載入、資料庫種子、追趕回放及執行器買賣路由與通知邏輯。
 package service
 
 import (
@@ -18,12 +19,13 @@ import (
 
 // ── fakes ─────────────────────────────────────────────────────────────────────
 
-// fakeSeriesLoader is an in-memory SeriesLoader keyed by stockID.
+// fakeSeriesLoader 模擬 SeriesLoader，以記憶體 map 依股票代碼回傳預設的歷史收盤資料。
 type fakeSeriesLoader struct {
 	data map[string][]entity.StockHistory
 	err  error
 }
 
+// LoadSeries 回傳指定股票代碼對應的歷史資料，err 非 nil 時回傳錯誤。
 func (f *fakeSeriesLoader) LoadSeries(_ context.Context, stockIDs []string) (map[string][]entity.StockHistory, error) {
 	if f.err != nil {
 		return nil, f.err
@@ -35,7 +37,7 @@ func (f *fakeSeriesLoader) LoadSeries(_ context.Context, stockIDs []string) (map
 	return out, nil
 }
 
-// fakeState is an in-memory StateStore recording every Set call.
+// fakeState 模擬 StateStore，以記憶體 map 儲存鍵值並記錄所有 Set 呼叫。
 type fakeState struct {
 	values  map[string]string
 	getErr  error
@@ -43,10 +45,12 @@ type fakeState struct {
 	setKeys []string
 }
 
+// newFakeState 建立並回傳已初始化 values map 的 fakeState 實例。
 func newFakeState() *fakeState {
 	return &fakeState{values: map[string]string{}}
 }
 
+// Get 回傳指定鍵的值與是否存在，getErr 非 nil 時回傳錯誤。
 func (f *fakeState) Get(_ context.Context, key string) (string, bool, error) {
 	if f.getErr != nil {
 		return "", false, f.getErr
@@ -55,6 +59,7 @@ func (f *fakeState) Get(_ context.Context, key string) (string, bool, error) {
 	return v, ok, nil
 }
 
+// Set 記錄鍵名並將值寫入記憶體 map，setErr 非 nil 時回傳錯誤。
 func (f *fakeState) Set(_ context.Context, key, value string) error {
 	f.setKeys = append(f.setKeys, key)
 	if f.setErr != nil {
@@ -64,24 +69,26 @@ func (f *fakeState) Set(_ context.Context, key, value string) error {
 	return nil
 }
 
-// fakeNotifier records every embed sent.
+// fakeNotifier 模擬 Notifier，記錄每次 SendEmbed 呼叫的參數供斷言使用。
 type fakeNotifier struct {
 	sent []embedCall
 	err  error
 }
 
+// embedCall 記錄一次 SendEmbed 呼叫的標題、訊息與顏色。
 type embedCall struct {
 	title   string
 	message string
 	color   int
 }
 
+// SendEmbed 記錄通知呼叫並在 err 非 nil 時回傳錯誤。
 func (f *fakeNotifier) SendEmbed(title, message string, color int) error {
 	f.sent = append(f.sent, embedCall{title: title, message: message, color: color})
 	return f.err
 }
 
-// fakeSeed is an in-memory LedgerSeedStore for SeedFromDB.
+// fakeSeed 模擬 LedgerSeedStore，提供未實現損益清單與最後買入日期供 SeedFromDB 測試使用。
 type fakeSeed struct {
 	unrealized []entity.UnrealizedGainsLoss
 	lastBuy    map[string]string // stockID -> raw date ("" or absent = none)
@@ -89,6 +96,7 @@ type fakeSeed struct {
 	lastBuyErr error
 }
 
+// LoadAllUnrealized 回傳預設的未實現損益清單，loadErr 非 nil 時回傳錯誤。
 func (f *fakeSeed) LoadAllUnrealized(_ context.Context) ([]entity.UnrealizedGainsLoss, error) {
 	if f.loadErr != nil {
 		return nil, f.loadErr
@@ -96,6 +104,7 @@ func (f *fakeSeed) LoadAllUnrealized(_ context.Context) ([]entity.UnrealizedGain
 	return f.unrealized, nil
 }
 
+// LastBuyDateRaw 回傳指定股票的最後買入日期原始字串，無記錄或空字串時回傳 false。
 func (f *fakeSeed) LastBuyDateRaw(_ context.Context, stockID string) (string, bool, error) {
 	if f.lastBuyErr != nil {
 		return "", false, f.lastBuyErr
@@ -109,9 +118,7 @@ func (f *fakeSeed) LastBuyDateRaw(_ context.Context, stockID string) (string, bo
 
 // ── helpers ─────────────────────────────────────────────────────────────────────
 
-// tradingTestCfg returns a "live algorithm"-style config (mirrors the trading
-// package baseCfg) for engine integration. The flat-series tests rely on the same
-// no-trade behaviour the kernals online tests asserted.
+// tradingTestCfg 建立符合線上演算法設定的 Config，供引擎整合測試使用。
 func tradingTestCfg(stocks ...string) *config.Config {
 	if len(stocks) == 0 {
 		stocks = []string{"AAA"}
@@ -141,7 +148,7 @@ func tradingTestCfg(stocks ...string) *config.Config {
 	}
 }
 
-// constHistory builds n ascending daily (date, close) bars starting at start.
+// constHistory 建立從 start 起算共 n 筆、收盤價固定為 price 的歷史資料切片。
 func constHistory(start time.Time, n int, price float64) []entity.StockHistory {
 	out := make([]entity.StockHistory, n)
 	for i := 0; i < n; i++ {
@@ -153,7 +160,7 @@ func constHistory(start time.Time, n int, price float64) []entity.StockHistory {
 	return out
 }
 
-// flatSeries builds a flat *trading.StockSeries (no trades) for catch-up tests.
+// flatSeries 建立價格完全平坦的 StockSeries，用於驗證追趕回放不產生任何交易。
 func flatSeries(start time.Time, n int, price float64) *trading.StockSeries {
 	dates := make([]time.Time, n)
 	closes := make([]float64, n)
@@ -164,8 +171,7 @@ func flatSeries(start time.Time, n int, price float64) *trading.StockSeries {
 	return trading.NewStockSeries(dates, closes, nil, nil, nil)
 }
 
-// newTradingFixture wires a TradingService with a real engine + real portfolio
-// (over fakes) and the injectable seed/series/state/notify fakes.
+// newTradingFixture 組裝以假實作驅動的 TradingService，回傳服務本體與各假實作供測試斷言使用。
 func newTradingFixture(cfg *config.Config) (*TradingService, *fakeSeed, *fakeState, *fakeNotifier, *fakeLedger, *fakeStock) {
 	log := newTestLogger()
 	stock := newFakeStock()
@@ -184,6 +190,7 @@ func newTradingFixture(cfg *config.Config) (*TradingService, *fakeSeed, *fakeSta
 
 // ── tests ─────────────────────────────────────────────────────────────────────
 
+// TestTradingService_LoadSeries 驗證 loadSeries 將歷史資料正確轉換為 StockSeries，含日期與收盤價序列。
 func TestTradingService_LoadSeries(t *testing.T) {
 	cfg := tradingTestCfg("AAA")
 	svc, _, _, _, _, _ := newTradingFixture(cfg)
@@ -205,6 +212,7 @@ func TestTradingService_LoadSeries(t *testing.T) {
 	}
 }
 
+// TestTradingService_LoadSeries_DatetimeFallbackAndEmpty 驗證日期時間格式回退解析及無效日期略過，空歷史股票從結果中排除。
 func TestTradingService_LoadSeries_DatetimeFallbackAndEmpty(t *testing.T) {
 	cfg := tradingTestCfg("AAA", "BBB")
 	svc, _, _, _, _, _ := newTradingFixture(cfg)
@@ -230,6 +238,7 @@ func TestTradingService_LoadSeries_DatetimeFallbackAndEmpty(t *testing.T) {
 	}
 }
 
+// TestTradingService_SeedFromDB 驗證 SeedFromDB 從狀態儲存還原現金、從帳冊還原持倉批次及最後買入日期至引擎。
 func TestTradingService_SeedFromDB(t *testing.T) {
 	cfg := tradingTestCfg("AAA")
 	svc, seed, state, _, _, _ := newTradingFixture(cfg)
@@ -253,6 +262,7 @@ func TestTradingService_SeedFromDB(t *testing.T) {
 	}
 }
 
+// TestTradingService_SeedFromDB_NoCashFallbackAndDatetimeLot 驗證狀態無現金記錄時回退至初始資金，並正確解析日期時間格式的批次。
 func TestTradingService_SeedFromDB_NoCashFallbackAndDatetimeLot(t *testing.T) {
 	cfg := tradingTestCfg("AAA")
 	svc, seed, _, _, _, _ := newTradingFixture(cfg)
@@ -276,6 +286,7 @@ func TestTradingService_SeedFromDB_NoCashFallbackAndDatetimeLot(t *testing.T) {
 	}
 }
 
+// TestTradingService_CatchUp_FlatSeriesNoTrades 驗證首次啟動且序列完全平坦時追趕回放不產生任何交易，並持久化水位線與現金。
 func TestTradingService_CatchUp_FlatSeriesNoTrades(t *testing.T) {
 	// watermark absent (first start) -> catch-up from common issuance; flat -> no trades.
 	cfg := tradingTestCfg("AAA")
@@ -299,6 +310,7 @@ func TestTradingService_CatchUp_FlatSeriesNoTrades(t *testing.T) {
 	}
 }
 
+// TestTradingService_CatchUp_ResumesFromWatermark 驗證存在水位線時追趕回放從該日期後繼續，並更新水位線至最新日期。
 func TestTradingService_CatchUp_ResumesFromWatermark(t *testing.T) {
 	cfg := tradingTestCfg("AAA")
 	svc, _, state, _, _, _ := newTradingFixture(cfg)
@@ -317,6 +329,7 @@ func TestTradingService_CatchUp_ResumesFromWatermark(t *testing.T) {
 	}
 }
 
+// TestTradingService_CatchUp_EmptySeries 驗證傳入空序列時追趕回放不持久化任何狀態。
 func TestTradingService_CatchUp_EmptySeries(t *testing.T) {
 	cfg := tradingTestCfg("AAA")
 	svc, _, state, _, _, _ := newTradingFixture(cfg)
@@ -329,6 +342,7 @@ func TestTradingService_CatchUp_EmptySeries(t *testing.T) {
 	}
 }
 
+// TestTradingExecutor_OnBuy_RoutesToPortfolioAndNotifies 驗證 OnBuyApplied 將批次寫入投資組合並發送買入通知嵌入訊息。
 func TestTradingExecutor_OnBuy_RoutesToPortfolioAndNotifies(t *testing.T) {
 	cfg := tradingTestCfg("AAA")
 	svc, _, _, notify, ledger, stock := newTradingFixture(cfg)
@@ -351,6 +365,7 @@ func TestTradingExecutor_OnBuy_RoutesToPortfolioAndNotifies(t *testing.T) {
 	}
 }
 
+// TestTradingExecutor_OnSell_RoutesToPortfolioAndNotifies 驗證 OnSellApplied 將已實現損益寫入帳冊並發送賣出通知嵌入訊息。
 func TestTradingExecutor_OnSell_RoutesToPortfolioAndNotifies(t *testing.T) {
 	cfg := tradingTestCfg("AAA")
 	svc, _, _, notify, ledger, stock := newTradingFixture(cfg)
@@ -375,6 +390,7 @@ func TestTradingExecutor_OnSell_RoutesToPortfolioAndNotifies(t *testing.T) {
 	}
 }
 
+// TestTradingExecutor_Silent_WritesButNoNotify 驗證 notify=false 時交易仍寫入資料庫但不發送任何通知。
 func TestTradingExecutor_Silent_WritesButNoNotify(t *testing.T) {
 	cfg := tradingTestCfg("AAA")
 	svc, _, _, notify, ledger, stock := newTradingFixture(cfg)
@@ -395,6 +411,7 @@ func TestTradingExecutor_Silent_WritesButNoNotify(t *testing.T) {
 	}
 }
 
+// TestTradingExecutor_NotifyFailure_NonFatal 驗證通知發送失敗時買入操作仍成功回傳，錯誤僅記錄日誌。
 func TestTradingExecutor_NotifyFailure_NonFatal(t *testing.T) {
 	cfg := tradingTestCfg("AAA")
 	svc, _, _, notify, _, stock := newTradingFixture(cfg)
@@ -411,6 +428,7 @@ func TestTradingExecutor_NotifyFailure_NonFatal(t *testing.T) {
 	}
 }
 
+// TestTradingService_RunOnline_RejectsNonBaseline 驗證策略非 Baseline 時 RunOnline 回傳錯誤拒絕執行。
 func TestTradingService_RunOnline_RejectsNonBaseline(t *testing.T) {
 	cfg := tradingTestCfg("AAA")
 	cfg.ScalingStrategy = "Other"
@@ -421,6 +439,7 @@ func TestTradingService_RunOnline_RejectsNonBaseline(t *testing.T) {
 	}
 }
 
+// TestTradingService_WatermarkRoundTrip 驗證水位線的儲存與讀取往返一致，缺失時回傳零值時間。
 func TestTradingService_WatermarkRoundTrip(t *testing.T) {
 	cfg := tradingTestCfg("AAA")
 	svc, _, _, _, _, _ := newTradingFixture(cfg)
@@ -442,6 +461,7 @@ func TestTradingService_WatermarkRoundTrip(t *testing.T) {
 	}
 }
 
+// TestTradingService_CashRoundTrip 驗證現金的儲存與讀取往返一致，缺失時回傳 ok=false。
 func TestTradingService_CashRoundTrip(t *testing.T) {
 	cfg := tradingTestCfg("AAA")
 	svc, _, _, _, _, _ := newTradingFixture(cfg)

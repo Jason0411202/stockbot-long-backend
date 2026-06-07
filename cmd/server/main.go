@@ -33,6 +33,7 @@ import (
 	"github.com/Jason0411202/stockbot-long-backend/internal/service/trading"
 )
 
+// main 依序初始化所有元件並啟動 HTTP server 與上線交易 loop。
 func main() {
 	log := logging.InitLogger()
 

@@ -1,3 +1,4 @@
+// internal/service/backtest/misc_test.go 驗證 backtest 套件的雜項數學輔助函式。
 package backtest
 
 import (
@@ -8,6 +9,7 @@ import (
 // misc_test.go 補齊小型純函式的邊界分支 (safeMean/safeDiv 的零除、cagr 的退化情形、
 // dailyReturns、monthsBetween、sortInts)。regime ma_slope 的測試屬於 trading 層,留在該套件。
 
+// TestSafeMeanDiv 驗證 safeMean 與 safeDiv 在除數為零時回傳 0 而非 panic。
 func TestSafeMeanDiv(t *testing.T) {
 	if safeMean(0, 0) != 0 {
 		t.Fatalf("safeMean(0,0) should be 0")
@@ -23,6 +25,7 @@ func TestSafeMeanDiv(t *testing.T) {
 	}
 }
 
+// TestCAGR_DegenerateCases 驗證 cagr 在起始值 <=0、年數 <=0 及終值 <=0 三種退化情境的回傳值。
 func TestCAGR_DegenerateCases(t *testing.T) {
 	if !math.IsNaN(cagr(0, 100, 1)) {
 		t.Fatalf("cagr(start<=0) should be NaN")
@@ -35,6 +38,7 @@ func TestCAGR_DegenerateCases(t *testing.T) {
 	}
 }
 
+// TestDailyReturns 驗證 dailyReturns 在資料少於兩點時回傳 nil,且前一日為零時以 0 計該日報酬。
 func TestDailyReturns(t *testing.T) {
 	// 少於兩點 → nil。
 	if dailyReturns([]float64{100}) != nil {
@@ -47,6 +51,7 @@ func TestDailyReturns(t *testing.T) {
 	}
 }
 
+// TestMonthsBetween 驗證 monthsBetween 計算整月差,b 早於 a 時夾到 0。
 func TestMonthsBetween(t *testing.T) {
 	if got := monthsBetween(mustDate(t, "2020-01-15"), mustDate(t, "2020-04-10")); got != 3 {
 		t.Fatalf("monthsBetween = %d, want 3", got)
@@ -57,6 +62,7 @@ func TestMonthsBetween(t *testing.T) {
 	}
 }
 
+// TestSortInts 驗證 sortInts 將整數切片就地升冪排序。
 func TestSortInts(t *testing.T) {
 	xs := []int{5, 1, 4, 2, 3}
 	sortInts(xs)

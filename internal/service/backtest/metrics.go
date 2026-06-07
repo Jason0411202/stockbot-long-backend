@@ -1,3 +1,4 @@
+// internal/service/backtest/metrics.go 提供報酬、回撤、XIRR 與統計指標計算。
 package backtest
 
 import (
@@ -204,6 +205,7 @@ func xirr(flows []Cashflow) (float64, bool) {
 	if len(flows) < 2 {
 		return math.NaN(), false
 	}
+	// 確認至少有一筆正向與一筆負向現金流,並找出最早日期作為折現基準。
 	var hasPos, hasNeg bool
 	ref := flows[0].Date
 	for _, f := range flows {
@@ -221,6 +223,7 @@ func xirr(flows []Cashflow) (float64, bool) {
 		return math.NaN(), false
 	}
 
+	// 以固定步距在 (-0.9999, 100] 掃描 NPV 的全部變號區間,偵測根的數量。
 	const lo = -0.9999
 	const hi = 100.0
 	const steps = 4000
@@ -242,6 +245,7 @@ func xirr(flows []Cashflow) (float64, bool) {
 		}
 		prevR, prevV = r, v
 	}
+	// 恰好一個變號區間時,以二分法收斂回傳唯一根。
 	if signChanges == 1 {
 		return bisectRate(bLo, bHi, flows, ref), true
 	}
@@ -250,6 +254,7 @@ func xirr(flows []Cashflow) (float64, bool) {
 
 // bisectRate 在已知變號的 [lo, hi] 上對 NPV 做二分法,回傳根 (年化報酬率)。
 func bisectRate(lo, hi float64, flows []Cashflow, ref time.Time) float64 {
+	// 逐步以中點取代同側端點,收斂到精度 1e-12 或最多 200 次迭代後回傳近似根。
 	flo := npv(lo, flows, ref)
 	for i := 0; i < 200; i++ {
 		mid := (lo + hi) / 2

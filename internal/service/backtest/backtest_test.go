@@ -1,3 +1,4 @@
+// internal/service/backtest/backtest_test.go 驗證回測進入點的起算日、注資與視窗組裝。
 package backtest
 
 import (
@@ -10,6 +11,7 @@ import (
 // backtest_test.go 為回測核心的整合測試:起點 (common issuance)、區間視窗、每月注資時程、
 // 防呆 (僅支援 Baseline)。回測與上線共用同一引擎,故這些測試也間接守住上線決策。
 
+// TestCommonIssuanceStart_LatestListing 驗證多標的中最晚上市日為共同起算日。
 func TestCommonIssuanceStart_LatestListing(t *testing.T) {
 	// Arrange — A 早上市、B 晚上市;common issuance = 較晚者第一天。
 	series := map[string]*trading.StockSeries{
@@ -28,6 +30,7 @@ func TestCommonIssuanceStart_LatestListing(t *testing.T) {
 	}
 }
 
+// TestRunBacktestOnSeries_StartsAtCommonIssuance 驗證 RunBacktestOnSeries 以共同起算日為視窗起點,結果與 RunBacktestWindow 一致。
 func TestRunBacktestOnSeries_StartsAtCommonIssuance(t *testing.T) {
 	// Arrange
 	series := map[string]*trading.StockSeries{
@@ -55,6 +58,7 @@ func TestRunBacktestOnSeries_StartsAtCommonIssuance(t *testing.T) {
 	}
 }
 
+// TestRunBacktestWindow_TracksContributions 驗證每月注資金額正確累計至 TotalContributed,平盤序列零成交且期末現金等於期初加注資合計。
 func TestRunBacktestWindow_TracksContributions(t *testing.T) {
 	// Arrange — 90 連續日從 2020-01-01 (跨 1~3 月),每月注資 2500 → 起始月 (Jan) 不注、Feb/Mar 各注一次。
 	cfg := baseCfg("TEST")
@@ -80,6 +84,7 @@ func TestRunBacktestWindow_TracksContributions(t *testing.T) {
 	}
 }
 
+// TestRunBacktestWindow_RejectsNonBaseline 驗證非 Baseline 策略回傳錯誤。
 func TestRunBacktestWindow_RejectsNonBaseline(t *testing.T) {
 	// Arrange
 	cfg := baseCfg("TEST")
@@ -93,6 +98,7 @@ func TestRunBacktestWindow_RejectsNonBaseline(t *testing.T) {
 	}
 }
 
+// TestRunBacktestWindow_EmptyWindowErrors 驗證視窗內無任何交易日時回傳錯誤。
 func TestRunBacktestWindow_EmptyWindowErrors(t *testing.T) {
 	// Arrange — start 在所有資料之後 → 視窗內無交易日。
 	cfg := baseCfg("TEST")
@@ -105,6 +111,7 @@ func TestRunBacktestWindow_EmptyWindowErrors(t *testing.T) {
 	}
 }
 
+// TestContributionAmounts 驗證注資金額切片:起始日為 0、每逢月份切換注資一次、monthly<=0 時全為 0。
 func TestContributionAmounts(t *testing.T) {
 	// Arrange — 90 連續日從 2020-01-01。
 	dates := flatSeries(90, 2020, time.January, 100).Dates
@@ -135,6 +142,7 @@ func TestContributionAmounts(t *testing.T) {
 	}
 }
 
+// TestCollectDateUnion_SortedDedup 驗證多標的日期聯集已去重且嚴格升冪排列。
 func TestCollectDateUnion_SortedDedup(t *testing.T) {
 	// Arrange — 兩檔部分重疊的日期。
 	series := map[string]*trading.StockSeries{
@@ -156,7 +164,7 @@ func TestCollectDateUnion_SortedDedup(t *testing.T) {
 	}
 }
 
-// TestEngine_PerStockOverride_Isolates 由 engine_test.go 移來:依賴 backtest 視窗核心 RunBacktestWindow。
+// TestEngine_PerStockOverride_Isolates 驗證 per-stock override 僅影響指定標的,停用 A 後投組行為等同純 B。
 func TestEngine_PerStockOverride_Isolates(t *testing.T) {
 	// Arrange — A、B 同資料;把 A 的 MAWindow override 到極大 (永遠算不出均線 → A 不買)。
 	start := mustDate(t, "2020-01-01")

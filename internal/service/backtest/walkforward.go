@@ -1,3 +1,4 @@
+// internal/service/backtest/walkforward.go 實作全期評估、walk-forward 視窗與彙整關卡。
 package backtest
 
 import (
@@ -104,6 +105,7 @@ func walkForwardOnSeries(cfg *config.Config, series map[string]*trading.StockSer
 	if cfg.ScalingStrategy != "Baseline" {
 		return nil, AggregateReport{}, fmt.Errorf("評估目前僅支援 Scaling_Strategy=Baseline")
 	}
+	// 套用各評估參數的合理預設值。
 	if p.WindowMonths <= 0 {
 		p.WindowMonths = 24
 	}
@@ -114,6 +116,7 @@ func walkForwardOnSeries(cfg *config.Config, series map[string]*trading.StockSer
 		p.MinTradeDays = 200
 	}
 
+	// 取得全序列日期並產生滾動視窗列表。
 	allDates := trading.CollectDateUnion(series)
 	if len(allDates) == 0 {
 		return nil, AggregateReport{}, fmt.Errorf("無任何日期可供評估")
@@ -125,6 +128,7 @@ func walkForwardOnSeries(cfg *config.Config, series map[string]*trading.StockSer
 			p.WindowMonths, p.StepMonths, p.MinTradeDays)
 	}
 
+	// 逐視窗評估並收集報告,最後彙整所有視窗的 scorecard。
 	reports := make([]WindowReport, 0, len(windows))
 	for _, w := range windows {
 		rep, err := evaluateWindow(cfg, series, allDates, w[0], w[1])
@@ -227,6 +231,7 @@ func ContributionAmounts(windowDates []time.Time, monthly float64) []float64 {
 
 // evaluateWindow 對單一 [start, end] 視窗同時跑策略與兩對照組 (含每月注資),算出所有指標。
 func evaluateWindow(cfg *config.Config, series map[string]*trading.StockSeries, allDates []time.Time, start, end time.Time) (WindowReport, error) {
+	// 以二元搜尋切出視窗日期範圍並驗證非空。
 	lo := sort.Search(len(allDates), func(i int) bool { return !allDates[i].Before(start) })
 	hi := sort.Search(len(allDates), func(i int) bool { return allDates[i].After(end) })
 	if lo >= hi {
@@ -258,6 +263,7 @@ func evaluateWindow(cfg *config.Config, series map[string]*trading.StockSeries, 
 	calmarBeatsBH := cok && cw
 	cwB, cokB := calmarWin(strat.Calmar, blend.Calmar)
 	beatsBlend := cokB && cwB && strat.MWR > blend.MWR
+	// 計算策略對 B&H 的報酬參與率;B&H MWR 為 0 時保留 NaN 避免除零。
 	part := math.NaN()
 	if bh.MWR != 0 {
 		part = strat.MWR / bh.MWR
@@ -275,6 +281,7 @@ func evaluateWindow(cfg *config.Config, series map[string]*trading.StockSeries, 
 
 // runStratArm 以掛了 recorder 的 fresh engine 跑單一視窗 (含每月注資),回傳完整 armResult。
 func runStratArm(cfg *config.Config, series map[string]*trading.StockSeries, windowDates []time.Time, contribOnDay []float64) (armResult, error) {
+	// 建立 fresh engine 並掛上 recorder 以收集每日權益曲線與平均曝險。
 	engine := trading.NewEngine(cfg)
 	var curve []float64
 	expSum, expN := 0.0, 0
@@ -288,6 +295,7 @@ func runStratArm(cfg *config.Config, series map[string]*trading.StockSeries, win
 		},
 	})
 
+	// 逐日注資並驅動引擎,記錄每筆注資為負向現金流。
 	flows := []Cashflow{{Date: windowDates[0], Amount: -cfg.InitialCash}}
 	totalIn := cfg.InitialCash
 	for i, d := range windowDates {
@@ -301,6 +309,7 @@ func runStratArm(cfg *config.Config, series map[string]*trading.StockSeries, win
 		}
 	}
 
+	// 以 as-of 估值結算期末持股市值,追加期末正向現金流並組裝結果。
 	end := windowDates[len(windowDates)-1]
 	finalCash := engine.Cash()
 	finalEq := finalCash + engine.HoldingValueAsOf(series, end)
@@ -349,6 +358,7 @@ func aggregate(reports []WindowReport) AggregateReport {
 		return a
 	}
 
+	// 初始化各指標的收集切片與計數器。
 	stratMWR := make([]float64, 0, n)
 	bhMWR := make([]float64, 0, n)
 	blendMWR := make([]float64, 0, n)
@@ -364,6 +374,7 @@ func aggregate(reports []WindowReport) AggregateReport {
 	worstStratMDD, worstBHMDD := 0.0, 0.0
 	worstStratMWR := math.Inf(1)
 
+	// 逐視窗收集指標值,同時統計 Calmar 可比視窗數、勝率、最差回撤與最差 MWR。
 	for _, r := range reports {
 		stratMWR = append(stratMWR, r.Strat.MWR)
 		bhMWR = append(bhMWR, r.BH.MWR)
@@ -401,6 +412,7 @@ func aggregate(reports []WindowReport) AggregateReport {
 		}
 	}
 
+	// 計算各指標的中位數、離散度與勝率,填入彙整報告。
 	a.MedStratMWR = median(stratMWR)
 	a.MedBHMWR = median(bhMWR)
 	a.MedBlendMWR = median(blendMWR)
@@ -430,6 +442,7 @@ func aggregate(reports []WindowReport) AggregateReport {
 	} else {
 		a.G1RetParticipation = a.MedStratMWR >= a.MedBHMWR
 	}
+	// 評定 G2~G5 各關卡並計算總體是否通過。
 	a.G2RiskReduction = medStratMDDmag <= gateRiskReduction*medBHMDDmag
 	a.G3CalmarVsBH = a.CalmarWinRate >= gateCalmarWinRate
 	a.G4Skill = a.BlendSkillRate >= gateSkillRate

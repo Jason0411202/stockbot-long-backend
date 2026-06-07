@@ -1,3 +1,4 @@
+// cmd/evaluate/main_test.go 驗證 evaluate 指令的格式化輔助函式與 print 系列報表函式的輸出正確性。
 package main
 
 import (
@@ -35,6 +36,7 @@ func captureStdout(t *testing.T) func() {
 
 // --- 純格式化 (注意此版 pct/ratio 的填補空白與 eval_csv 版不同) ---
 
+// TestPct 驗證 pct 函式對一般值、NaN 及 ±Inf 的百分比格式化輸出（含前導空白填補）。
 func TestPct(t *testing.T) {
 	cases := []struct {
 		in   float64
@@ -53,6 +55,7 @@ func TestPct(t *testing.T) {
 	}
 }
 
+// TestRatio 驗證 ratio 函式對正負值、NaN 及 ±Inf 的比率格式化輸出（含前導空白填補）。
 func TestRatio(t *testing.T) {
 	cases := []struct {
 		in   float64
@@ -71,6 +74,7 @@ func TestRatio(t *testing.T) {
 	}
 }
 
+// TestPartCell 驗證 partCell 函式在 B&H 為正、零、負及 NaN 時回傳正確的參與率欄位字串。
 func TestPartCell(t *testing.T) {
 	cases := []struct {
 		strat, bh float64
@@ -88,6 +92,7 @@ func TestPartCell(t *testing.T) {
 	}
 }
 
+// TestYesNo 驗證 yesNo 函式對 true/false 分別回傳正確的符號字串。
 func TestYesNo(t *testing.T) {
 	if got := yesNo(true); got != "✓" {
 		t.Errorf("yesNo(true) = %q", got)
@@ -97,6 +102,7 @@ func TestYesNo(t *testing.T) {
 	}
 }
 
+// TestPassFail 驗證 passFail 函式對 true/false 回傳正確的 PASS/FAIL 標籤字串。
 func TestPassFail(t *testing.T) {
 	if got := passFail(true); got != "PASS ✅" {
 		t.Errorf("passFail(true) = %q", got)
@@ -106,6 +112,7 @@ func TestPassFail(t *testing.T) {
 	}
 }
 
+// TestVerdict 驗證 verdict 函式的兩個分支各自回傳不同且非空的判決字串。
 func TestVerdict(t *testing.T) {
 	// 只驗證兩分支各回不同字串 (確保 if/else 都被執行)。
 	if verdict(true) == verdict(false) {
@@ -118,6 +125,7 @@ func TestVerdict(t *testing.T) {
 
 // --- print 系列:執行不 panic + 覆蓋率 ---
 
+// sampleMetrics 產生一組用於測試的 SeriesMetrics 範例值。
 func sampleMetrics() backtest.SeriesMetrics {
 	return backtest.SeriesMetrics{
 		MWR: 0.12, MWROK: true, MaxDD: -0.2, Calmar: 0.6,
@@ -125,6 +133,7 @@ func sampleMetrics() backtest.SeriesMetrics {
 	}
 }
 
+// sampleWindowReport 產生一份用於測試的 WindowReport 範例資料。
 func sampleWindowReport() backtest.WindowReport {
 	return backtest.WindowReport{
 		Start: time.Date(2020, 1, 2, 0, 0, 0, 0, time.UTC),
@@ -135,6 +144,7 @@ func sampleWindowReport() backtest.WindowReport {
 	}
 }
 
+// sampleAggregate 產生一份用於測試的 AggregateReport 範例資料，g4 控制 G4Skill 關卡的通過狀態。
 func sampleAggregate(g4 bool) backtest.AggregateReport {
 	return backtest.AggregateReport{
 		NWindows:    3,
@@ -150,6 +160,7 @@ func sampleAggregate(g4 bool) backtest.AggregateReport {
 	}
 }
 
+// TestPrintReport 驗證 printReport 函式覆蓋有報告/無報告及 MedBHMWR 為零等分支執行不發生 panic。
 func TestPrintReport(t *testing.T) {
 	defer captureStdout(t)()
 	cfg := &config.Config{
@@ -166,6 +177,7 @@ func TestPrintReport(t *testing.T) {
 	printReport(cfg, p, nil, aggNoBH)
 }
 
+// TestPrintDisclosures 驗證 printDisclosures 函式在 G4 通過與未通過兩種情境下執行不發生 panic。
 func TestPrintDisclosures(t *testing.T) {
 	defer captureStdout(t)()
 	stocks := []string{"00631L"}

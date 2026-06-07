@@ -1,3 +1,4 @@
+// internal/config/config_test.go 驗證設定載入、欄位預設值套用及 per-stock override 邏輯。
 package config
 
 import (
@@ -7,7 +8,10 @@ import (
 	"testing"
 )
 
-func iptr(v int) *int         { return &v }
+// iptr 將 int 值包裝成指標，供 StockParams override 欄位使用。
+func iptr(v int) *int { return &v }
+
+// fptr 將 float64 值包裝成指標，供 StockParams override 欄位使用。
 func fptr(v float64) *float64 { return &v }
 
 // ForStock 應套用該股 override、不動到其他股、不改 base,無 override 時回傳原指標。
@@ -69,6 +73,7 @@ func TestForStock_AllFieldsOverridden(t *testing.T) {
 	}
 }
 
+// writeConfig 將 body 寫入暫存目錄的 config.yaml 並回傳其路徑。
 func writeConfig(t *testing.T, body string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -98,6 +103,7 @@ sell_frac_of_position: 0.33
 initial_cash: 1000000
 `
 
+// TestLoad_BackTestingMonthsSanityCheck 驗證 back_testing_months 超過 init_db_back_months 時 Load 回傳錯誤。
 func TestLoad_BackTestingMonthsSanityCheck(t *testing.T) {
 	cases := []struct {
 		name              string
@@ -258,6 +264,7 @@ back_testing_months: -1
 	}
 }
 
+// TestLoad_FileNotFound 驗證設定檔不存在時 Load 回傳錯誤。
 func TestLoad_FileNotFound(t *testing.T) {
 	// Arrange + Act + Assert
 	if _, err := Load(filepath.Join(t.TempDir(), "missing.yaml")); err == nil {
@@ -265,6 +272,7 @@ func TestLoad_FileNotFound(t *testing.T) {
 	}
 }
 
+// TestLoad_InvalidYAML 驗證 YAML 格式錯誤時 Load 回傳解析錯誤。
 func TestLoad_InvalidYAML(t *testing.T) {
 	// Arrange — 壞掉的 YAML。
 	if _, err := Load(writeConfig(t, "track_stocks: [unclosed")); err == nil {
@@ -272,6 +280,7 @@ func TestLoad_InvalidYAML(t *testing.T) {
 	}
 }
 
+// TestLoad_TrackStocksRequired 驗證 track_stocks 為空時 Load 回傳錯誤。
 func TestLoad_TrackStocksRequired(t *testing.T) {
 	body := `
 scaling_strategy: Baseline
@@ -289,6 +298,7 @@ initial_cash: 1000000
 	}
 }
 
+// itoa 將整數轉換為十進位字串，不依賴 strconv，供測試 YAML 組裝使用。
 func itoa(n int) string {
 	if n == 0 {
 		return "0"

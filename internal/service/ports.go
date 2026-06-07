@@ -1,12 +1,7 @@
-// Package service is the business-logic layer. It faithfully preserves the
-// ledger / ingestion / statistic behavior that previously lived in sqls.go,
-// orchestrating the data-access repositories and the external TWSE client
-// through small, locally-defined interface ports.
+// internal/service/ports.go 定義 service 層對外部依賴（資料庫、TWSE 客戶端、通知）的介面 port。
 //
-// The ports below are declared where they are consumed (Go idiom: accept
-// interfaces, return structs) so each service is unit-testable with in-memory
-// fakes. The concrete types in internal/repository and internal/client/twse
-// satisfy these signatures exactly.
+// 各 port 宣告於使用端（Go 慣例：接受介面、回傳結構），使每個 service 可用 in-memory fake
+// 進行單元測試。internal/repository 與 internal/client/twse 的具體型別實作這些介面。
 package service
 
 import (
@@ -15,8 +10,7 @@ import (
 	"github.com/Jason0411202/stockbot-long-backend/internal/entity"
 )
 
-// StockStore is the StockHistory data-access port. Satisfied by
-// *repository.StockHistoryRepository.
+// StockStore 是 StockHistory 資料存取 port，由 *repository.StockHistoryRepository 實作。
 type StockStore interface {
 	GetStockName(ctx context.Context, stockID string) (string, error)
 	GetPriceAsOf(ctx context.Context, stockID, asOf, priceType string) (float64, error)
@@ -25,8 +19,7 @@ type StockStore interface {
 	InsertBarIgnore(ctx context.Context, stockID, stockName string, b entity.Bar) error
 }
 
-// LedgerStore is the unrealized/realized-ledger data-access port. Satisfied by
-// *repository.LedgerRepository.
+// LedgerStore 是未實現／已實現帳本資料存取 port，由 *repository.LedgerRepository 實作。
 type LedgerStore interface {
 	GetLowestUnrealized(ctx context.Context, stockID, asOf string) (entity.UnrealizedGainsLoss, bool, error)
 	InsertUnrealized(ctx context.Context, e entity.UnrealizedGainsLoss) error
@@ -37,43 +30,40 @@ type LedgerStore interface {
 	ListRealized(ctx context.Context) ([]entity.RealizedGainsLoss, error)
 }
 
-// BackfillStore is the BackfillStatus data-access port. Satisfied by
-// *repository.BackfillRepository.
+// BackfillStore 是 BackfillStatus 資料存取 port，由 *repository.BackfillRepository 實作。
 type BackfillStore interface {
 	CompletedMonths(ctx context.Context, stockID string) (map[string]bool, error)
 	MarkComplete(ctx context.Context, stockID, month string) error
 }
 
-// MarketFetcher is the external market-data port. Satisfied by *twse.Client.
+// MarketFetcher 是外部市場資料 port，由 *twse.Client 實作。
 type MarketFetcher interface {
 	FetchMonth(date, stockID string) ([]entity.Bar, string, error)
 }
 
-// LedgerSeedStore is the online-startup seed port over the ledger. It exposes
-// the read-only queries TradingService needs to restore in-memory engine state
-// (positions + per-stock last-buy date) from the DB. Satisfied by
-// *repository.LedgerRepository (same concrete type that backs LedgerStore).
+// LedgerSeedStore 是線上啟動時用於還原引擎狀態的帳本唯讀 port，
+// 提供 TradingService 從 DB 讀取持倉與各股最後買入日所需的查詢方法。
+// 由 *repository.LedgerRepository 實作（與 LedgerStore 為同一具體型別）。
 type LedgerSeedStore interface {
 	LoadAllUnrealized(ctx context.Context) ([]entity.UnrealizedGainsLoss, error)
 	LastBuyDateRaw(ctx context.Context, stockID string) (string, bool, error)
 }
 
-// SeriesLoader is the StockHistory series-load port used by TradingService to
-// build the in-memory price series for the engine. Satisfied by
-// *repository.StockHistoryRepository.
+// SeriesLoader 是 TradingService 用於建構引擎記憶體價格序列的 StockHistory 載入 port，
+// 由 *repository.StockHistoryRepository 實作。
 type SeriesLoader interface {
 	LoadSeries(ctx context.Context, stockIDs []string) (map[string][]entity.StockHistory, error)
 }
 
-// StateStore is the generic BotState key/value port used to persist the online
-// engine's watermark and cash. Satisfied by *repository.BotStateRepository.
+// StateStore 是 BotState 鍵值儲存 port，用於持久化線上引擎的水位線與現金，
+// 由 *repository.BotStateRepository 實作。
 type StateStore interface {
 	Get(ctx context.Context, key string) (string, bool, error)
 	Set(ctx context.Context, key, value string) error
 }
 
-// Notifier is the outbound-notification port used by TradingService to send
-// per-trade embeds. Satisfied by *client/discord.Client.
+// Notifier 是對外通知 port，TradingService 使用它發送每筆成交的 Discord embed，
+// 由 *client/discord.Client 實作。
 type Notifier interface {
 	SendEmbed(title, message string, color int) error
 }

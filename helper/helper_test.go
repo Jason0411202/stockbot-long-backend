@@ -1,9 +1,11 @@
+// helper/helper_test.go 驗證 helper 套件的民國/西元日期轉換工具。
 package helper
 
 import "testing"
 
 // helper_test.go 驗證民國年 → 西元年的日期轉換。
 
+// TestROCToAD 驗證 ROCToAD 正確解析合法民國年日期，並對格式錯誤回傳錯誤。
 func TestROCToAD(t *testing.T) {
 	cases := []struct {
 		name string

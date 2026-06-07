@@ -50,6 +50,7 @@ func BuildEcho(log *logrus.Logger, db *sql.DB, ctl *controller.Controller) *echo
 // registerRoutes wires the business API routes to the controller's handler
 // methods (was echoframework.EchoRouting).
 func registerRoutes(e *echo.Echo, ctl *controller.Controller) {
+	// 將業務 API 路徑對應至 controller 的 handler 方法。
 	e.GET("/", ctl.Home)
 	e.GET("/api/get_unrealized_gains_losses", ctl.UnrealizedGainsLosses)
 	e.GET("/api/get_realized_gains_losses", ctl.RealizedGainsLosses)

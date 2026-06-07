@@ -1,3 +1,4 @@
+// internal/service/backtest/helpers_test.go 提供 backtest 測試共用的建構與輔助函式。
 package backtest
 
 import (
@@ -11,6 +12,8 @@ import (
 // helpers_test.go 收錄 backtest 套件白箱測試共用的建構工具 (factory / builder)。
 // 由原 kernals/helpers_test.go 拆分而來;series 工廠改用 trading.NewStockSeries 建構。
 
+// iptr 回傳整數的指標,供 config 欄位 override 測試使用。
+// fptr 回傳浮點數的指標,供 config 欄位 override 測試使用。
 func iptr(v int) *int         { return &v }
 func fptr(v float64) *float64 { return &v }
 

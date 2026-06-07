@@ -1,3 +1,4 @@
+// internal/service/backtest/isoos_test.go 驗證滾動樣本外評估 (IS/OOS 切分、多折結構、錨定日順序)。
 package backtest
 
 import (
@@ -6,7 +7,7 @@ import (
 	"time"
 )
 
-// EvaluateRollingOOS 應依錨定日把視窗切成 IS (錨定前) / OOS (錨定後),兩段皆有視窗,且 OOS 分成多折。
+// TestEvaluateRollingOOS_AnchorsAndFolds 驗證 EvaluateRollingOOS 依錨定日切出 IS 與 OOS 視窗,OOS 折數 >=2 且各折起點不早於錨定日且嚴格遞增。
 func TestEvaluateRollingOOS_AnchorsAndFolds(t *testing.T) {
 	start := time.Date(2019, 1, 1, 0, 0, 0, 0, time.UTC)
 	series := map[string]*trading.StockSeries{

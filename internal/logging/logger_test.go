@@ -1,3 +1,4 @@
+// internal/logging/logger_test.go 驗證自訂 logger 格式器在各層級與 caller 下的輸出。
 package logging
 
 import (
@@ -11,6 +12,7 @@ import (
 
 // logger_test.go 驗證自訂 logrus formatter 與 InitLogger。
 
+// TestInitLogger_FormatsWithCaller 驗證 InitLogger 產生的 logger 輸出含訊息、等級及呼叫者檔名。
 func TestInitLogger_FormatsWithCaller(t *testing.T) {
 	// Arrange — InitLogger 開了 ReportCaller,故輸出應含檔名:行號 + 訊息 + 等級。
 	logger := InitLogger()
@@ -30,6 +32,7 @@ func TestInitLogger_FormatsWithCaller(t *testing.T) {
 	}
 }
 
+// TestMyFormatter_AllLevels 驗證 MyFormatter.Format 對每個 logrus 等級皆能正確格式化輸出。
 func TestMyFormatter_AllLevels(t *testing.T) {
 	// Arrange — 直接呼叫 Format (無 caller 分支),逐一覆蓋各等級 + default。
 	f := &MyFormatter{}

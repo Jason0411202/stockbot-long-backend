@@ -1,3 +1,4 @@
+// internal/entity/state.go 定義服務跨重啟狀態與資料回補狀態模型。
 package entity
 
 import "time"

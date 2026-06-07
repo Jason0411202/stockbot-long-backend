@@ -1,3 +1,4 @@
+// internal/service/statistic_service_test.go 驗證 StatisticService 的低點天數、高點天數計算及股票統計資料彙整邏輯。
 package service
 
 import (
@@ -7,6 +8,7 @@ import (
 	"github.com/Jason0411202/stockbot-long-backend/internal/config"
 )
 
+// TestLowerPointDays_Cases 以表格測試驗證 lowerPointDays 在各種收盤價序列下回傳正確的天數或哨兵值。
 func TestLowerPointDays_Cases(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -28,6 +30,7 @@ func TestLowerPointDays_Cases(t *testing.T) {
 	}
 }
 
+// TestUpperPointDays_Cases 以表格測試驗證 upperPointDays 在各種收盤價序列下回傳正確的天數或哨兵值。
 func TestUpperPointDays_Cases(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -49,6 +52,7 @@ func TestUpperPointDays_Cases(t *testing.T) {
 	}
 }
 
+// TestStockStatisticData 驗證 StockStatisticData 正確彙整股票代碼、名稱、今日收盤及高低點天數。
 func TestStockStatisticData(t *testing.T) {
 	stock := newFakeStock()
 	stock.names["00631L"] = "元大台灣50正2"
@@ -78,6 +82,7 @@ func TestStockStatisticData(t *testing.T) {
 	}
 }
 
+// TestStockStatisticData_EmptySeriesSentinels 驗證收盤價序列為空時高低點天數皆回傳 0。
 func TestStockStatisticData_EmptySeriesSentinels(t *testing.T) {
 	stock := newFakeStock()
 	stock.names["X"] = "n"
@@ -96,6 +101,7 @@ func TestStockStatisticData_EmptySeriesSentinels(t *testing.T) {
 	}
 }
 
+// TestStockStatisticData_NoneFoundSentinels 驗證收盤價全部相等時高低點天數皆回傳 noPointSentinel。
 func TestStockStatisticData_NoneFoundSentinels(t *testing.T) {
 	stock := newFakeStock()
 	stock.names["X"] = "n"
@@ -114,6 +120,7 @@ func TestStockStatisticData_NoneFoundSentinels(t *testing.T) {
 	}
 }
 
+// TestStockStatisticData_PropagatesNameError 驗證取得股票名稱失敗時錯誤向上傳遞。
 func TestStockStatisticData_PropagatesNameError(t *testing.T) {
 	stock := newFakeStock()
 	stock.nameErr = errFake

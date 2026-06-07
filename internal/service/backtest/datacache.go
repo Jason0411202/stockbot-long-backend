@@ -1,3 +1,4 @@
+// internal/service/backtest/datacache.go 從本機 CSV 快取載入回測用 StockSeries。
 package backtest
 
 import (
@@ -36,7 +37,9 @@ func LoadSeriesFromCSV(dir string, stocks []string) (map[string]*trading.StockSe
 	return series, nil
 }
 
+// loadOneCSV 讀取單一股票 CSV 並建立已排序、已 split-adjust 的 StockSeries。
 func loadOneCSV(path string) (*trading.StockSeries, error) {
+	// 開啟 CSV 檔案,確保離開時關閉。
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -47,6 +50,7 @@ func loadOneCSV(path string) (*trading.StockSeries, error) {
 		dates                     []time.Time
 		closes, highs, lows, vols []float64
 	)
+	// 逐行掃描 CSV,略過標頭、空行與解析失敗的列;收盤價 <= 0 視為無效資料略過。
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	lineNo := 0
@@ -105,6 +109,7 @@ func loadOneCSV(path string) (*trading.StockSeries, error) {
 	return trading.NewStockSeries(dates, closes, highs, lows, vols), nil
 }
 
+// parseFloat 將 CSV 欄位轉成 float64，解析失敗時回傳 0。
 func parseFloat(s string) float64 {
 	f, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
 	if err != nil {
@@ -113,6 +118,7 @@ func parseFloat(s string) float64 {
 	return f
 }
 
+// reorderF 依排序後索引重排 float64 欄位。
 func reorderF(src []float64, idxs []int) []float64 {
 	out := make([]float64, len(src))
 	for i, j := range idxs {
@@ -121,6 +127,7 @@ func reorderF(src []float64, idxs []int) []float64 {
 	return out
 }
 
+// reorderTime 依排序後索引重排日期欄位。
 func reorderTime(src []time.Time, idxs []int) []time.Time {
 	out := make([]time.Time, len(src))
 	for i, j := range idxs {

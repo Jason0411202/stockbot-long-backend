@@ -1,3 +1,4 @@
+// internal/service/marketdata_service_test.go 驗證 MarketDataService 的補資料排程、K 線插入及月份完成標記邏輯。
 package service
 
 import (
@@ -8,6 +9,7 @@ import (
 	"github.com/Jason0411202/stockbot-long-backend/internal/entity"
 )
 
+// TestMonthlyBackfillDates 驗證 monthlyBackfillDates 依指定種子日期與月數產生正確的日期序列。
 func TestMonthlyBackfillDates(t *testing.T) {
 	dates := monthlyBackfillDates("20240315", 2)
 	// currentDate first, then day=1 of each prior month, newest-first.
@@ -22,6 +24,7 @@ func TestMonthlyBackfillDates(t *testing.T) {
 	}
 }
 
+// TestMonthlyBackfillDates_InvalidDate 驗證傳入無效日期字串時僅回傳原始種子日期。
 func TestMonthlyBackfillDates_InvalidDate(t *testing.T) {
 	dates := monthlyBackfillDates("not-a-date", 3)
 	// On parse error the original returns just the seed date.
@@ -30,6 +33,7 @@ func TestMonthlyBackfillDates_InvalidDate(t *testing.T) {
 	}
 }
 
+// TestDateToYearMonth 驗證 dateToYearMonth 將 YYYYMMDD 格式日期正確轉換為 YYYY-MM 字串。
 func TestDateToYearMonth(t *testing.T) {
 	ym, err := dateToYearMonth("20240315")
 	if err != nil {
@@ -43,6 +47,7 @@ func TestDateToYearMonth(t *testing.T) {
 	}
 }
 
+// TestFetchAndInsertMonth_HappyPath_MarksCompleteWhenPriorMonth 驗證抓取先前月份時 K 線正確插入並標記完成。
 func TestFetchAndInsertMonth_HappyPath_MarksCompleteWhenPriorMonth(t *testing.T) {
 	fetcher := &fakeFetcher{
 		stockName: "元大台灣50正2",
@@ -75,6 +80,7 @@ func TestFetchAndInsertMonth_HappyPath_MarksCompleteWhenPriorMonth(t *testing.T)
 	}
 }
 
+// TestFetchAndInsertMonth_CurrentMonthNotMarked 驗證當月資料抓取後不會被標記為完成。
 func TestFetchAndInsertMonth_CurrentMonthNotMarked(t *testing.T) {
 	fetcher := &fakeFetcher{stockName: "n", bars: []entity.Bar{{Date: "2024-03-02", Close: 10}}}
 	stock := newFakeStock()
@@ -94,6 +100,7 @@ func TestFetchAndInsertMonth_CurrentMonthNotMarked(t *testing.T) {
 	}
 }
 
+// TestFetchAndInsertMonth_FetchErrorPropagatesNoMark 驗證抓取失敗時錯誤向上傳遞且不執行插入或標記。
 func TestFetchAndInsertMonth_FetchErrorPropagatesNoMark(t *testing.T) {
 	fetcher := &fakeFetcher{err: errFake}
 	stock := newFakeStock()
@@ -109,6 +116,7 @@ func TestFetchAndInsertMonth_FetchErrorPropagatesNoMark(t *testing.T) {
 	}
 }
 
+// TestFetchAndInsertMonth_MarkErrorIsNonFatal 驗證標記完成失敗時不回傳錯誤，僅記錄警告。
 func TestFetchAndInsertMonth_MarkErrorIsNonFatal(t *testing.T) {
 	fetcher := &fakeFetcher{stockName: "n", bars: []entity.Bar{{Date: "2024-01-02", Close: 10}}}
 	stock := newFakeStock()
@@ -123,6 +131,7 @@ func TestFetchAndInsertMonth_MarkErrorIsNonFatal(t *testing.T) {
 	}
 }
 
+// TestBackfillMonths_SkipsCompletedNonCurrentMonths 驗證 BackfillMonths 略過已完成月份，不重複抓取。
 func TestBackfillMonths_SkipsCompletedNonCurrentMonths(t *testing.T) {
 	fetcher := &fakeFetcher{stockName: "n", bars: []entity.Bar{{Date: "2024-03-02", Close: 10}}}
 	stock := newFakeStock()
@@ -148,6 +157,7 @@ func TestBackfillMonths_SkipsCompletedNonCurrentMonths(t *testing.T) {
 	}
 }
 
+// TestUpdateDatabase_DailyPathFetchesSeedMonth 驗證 MaxBackMonths=0 時 UpdateDatabase 僅抓取種子月份的一筆資料。
 func TestUpdateDatabase_DailyPathFetchesSeedMonth(t *testing.T) {
 	fetcher := &fakeFetcher{stockName: "n", bars: []entity.Bar{{Date: "2024-03-02", Close: 10}}}
 	stock := newFakeStock()
@@ -172,6 +182,7 @@ func TestUpdateDatabase_DailyPathFetchesSeedMonth(t *testing.T) {
 	}
 }
 
+// TestBackfillMonths_CompletedMonthsErrorPropagates 驗證 CompletedMonths 回傳錯誤時 BackfillMonths 向上傳遞該錯誤。
 func TestBackfillMonths_CompletedMonthsErrorPropagates(t *testing.T) {
 	fetcher := &fakeFetcher{}
 	stock := newFakeStock()
@@ -184,10 +195,13 @@ func TestBackfillMonths_CompletedMonthsErrorPropagates(t *testing.T) {
 	}
 }
 
-// errBackfill fails CompletedMonths to exercise the error path.
+// errBackfill 模擬 CompletedMonths 失敗的 BackfillStore，用於測試錯誤傳遞路徑。
 type errBackfill struct{}
 
+// CompletedMonths 固定回傳 errFake，模擬讀取已完成月份失敗的情境。
 func (errBackfill) CompletedMonths(context.Context, string) (map[string]bool, error) {
 	return nil, errFake
 }
+
+// MarkComplete 在 errBackfill 中為無操作實作，固定成功回傳。
 func (errBackfill) MarkComplete(context.Context, string, string) error { return nil }

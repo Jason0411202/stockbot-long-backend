@@ -1,3 +1,4 @@
+// internal/platform/mariadb/pool_test.go 驗證 OpenPool 的輸入驗證及 schema.sql 內嵌正確性。
 package mariadb
 
 import (

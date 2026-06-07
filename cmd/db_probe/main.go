@@ -1,3 +1,4 @@
+// cmd/db_probe/main.go 連線 MariaDB 並印出 StockHistory 各股票的資料筆數與日期範圍。
 package main
 
 import (
@@ -39,6 +40,7 @@ func main() {
 func probe(db *sql.DB, out io.Writer) error {
 	fmt.Fprintln(out, "ping OK")
 
+	// 確認 StockLongData schema 是否存在;不存在則提早結束。
 	var exists int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name='StockLongData'`).Scan(&exists); err != nil {
 		return fmt.Errorf("schema query: %w", err)
@@ -52,6 +54,7 @@ func probe(db *sql.DB, out io.Writer) error {
 		return fmt.Errorf("USE: %w", err)
 	}
 
+	// 確認 StockHistory 資料表是否存在;不存在則提早結束。
 	var tbl int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='StockLongData' AND table_name='StockHistory'`).Scan(&tbl); err != nil {
 		return fmt.Errorf("table query: %w", err)
@@ -61,6 +64,7 @@ func probe(db *sql.DB, out io.Writer) error {
 		return nil
 	}
 
+	// 以 GROUP BY 查詢各股票的筆數與日期範圍並逐行印出。
 	rows, err := db.Query(`SELECT stock_id, COUNT(*), MIN(date), MAX(date) FROM StockHistory GROUP BY stock_id`)
 	if err != nil {
 		return fmt.Errorf("count query: %w", err)

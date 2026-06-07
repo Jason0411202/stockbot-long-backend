@@ -1,3 +1,4 @@
+// cmd/research_run/main.go 從 DB 載入歷史資料，執行單次回測並印出結果後離開。
 package main
 
 import (
@@ -30,6 +31,7 @@ func main() {
 
 	log := logging.InitLogger()
 
+	// 載入環境變數與設定檔。
 	if err := godotenv.Load(".env"); err != nil {
 		fmt.Fprintln(os.Stderr, "[warn] 未找到 .env，改用系統環境變數:", err)
 	}
@@ -46,6 +48,7 @@ func main() {
 	}
 	defer db.Close()
 
+	// 從 DB 載入價格序列並執行回測。
 	stockRepo := repository.NewStockHistoryRepository(db)
 	series, err := service.LoadTradingSeries(context.Background(), stockRepo, cfg.TrackStocks)
 	if err != nil {
@@ -62,6 +65,7 @@ func main() {
 
 // printResult 格式化回測結果到 out。抽離 main()(連線/exit)讓輸出格式可被測試。
 func printResult(out io.Writer, stocks []string, backMonths int, result *backtest.BacktestResult, elapsed time.Duration) {
+	// 印出資金、持倉與交易次數摘要。
 	totalIn := result.InitialCash + result.TotalContributed
 	fmt.Fprintln(out, "=== BACKTEST RESULT ===")
 	fmt.Fprintf(out, "TrackStocks:         %v\n", stocks)
@@ -75,6 +79,8 @@ func printResult(out io.Writer, stocks []string, backMonths int, result *backtes
 	fmt.Fprintf(out, "TotalBuys:           %d\n", result.TotalBuys)
 	fmt.Fprintf(out, "TotalSells:          %d\n", result.TotalSells)
 	fmt.Fprintf(out, "SkippedBuys:         %d\n", result.SkippedBuys)
+
+	// 計算並印出損益與執行時間。
 	pnl := result.FinalTotal - totalIn
 	pct := 0.0
 	if totalIn != 0 {

@@ -1,3 +1,4 @@
+// internal/config/path.go 統一決定設定檔路徑，支援環境變數覆寫。
 package config
 
 import "os"

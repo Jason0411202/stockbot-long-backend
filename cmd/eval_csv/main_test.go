@@ -1,3 +1,4 @@
+// cmd/eval_csv/main_test.go 驗證 eval_csv 的格式化輔助函式與 print 系列報表函式的輸出正確性。
 package main
 
 import (
@@ -37,6 +38,7 @@ func captureStdout(t *testing.T) func() {
 
 // --- 純格式化函式 (含 NaN/Inf 邊界) ---
 
+// TestPct 驗證 pct 函式對一般值、NaN 及 ±Inf 的百分比格式化輸出。
 func TestPct(t *testing.T) {
 	// Arrange / Act / Assert: 一般值、NaN、±Inf
 	cases := []struct {
@@ -57,6 +59,7 @@ func TestPct(t *testing.T) {
 	}
 }
 
+// TestRatio 驗證 ratio 函式對正負值、零、NaN 及 ±Inf 的比率格式化輸出。
 func TestRatio(t *testing.T) {
 	cases := []struct {
 		in   float64
@@ -76,6 +79,7 @@ func TestRatio(t *testing.T) {
 	}
 }
 
+// TestMoney 驗證 money 函式對各金額（含千位分隔、負數及四捨五入）的格式化輸出。
 func TestMoney(t *testing.T) {
 	cases := []struct {
 		in   float64
@@ -95,6 +99,7 @@ func TestMoney(t *testing.T) {
 	}
 }
 
+// TestPassFail 驗證 passFail 函式對 true/false 回傳正確的 PASS/FAIL 標籤字串。
 func TestPassFail(t *testing.T) {
 	// Assert: true→PASS, false→FAIL (含 emoji 字首即可)
 	if got := passFail(true); got != "PASS ✅" {
@@ -105,6 +110,7 @@ func TestPassFail(t *testing.T) {
 	}
 }
 
+// TestGateStr 驗證 gateStr 函式依 AggregateReport 中通過的關卡數回傳正確的「N/5」字串。
 func TestGateStr(t *testing.T) {
 	// Arrange: 5 道關卡通過 3 道
 	a := backtest.AggregateReport{
@@ -125,6 +131,7 @@ func TestGateStr(t *testing.T) {
 
 // --- print 系列:只求執行不 panic + 覆蓋率 ---
 
+// sampleMetrics 產生一組用於測試的 SeriesMetrics 範例值。
 func sampleMetrics() backtest.SeriesMetrics {
 	return backtest.SeriesMetrics{
 		MWR: 0.12, MWROK: true, MaxDD: -0.2, Calmar: 0.6,
@@ -132,6 +139,7 @@ func sampleMetrics() backtest.SeriesMetrics {
 	}
 }
 
+// sampleWindowReport 產生一份用於測試的 WindowReport 範例資料。
 func sampleWindowReport() backtest.WindowReport {
 	return backtest.WindowReport{
 		Start: time.Date(2020, 1, 2, 0, 0, 0, 0, time.UTC),
@@ -144,6 +152,7 @@ func sampleWindowReport() backtest.WindowReport {
 	}
 }
 
+// sampleAggregate 產生一份用於測試的 AggregateReport 範例資料。
 func sampleAggregate() backtest.AggregateReport {
 	return backtest.AggregateReport{
 		NWindows:    6,
@@ -159,6 +168,7 @@ func sampleAggregate() backtest.AggregateReport {
 	}
 }
 
+// TestPrintHeadline 驗證 printHeadline 函式以給定的設定與視窗報告執行不發生 panic。
 func TestPrintHeadline(t *testing.T) {
 	defer captureStdout(t)()
 	// Arrange
@@ -169,12 +179,14 @@ func TestPrintHeadline(t *testing.T) {
 	printHeadline(cfg, sampleWindowReport())
 }
 
+// TestPrintWalkForward 驗證 printWalkForward 函式以給定的彙總報告執行不發生 panic。
 func TestPrintWalkForward(t *testing.T) {
 	defer captureStdout(t)()
 	cfg := &config.Config{TrackStocks: []string{"00631L"}}
 	printWalkForward(cfg, 24, 3, sampleAggregate())
 }
 
+// TestPrintRollingOOS 驗證 printRollingOOS 函式覆蓋 NaN/Inf 折及過擬合/略退化各分支執行不發生 panic。
 func TestPrintRollingOOS(t *testing.T) {
 	defer captureStdout(t)()
 	// Arrange: 構造一份含多折 (含一折 Calmar 為 NaN/Inf 走邊界) 的報告
@@ -217,6 +229,7 @@ func TestPrintRollingOOS(t *testing.T) {
 	printRollingOOS(r3)
 }
 
+// TestRow2AndRow 驗證 row 與 row2 排版輔助函式可正常呼叫且不發生 panic。
 func TestRow2AndRow(t *testing.T) {
 	defer captureStdout(t)()
 	// 直接呼叫 row / row2 確保覆蓋 (僅排版)。
@@ -225,6 +238,12 @@ func TestRow2AndRow(t *testing.T) {
 }
 
 // 小工具: 產生特殊浮點值 (集中於此,讓上方 case 表更乾淨)。
-func nan() float64    { return math.NaN() }
+
+// nan 回傳 IEEE 754 NaN 值,供邊界測試使用。
+func nan() float64 { return math.NaN() }
+
+// posInf 回傳正無限大值,供邊界測試使用。
 func posInf() float64 { return math.Inf(1) }
+
+// negInf 回傳負無限大值,供邊界測試使用。
 func negInf() float64 { return math.Inf(-1) }

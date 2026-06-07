@@ -1,3 +1,4 @@
+// internal/service/stockhistory_service_test.go 驗證 StockHistoryService 將資料庫歷史記錄正確轉換為日期-收盤價資料點序列。
 package service
 
 import (
@@ -7,6 +8,7 @@ import (
 	"github.com/Jason0411202/stockbot-long-backend/internal/entity"
 )
 
+// TestStockHistoryData_MapsDateAndClose 驗證 StockHistoryData 將歷史記錄正確對應為日期與收盤價資料點。
 func TestStockHistoryData_MapsDateAndClose(t *testing.T) {
 	stock := newFakeStock()
 	stock.history = map[string][]entity.StockHistory{
@@ -32,6 +34,7 @@ func TestStockHistoryData_MapsDateAndClose(t *testing.T) {
 	}
 }
 
+// TestStockHistoryData_Empty 驗證查詢不存在的股票代碼時回傳空切片且不回傳錯誤。
 func TestStockHistoryData_Empty(t *testing.T) {
 	svc := NewStockHistoryService(newFakeStock(), newTestLogger())
 	got, err := svc.StockHistoryData(context.Background(), "unknown")

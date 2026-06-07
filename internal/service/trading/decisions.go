@@ -1,3 +1,4 @@
+// internal/service/trading/decisions.go 實作純策略買賣決策，不產生任何 I/O 副作用。
 package trading
 
 import (
@@ -84,16 +85,20 @@ func DecideBuy(cfg *config.Config, snap Snapshot) BuyIntent {
 //   - 無上次買入,或已過冷卻天數 (bull 可用 BullCooldownDays) → 通過。
 //   - 仍在冷卻內:若 CooldownBreakBudget 尚有額度則放行並標記耗用;否則擋下。
 func passesCooldown(cfg *config.Config, snap Snapshot) (ok, broke bool) {
+	// 無上次買入紀錄,冷卻尚未啟動,直接放行。
 	if !snap.HasLastBuy {
 		return true, false
 	}
+	// 多頭時若設有較短冷卻天數則改用之,加快進場頻率。
 	cdDays := cfg.CooldownDays
 	if snap.IsBull && cfg.BullCooldownDays > 0 {
 		cdDays = cfg.BullCooldownDays
 	}
+	// 已過冷卻期:正常放行。
 	if snap.Today.Sub(snap.LastBuyDate) >= time.Duration(cdDays)*24*time.Hour {
 		return true, false
 	}
+	// 仍在冷卻內:若有剩餘「打破冷卻」額度則動用一次放行。
 	if cfg.CooldownBreakBudget > 0 && snap.CooldownBreaksLeft > 0 {
 		return true, true // 動用一次「打破冷卻」額度,撿回被冷卻錯過的深跌買點 (牛熊皆可;實測限定單一 regime 反而較差)
 	}
@@ -130,15 +135,18 @@ func fracBasis(cfg *config.Config, snap Snapshot) float64 {
 
 // bearDepthWeight 回傳熊市「跌越深買越多」的幾何權重 (ratio^命中tier索引),供比例買入縮放。
 func bearDepthWeight(cfg *config.Config, depthPct float64) float64 {
+	// ratio <= 0 時退回 1 (權重恆為 1,等同不放大)。
 	ratio := cfg.BuyTierRatio
 	if ratio <= 0 {
 		ratio = 1
 	}
+	// 從 depthPct 最淺的 tier 往下比對;命中第一個符合層回傳對應倍率。
 	for i, tier := range cfg.BaselineBuyTiers {
 		if depthPct > tier.Above {
 			return math.Pow(ratio, float64(i))
 		}
 	}
+	// 超過所有 tier 門檻 (跌最深) 時使用最高倍率。
 	return math.Pow(ratio, float64(len(cfg.BaselineBuyTiers)))
 }
 
@@ -190,16 +198,19 @@ func DecideSell(cfg *config.Config, snap Snapshot) SellIntent {
 func buyDepthPct(cfg *config.Config, snap Snapshot) float64 {
 	switch cfg.BuyDepthBasis {
 	case "ma":
+		// 乖離率:(今價 - 均線) / 均線。
 		if snap.MA20 > 0 {
 			return (snap.TodayPrice - snap.MA20) / snap.MA20
 		}
 		return 0
 	case "peak":
+		// 距高點回撤率:(今價 - 近期高點) / 近期高點。
 		if snap.RecentPeak > 0 {
 			return (snap.TodayPrice - snap.RecentPeak) / snap.RecentPeak
 		}
 		return 0
 	default: // "" / "held_high"
+		// 相對持倉最高買入成本:(今價 - 最高買入價) / 最高買入價。
 		if snap.HighestHeldPrice > 0 {
 			return (snap.TodayPrice - snap.HighestHeldPrice) / snap.HighestHeldPrice
 		}

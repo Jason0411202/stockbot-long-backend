@@ -1,3 +1,4 @@
+// internal/service/trading/indicators_test.go 驗證均線、前綴和、高點等技術指標函式。
 package trading
 
 import (
@@ -8,6 +9,7 @@ import (
 // indicators_test.go 為技術指標純函式的單元測試 (金字塔最底層):
 // BuildPrefixClose / maAt / peakAt / rollingMax / RollingMA。皆只看過去資料、無未來洩漏。
 
+// TestBuildPrefixClose 驗證 BuildPrefixClose 回傳長度 n+1 的前綴和陣列,prefix[0]=0 且各項累加正確。
 func TestBuildPrefixClose(t *testing.T) {
 	// Arrange
 	close := []float64{10, 20, 30}
@@ -27,6 +29,7 @@ func TestBuildPrefixClose(t *testing.T) {
 	}
 }
 
+// TestMaAt 驗證 maAt 以前綴和 O(1) 查詢任意視窗均線,資料不足或索引越界時回傳 NaN。
 func TestMaAt(t *testing.T) {
 	// Arrange — PrefixClose 必須建立,maAt 才能 O(1) 查任意視窗均線。
 	s := seriesFrom(mustDate(t, "2020-01-01"), []float64{10, 12, 14, 16, 18})
@@ -63,6 +66,7 @@ func TestMaAt(t *testing.T) {
 	}
 }
 
+// TestMaAt_NoPrefixClose_NaN 驗證缺少 PrefixClose 時 maAt 安全回傳 NaN 而不 panic。
 func TestMaAt_NoPrefixClose_NaN(t *testing.T) {
 	// Arrange — 缺 PrefixClose (長度不符) 時 maAt 必須安全回 NaN,不可 panic。
 	s := &StockSeries{ClosePrices: []float64{1, 2, 3}}
@@ -73,6 +77,7 @@ func TestMaAt_NoPrefixClose_NaN(t *testing.T) {
 	}
 }
 
+// TestRollingMA 驗證 RollingMA 前 window-1 格為 NaN 暖機期,其後各點為正確的視窗平均值。
 func TestRollingMA(t *testing.T) {
 	// Arrange
 	prices := []float64{1, 2, 3, 4, 5}
@@ -92,6 +97,7 @@ func TestRollingMA(t *testing.T) {
 	}
 }
 
+// TestRollingMax 驗證 rollingMax 回傳近 window 日 (含當日) 的滾動最高價序列。
 func TestRollingMax(t *testing.T) {
 	// Arrange
 	prices := []float64{3, 1, 4, 1, 5, 9, 2}
@@ -108,6 +114,7 @@ func TestRollingMax(t *testing.T) {
 	}
 }
 
+// TestPeakAt_CachesAndQueries 驗證 peakAt 回傳指定回看窗口內的最高價,重複查詢命中快取且索引越界回傳 NaN。
 func TestPeakAt_CachesAndQueries(t *testing.T) {
 	// Arrange
 	s := seriesFrom(mustDate(t, "2020-01-01"), []float64{5, 7, 6, 9, 8})

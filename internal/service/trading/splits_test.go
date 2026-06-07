@@ -1,3 +1,4 @@
+// internal/service/trading/splits_test.go 驗證 ApplySplitAdjust 對正向分割、反向分割及非分割行情的還原正確性。
 package trading
 
 import (
@@ -5,6 +6,7 @@ import (
 	"testing"
 )
 
+// TestSplitAdjust_ForwardSplit 驗證正向股票分割時,分割前的收盤價與最高價皆按比例縮小以維持序列連續。
 func TestSplitAdjust_ForwardSplit(t *testing.T) {
 	// 1:4 正向分割發生在 idx1→idx2 (102 → 25.5,ratio 0.25)。
 	closes := []float64{100, 102, 25.5, 26}
@@ -22,6 +24,7 @@ func TestSplitAdjust_ForwardSplit(t *testing.T) {
 	}
 }
 
+// TestSplitAdjust_ReverseSplit 驗證反向股票分割時,分割前的收盤價按倍率放大以維持序列連續。
 func TestSplitAdjust_ReverseSplit(t *testing.T) {
 	// 1:N 反向分割 (idx1→idx2:11 → 44,ratio 4)。
 	closes := []float64{10, 11, 44, 45}
@@ -34,6 +37,7 @@ func TestSplitAdjust_ReverseSplit(t *testing.T) {
 	}
 }
 
+// TestSplitAdjust_NoSplit_Unchanged 驗證正常行情與除息小跳空不被誤判為分割,價格序列維持不變。
 func TestSplitAdjust_NoSplit_Unchanged(t *testing.T) {
 	// 一般行情 + 除息小跳空 (~3%) 都不應被當成分割。
 	closes := []float64{100, 105, 98, 95.2, 110}

@@ -1,3 +1,4 @@
+// internal/service/backtest/characterization_test.go 以 golden fingerprint 釘住 live 策略的回測行為。
 package backtest
 
 import (

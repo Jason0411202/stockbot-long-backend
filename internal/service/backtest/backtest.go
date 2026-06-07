@@ -1,3 +1,4 @@
+// internal/service/backtest/backtest.go 提供交易引擎回測的公開入口。
 package backtest
 
 import (
@@ -29,10 +30,12 @@ type BacktestResult struct {
 // 回測起點 = CommonIssuanceStart (所有追蹤股票都已發行的那一天),確保整段回測期間每檔追蹤股票都有資料;
 // 終點 = 最後一筆資料日。實際模擬委派給 RunBacktestWindow。
 func RunBacktestOnSeries(cfg *config.Config, series map[string]*trading.StockSeries) (*BacktestResult, error) {
+	// 取得全序列日期聯集並確認非空。
 	allDates := trading.CollectDateUnion(series)
 	if len(allDates) == 0 {
 		return nil, fmt.Errorf("無任何日期可供回測")
 	}
+	// 起點前推至所有追蹤股票都已發行的那一天,終點取全序列最末日。
 	start := allDates[0]
 	if ci, ok := CommonIssuanceStart(cfg, series); ok && ci.After(start) {
 		start = ci // 起點不早於「所有追蹤股票都已發行」的那一天
@@ -48,6 +51,7 @@ func RunBacktestWindow(cfg *config.Config, series map[string]*trading.StockSerie
 	if cfg.ScalingStrategy != "Baseline" {
 		return nil, fmt.Errorf("回測目前僅支援 Scaling_Strategy=Baseline")
 	}
+	// 取得全序列日期並以二元搜尋切出視窗索引。
 	allDates := trading.CollectDateUnion(series)
 	if len(allDates) == 0 {
 		return nil, fmt.Errorf("無任何日期可供回測")
@@ -64,6 +68,7 @@ func RunBacktestWindow(cfg *config.Config, series map[string]*trading.StockSerie
 	contribOnDay := ContributionAmounts(windowDates, cfg.MonthlyContribution)
 	engine := trading.NewEngine(cfg)
 	totalContrib := 0.0
+	// 逐日注資並驅動引擎,累計注資總額。
 	for i, d := range windowDates {
 		if contribOnDay[i] > 0 {
 			engine.AddCash(contribOnDay[i])
@@ -74,6 +79,7 @@ func RunBacktestWindow(cfg *config.Config, series map[string]*trading.StockSerie
 		}
 	}
 
+	// 以 as-of 估值結算期末持股市值並組裝結果。
 	stats := engine.Stats()
 	finalHolding := engine.HoldingValueAsOf(series, end)
 	return &BacktestResult{

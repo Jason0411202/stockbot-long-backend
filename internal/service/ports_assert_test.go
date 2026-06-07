@@ -1,3 +1,4 @@
+// internal/service/ports_assert_test.go 以編譯期斷言確認各具體儲存庫與客戶端實作符合服務所定義的介面。
 package service
 
 import (

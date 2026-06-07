@@ -1,3 +1,4 @@
+// cmd/db_probe/main_test.go 以 sqlmock 覆蓋 probe 函式的各執行分支 (schema 不存在 / table 不存在 / 完整列出 / 查詢失敗)。
 package main
 
 import (
@@ -8,8 +9,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
-// main_test.go 以 sqlmock 覆蓋 probe 的各分支 (schema 不存在 / table 不存在 / 完整列出)。
-
+// TestProbe_SchemaMissing 驗證 StockLongData schema 不存在時 probe 提早結束並輸出正確訊息。
 func TestProbe_SchemaMissing(t *testing.T) {
 	// Arrange — StockLongData 不存在 → 提早返回。
 	db, mock, _ := sqlmock.New()
@@ -28,6 +28,7 @@ func TestProbe_SchemaMissing(t *testing.T) {
 	}
 }
 
+// TestProbe_TableMissing 驗證 schema 存在但 StockHistory table 不存在時 probe 輸出正確訊息。
 func TestProbe_TableMissing(t *testing.T) {
 	// Arrange — schema 存在但 StockHistory table 不存在。
 	db, mock, _ := sqlmock.New()
@@ -48,6 +49,7 @@ func TestProbe_TableMissing(t *testing.T) {
 	}
 }
 
+// TestProbe_FullListing 驗證 schema 與 table 皆存在時 probe 正確列出所有股票統計。
 func TestProbe_FullListing(t *testing.T) {
 	// Arrange — schema + table 存在,列出兩檔統計。
 	db, mock, _ := sqlmock.New()
@@ -73,6 +75,7 @@ func TestProbe_FullListing(t *testing.T) {
 	}
 }
 
+// TestProbe_SchemaQueryError 驗證 schema 查詢失敗時 probe 回傳錯誤。
 func TestProbe_SchemaQueryError(t *testing.T) {
 	// Arrange — schema 查詢失敗 → 回錯。
 	db, mock, _ := sqlmock.New()

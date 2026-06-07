@@ -1,3 +1,4 @@
+// cmd/evaluate/main.go 連線 DB 執行 walk-forward 策略評估並印出每視窗明細與 scorecard。
 package main
 
 import (
@@ -28,6 +29,7 @@ import (
 //
 // 報酬一律資金加權 (XIRR/MWR)、回撤用 NAV 單位淨值 (扣除注資灌水)。離線 CSV 版見 cmd/eval_csv。
 func main() {
+	// 解析命令列旗標。
 	windowMonths := flag.Int("window", 24, "每個視窗長度 (日曆月)")
 	stepMonths := flag.Int("step", 3, "視窗起點間隔 (日曆月)")
 	minDays := flag.Int("min-days", 200, "視窗最少交易日 (低於此略過)")
@@ -36,6 +38,7 @@ func main() {
 
 	log := logging.InitLogger()
 
+	// 載入環境變數與設定檔;可選擇覆寫追蹤標的。
 	if err := godotenv.Load(".env"); err != nil {
 		fmt.Fprintln(os.Stderr, "[warn] 未找到 .env,改用系統環境變數:", err)
 	}
@@ -55,6 +58,7 @@ func main() {
 		log.Infof("已覆寫追蹤標的為 %v", stocks)
 	}
 
+	// 建立 DB 連線並從 StockHistory 載入價格序列。
 	db, err := mariadb.OpenPool(os.Getenv("DB_DSN"))
 	if err != nil {
 		log.Fatalf("OpenPool 失敗: %v", err)
@@ -67,6 +71,7 @@ func main() {
 		log.Fatalf("LoadTradingSeries 失敗: %v", err)
 	}
 
+	// 執行 walk-forward 評估並印出報告。
 	p := backtest.WalkForwardParams{
 		WindowMonths: *windowMonths,
 		StepMonths:   *stepMonths,
@@ -81,6 +86,7 @@ func main() {
 
 // --- 格式化小工具 (處理 Inf/NaN) ---
 
+// pct 將小數比率格式化為帶正負號的百分比字串;NaN/Inf 回傳特殊標示。
 func pct(x float64) string {
 	if math.IsNaN(x) {
 		return "  n/a"
@@ -91,6 +97,7 @@ func pct(x float64) string {
 	return fmt.Sprintf("%+.1f%%", x*100)
 }
 
+// ratio 將浮點數格式化為兩位小數字串;NaN/Inf 回傳特殊標示。
 func ratio(x float64) string {
 	if math.IsNaN(x) {
 		return " n/a"
@@ -104,6 +111,7 @@ func ratio(x float64) string {
 	return fmt.Sprintf("%.2f", x)
 }
 
+// partCell 計算策略 MWR 對 B&H MWR 的參與率;B&H 為零或 NaN 時回傳 "—"。
 func partCell(stratMWR, bhMWR float64) string {
 	if bhMWR <= 0 || math.IsNaN(bhMWR) {
 		return "   —"
@@ -111,6 +119,7 @@ func partCell(stratMWR, bhMWR float64) string {
 	return ratio(stratMWR / bhMWR)
 }
 
+// yesNo 將布林值轉換為 "✓" 或 "·" 符號。
 func yesNo(b bool) string {
 	if b {
 		return "✓"
@@ -118,6 +127,7 @@ func yesNo(b bool) string {
 	return "·"
 }
 
+// passFail 將布林值轉換為 "PASS ✅" 或 "FAIL ❌" 字串。
 func passFail(b bool) string {
 	if b {
 		return "PASS ✅"
@@ -125,7 +135,9 @@ func passFail(b bool) string {
 	return "FAIL ❌"
 }
 
+// printReport 格式化並印出每視窗明細、跨視窗彙整與 scorecard。
 func printReport(cfg *config.Config, p backtest.WalkForwardParams, reports []backtest.WindowReport, agg backtest.AggregateReport) {
+	// 印出報告標題與問題設定摘要。
 	stocks := cfg.TrackStocks
 	fmt.Println()
 	fmt.Println("════════════════════════════════════════════════════════════════════════")
@@ -196,6 +208,7 @@ func printReport(cfg *config.Config, p backtest.WalkForwardParams, reports []bac
 	printDisclosures(stocks, agg)
 }
 
+// verdict 依 scorecard 整體結果回傳對應的結論文字。
 func verdict(pass bool) string {
 	if pass {
 		return "這是一個『穩定、低風險、有競爭力且具真實擇時能力』的好策略 ✅"
@@ -203,6 +216,7 @@ func verdict(pass bool) string {
 	return "尚未全部通過 —— 見下方揭露,逐關卡判斷差在哪、是否只是『抱現金』的假優勢 ⚠️"
 }
 
+// printDisclosures 印出五項必要揭露以避免回測偏誤誤導解讀。
 func printDisclosures(stocks []string, agg backtest.AggregateReport) {
 	fmt.Println("  ── 必要揭露 (避免被回測誤導) ──")
 	fmt.Printf("    1. 倖存者/選股偏誤:%v 是『事後』挑選且都存活、長期向上的大盤型 ETF。\n", stocks)

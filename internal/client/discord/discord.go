@@ -29,6 +29,7 @@ type Client struct {
 // parameter so callers pass os.Getenv("DISCORD_BOT_CHANNELID") themselves,
 // keeping this package independent of the environment.
 func NewClient(token, channelID string, log *logrus.Logger) (*Client, error) {
+	// token 為空時立即回傳錯誤,避免以空字串建立無效 session。
 	if token == "" {
 		err := fmt.Errorf("NewClient() 失敗, 缺少 Discord bot token, 請確認環境變數設定無誤")
 		if log != nil {
@@ -37,6 +38,7 @@ func NewClient(token, channelID string, log *logrus.Logger) (*Client, error) {
 		return nil, err
 	}
 
+	// 以 "Bot <token>" 格式建立 discordgo session。
 	session, err := discordgo.New("Bot " + token)
 	if err != nil {
 		wrapped := fmt.Errorf("NewClient() 失敗, 建立 Discord session 失敗: %w", err)
@@ -46,6 +48,7 @@ func NewClient(token, channelID string, log *logrus.Logger) (*Client, error) {
 		return nil, wrapped
 	}
 
+	// 開啟 WebSocket 連線;連線失敗時回傳包裝錯誤。
 	if err := session.Open(); err != nil {
 		wrapped := fmt.Errorf("NewClient() 失敗, 無法連線至 Discord: %w", err)
 		if log != nil {
@@ -54,6 +57,7 @@ func NewClient(token, channelID string, log *logrus.Logger) (*Client, error) {
 		return nil, wrapped
 	}
 
+	// 連線成功後記錄 Info 訊息並回傳已初始化的 Client。
 	if log != nil {
 		log.Info("成功連線至 Discord")
 	}
@@ -69,6 +73,7 @@ func NewClient(token, channelID string, log *logrus.Logger) (*Client, error) {
 // configured channel. It guards against an uninitialised session and builds the
 // same discordgo.MessageEmbed structure as the legacy SendEmbedDiscordMessage.
 func (c *Client) SendEmbed(title, message string, color int) error {
+	// session 未初始化時提前回傳錯誤。
 	if c == nil || c.session == nil {
 		err := fmt.Errorf("SendEmbed() 失敗, Discord session 尚未初始化")
 		if c != nil && c.log != nil {
@@ -77,6 +82,7 @@ func (c *Client) SendEmbed(title, message string, color int) error {
 		return err
 	}
 
+	// channelID 為空時無法寄送,提前回傳錯誤。
 	if c.channelID == "" {
 		err := fmt.Errorf("SendEmbed() 失敗, 缺少 Discord channel id, 請確認環境變數設定無誤")
 		if c.log != nil {
@@ -85,6 +91,7 @@ func (c *Client) SendEmbed(title, message string, color int) error {
 		return err
 	}
 
+	// 組裝 Embed 訊息結構並送出至目標頻道。
 	embed := &discordgo.MessageEmbed{
 		Title:       title,
 		Description: message,
@@ -105,9 +112,11 @@ func (c *Client) SendEmbed(title, message string, color int) error {
 // Close closes the underlying Discord session. It is a no-op when the client or
 // its session is nil.
 func (c *Client) Close() error {
+	// client 或 session 為 nil 時直接回傳,不做任何操作。
 	if c == nil || c.session == nil {
 		return nil
 	}
+	// 關閉底層 WebSocket 連線,失敗時回傳包裝錯誤。
 	if err := c.session.Close(); err != nil {
 		return fmt.Errorf("Close() 失敗, 關閉 Discord session 失敗: %w", err)
 	}

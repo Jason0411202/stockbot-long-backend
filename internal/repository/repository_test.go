@@ -1,3 +1,4 @@
+// internal/repository/repository_test.go 以 sqlmock 驗證各 repository 的 SQL 與資料掃描邏輯。
 package repository
 
 import (
@@ -39,6 +40,7 @@ var ctx = context.Background()
 
 // --- StockHistoryRepository ---
 
+// TestGetStockName 驗證 GetStockName 依 stock_id 查詢並回傳最新股票名稱。
 func TestGetStockName(t *testing.T) {
 	// Arrange
 	db, mock := newMock(t)
@@ -57,6 +59,7 @@ func TestGetStockName(t *testing.T) {
 	assertMet(t, mock)
 }
 
+// TestGetStockName_NoRows 驗證查無資料時 GetStockName 回傳空字串且無錯誤。
 func TestGetStockName_NoRows(t *testing.T) {
 	// Arrange — no history → empty string, no error.
 	db, mock := newMock(t)
@@ -75,6 +78,7 @@ func TestGetStockName_NoRows(t *testing.T) {
 	assertMet(t, mock)
 }
 
+// TestGetPriceAsOf 驗證 GetPriceAsOf 依日期回傳指定價格欄位的最新值。
 func TestGetPriceAsOf(t *testing.T) {
 	// Arrange
 	db, mock := newMock(t)
@@ -93,6 +97,7 @@ func TestGetPriceAsOf(t *testing.T) {
 	assertMet(t, mock)
 }
 
+// TestGetPriceAsOf_RejectsInvalidPriceType 驗證非白名單欄位名稱在發送查詢前即被拒絕。
 func TestGetPriceAsOf_RejectsInvalidPriceType(t *testing.T) {
 	// Arrange — a non-whitelisted column must be rejected before any query.
 	db, mock := newMock(t)
@@ -109,6 +114,7 @@ func TestGetPriceAsOf_RejectsInvalidPriceType(t *testing.T) {
 	assertMet(t, mock) // proves no query was issued
 }
 
+// TestGetClosePricesDescAsOf 驗證 GetClosePricesDescAsOf 以降冪回傳指定日期前的收盤價序列。
 func TestGetClosePricesDescAsOf(t *testing.T) {
 	// Arrange — newest-first close series.
 	db, mock := newMock(t)
@@ -127,6 +133,7 @@ func TestGetClosePricesDescAsOf(t *testing.T) {
 	assertMet(t, mock)
 }
 
+// TestGetCloseHistoryAsc 驗證 GetCloseHistoryAsc 以升冪回傳完整收盤歷史記錄。
 func TestGetCloseHistoryAsc(t *testing.T) {
 	// Arrange
 	db, mock := newMock(t)
@@ -145,6 +152,7 @@ func TestGetCloseHistoryAsc(t *testing.T) {
 	assertMet(t, mock)
 }
 
+// TestLoadSeries 驗證 LoadSeries 對多個股票代號各發一次查詢並彙整成 map 回傳。
 func TestLoadSeries(t *testing.T) {
 	// Arrange — one query per stockID.
 	db, mock := newMock(t)
@@ -165,6 +173,7 @@ func TestLoadSeries(t *testing.T) {
 	assertMet(t, mock)
 }
 
+// TestInsertBarIgnore 驗證 InsertBarIgnore 以 INSERT IGNORE 寫入 K 線資料且不回傳錯誤。
 func TestInsertBarIgnore(t *testing.T) {
 	// Arrange — value/price_change/transactions intentionally omitted.
 	db, mock := newMock(t)
@@ -189,6 +198,7 @@ func TestInsertBarIgnore(t *testing.T) {
 
 const unrealizedCols = "transaction_date, stock_id, stock_name, transaction_price, investment_cost, shares"
 
+// TestLoadAllUnrealized 驗證 LoadAllUnrealized 讀取 UnrealizedGainsLosses 全部記錄並正確掃描欄位。
 func TestLoadAllUnrealized(t *testing.T) {
 	// Arrange
 	db, mock := newMock(t)
@@ -208,6 +218,7 @@ func TestLoadAllUnrealized(t *testing.T) {
 	assertMet(t, mock)
 }
 
+// TestGetLowestUnrealized_Found 驗證有符合條件的記錄時 GetLowestUnrealized 回傳最低買入成本的持倉。
 func TestGetLowestUnrealized_Found(t *testing.T) {
 	// Arrange
 	db, mock := newMock(t)
@@ -227,6 +238,7 @@ func TestGetLowestUnrealized_Found(t *testing.T) {
 	assertMet(t, mock)
 }
 
+// TestGetLowestUnrealized_NotFound 驗證查無記錄時 GetLowestUnrealized 回傳 ok=false 且無錯誤。
 func TestGetLowestUnrealized_NotFound(t *testing.T) {
 	// Arrange — empty result set.
 	db, mock := newMock(t)
@@ -245,6 +257,7 @@ func TestGetLowestUnrealized_NotFound(t *testing.T) {
 	assertMet(t, mock)
 }
 
+// TestInsertUnrealized 驗證 InsertUnrealized 以正確參數寫入一筆未實現損益記錄。
 func TestInsertUnrealized(t *testing.T) {
 	// Arrange
 	db, mock := newMock(t)
@@ -266,6 +279,7 @@ func TestInsertUnrealized(t *testing.T) {
 	assertMet(t, mock)
 }
 
+// TestDeleteUnrealized 驗證 DeleteUnrealized 以 stock_id 和日期刪除指定持倉記錄。
 func TestDeleteUnrealized(t *testing.T) {
 	// Arrange
 	db, mock := newMock(t)
@@ -281,6 +295,7 @@ func TestDeleteUnrealized(t *testing.T) {
 	assertMet(t, mock)
 }
 
+// TestUpdateUnrealized 驗證 UpdateUnrealized 以新成本與股數更新指定持倉記錄。
 func TestUpdateUnrealized(t *testing.T) {
 	// Arrange
 	db, mock := newMock(t)
@@ -296,6 +311,7 @@ func TestUpdateUnrealized(t *testing.T) {
 	assertMet(t, mock)
 }
 
+// TestInsertRealized 驗證 InsertRealized 以完整欄位寫入一筆已實現損益記錄。
 func TestInsertRealized(t *testing.T) {
 	// Arrange
 	db, mock := newMock(t)
@@ -318,6 +334,7 @@ func TestInsertRealized(t *testing.T) {
 	assertMet(t, mock)
 }
 
+// TestListUnrealized 驗證 ListUnrealized 依日期降冪讀取最多 500 筆未實現損益記錄。
 func TestListUnrealized(t *testing.T) {
 	// Arrange
 	db, mock := newMock(t)
@@ -336,6 +353,7 @@ func TestListUnrealized(t *testing.T) {
 	assertMet(t, mock)
 }
 
+// TestListRealized 驗證 ListRealized 依賣出日期降冪讀取最多 500 筆已實現損益記錄。
 func TestListRealized(t *testing.T) {
 	// Arrange
 	db, mock := newMock(t)
@@ -354,6 +372,7 @@ func TestListRealized(t *testing.T) {
 	assertMet(t, mock)
 }
 
+// TestLastBuyDateRaw_Found 驗證有買入紀錄時 LastBuyDateRaw 回傳最後買入日期且 ok=true。
 func TestLastBuyDateRaw_Found(t *testing.T) {
 	// Arrange
 	db, mock := newMock(t)
@@ -372,6 +391,7 @@ func TestLastBuyDateRaw_Found(t *testing.T) {
 	assertMet(t, mock)
 }
 
+// TestLastBuyDateRaw_Null 驗證從未買入時 LastBuyDateRaw 回傳空字串且 ok=false 無錯誤。
 func TestLastBuyDateRaw_Null(t *testing.T) {
 	// Arrange — never bought → MAX returns NULL.
 	db, mock := newMock(t)
@@ -392,6 +412,7 @@ func TestLastBuyDateRaw_Null(t *testing.T) {
 
 // --- BotStateRepository ---
 
+// TestBotState_Set 驗證 Set 以 upsert 方式寫入機器人狀態鍵值。
 func TestBotState_Set(t *testing.T) {
 	// Arrange
 	db, mock := newMock(t)
@@ -407,6 +428,7 @@ func TestBotState_Set(t *testing.T) {
 	assertMet(t, mock)
 }
 
+// TestBotState_Get 驗證 Get 依鍵名讀取機器人狀態並回傳值且 ok=true。
 func TestBotState_Get(t *testing.T) {
 	// Arrange
 	db, mock := newMock(t)
@@ -425,6 +447,7 @@ func TestBotState_Get(t *testing.T) {
 	assertMet(t, mock)
 }
 
+// TestBotState_Get_NoRow 驗證鍵不存在時 Get 回傳 ok=false 且無錯誤。
 func TestBotState_Get_NoRow(t *testing.T) {
 	// Arrange — missing key → ok=false, no error.
 	db, mock := newMock(t)
@@ -445,6 +468,7 @@ func TestBotState_Get_NoRow(t *testing.T) {
 
 // --- BackfillRepository ---
 
+// TestCompletedMonths 驗證 CompletedMonths 回傳指定股票已完成回填的月份集合。
 func TestCompletedMonths(t *testing.T) {
 	// Arrange
 	db, mock := newMock(t)
@@ -463,6 +487,7 @@ func TestCompletedMonths(t *testing.T) {
 	assertMet(t, mock)
 }
 
+// TestMarkComplete 驗證 MarkComplete 以 INSERT IGNORE 標記指定月份為已完成。
 func TestMarkComplete(t *testing.T) {
 	// Arrange
 	db, mock := newMock(t)

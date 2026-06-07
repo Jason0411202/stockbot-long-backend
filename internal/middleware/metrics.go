@@ -1,3 +1,4 @@
+// internal/middleware/metrics.go 提供 Prometheus request metrics middleware 與 handler。
 package middleware
 
 import (
@@ -10,6 +11,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
+// requestDuration 與 requestTotal 記錄業務 API 的延遲與請求數。
 var (
 	// HttpRequestsTotal 計算 HTTP request 總數（只會往上加的 Counter）
 	// labels 讓你在 Grafana 可以過濾：只看 POST、只看 5xx 等
@@ -37,16 +39,19 @@ var (
 func NewMetricsMiddleware() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
+			// 運維路徑不計入業務指標,直接通過不計時。
 			path := c.Path()
 			if path == "/metrics" || path == "/health" || path == "/ready" {
 				return next(c)
 			}
 
+			// 執行後續 handler 並量測總耗時。
 			start := time.Now()
 			err := next(c)
 			duration := time.Since(start).Seconds()
 			status := strconv.Itoa(c.Response().Status)
 
+			// 將請求總數與延遲分布記錄至對應的 Prometheus 指標。
 			HttpRequestsTotal.WithLabelValues(c.Request().Method, path, status).Inc()
 			HttpRequestDuration.WithLabelValues(c.Request().Method, path).Observe(duration)
 
