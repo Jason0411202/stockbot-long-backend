@@ -80,6 +80,7 @@ func main() {
 	portfolioSvc := service.NewPortfolioService(ledgerRepo, stockRepo, log)
 	statSvc := service.NewStatisticService(stockRepo, cfg, log)
 	histSvc := service.NewStockHistoryService(stockRepo, log)
+	perfSvc := service.NewPerformanceService(cfg, portfolioSvc, stateRepo, stockRepo, log)
 	engine := trading.NewEngine(cfg)
 	tradingSvc := service.NewTradingService(engine, portfolioSvc, marketSvc, stockRepo, ledgerRepo, stateRepo, discordClient, realtimeClient, cfg, log)
 
@@ -102,7 +103,7 @@ func main() {
 	}
 
 	// --- controller + echo (HTTP transport) ---
-	ctrl := controller.New(log, portfolioSvc, statSvc, histSvc)
+	ctrl := controller.New(log, portfolioSvc, statSvc, histSvc, perfSvc)
 	go server.Run(log, db, ctrl)
 
 	// --- 上線交易 loop (阻塞,取代舊 kernals.DailyCheck) ---

@@ -46,11 +46,17 @@ func (fakeHistory) StockHistoryData(ctx context.Context, stockID string) ([]dto.
 	return nil, nil
 }
 
+type fakePerformance struct{}
+
+func (fakePerformance) Summary(ctx context.Context) (dto.PerformanceSummary, error) {
+	return dto.PerformanceSummary{}, nil
+}
+
 // newTestController builds a Controller from the fakes + a discard logger.
 func newTestController() *controller.Controller {
 	log := logrus.New()
 	log.SetOutput(io.Discard)
-	return controller.New(log, fakePortfolio{}, fakeStatistic{}, fakeHistory{})
+	return controller.New(log, fakePortfolio{}, fakeStatistic{}, fakeHistory{}, fakePerformance{})
 }
 
 // TestBuildEcho_OpsRoutes 驗證 BuildEcho 正確掛載 /health、/ready、/metrics 及業務路由，並回傳預期狀態碼。

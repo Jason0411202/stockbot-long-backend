@@ -49,7 +49,7 @@ func liveStrategyCfg() *config.Config {
 		TrailStopBear:         0.08,
 		TrailMinGain:          0.10,
 		StockOverrides: map[string]config.StockParams{
-			"00631L": {RegimeMAWindow: iptr(60)},
+			"00631L": {RegimeMAWindow: iptr(60), TrailReentryCooldownDays: iptr(42)},
 		},
 	}
 }
@@ -167,13 +167,17 @@ func TestCharacterization_LiveStrategyFingerprint(t *testing.T) {
 //	regime_ma_window 95→85、trail_stop_bear 0.10→0.08 (補償開盤決策只看到前一日收盤的較慢翻空);
 //	00631L 覆寫維持 60、bull_buy_frac 維持 0.20。實測 (真實 CSV) full Calmar 1.34、wf 四關全過、OOS 保留 93%。
 //
-// 此處合成資料的指紋隨之更新 (trail 收緊使 trail 12/profit 5、finalTotal 提高);後續任何非刻意改動都應維持此數字。
+// 2026-06 第二次刻意變更 (經使用者核可):00631L 加入 trail_reentry_cooldown_days=42 ——
+// 移動停利出場後暫停逢低買入 ≈42 日,打斷 2x 槓桿空頭的「停損→又接刀→再停損」whipsaw 循環。
+// 經 IS/OOS 與 18/24/30 月三視窗驗證 (真實 CSV):full Calmar 1.34→1.79、MWR +40.5→+45.9%、
+// 回撤 -30.2→-25.7%、OOS 保留 ~153% 不退化、三視窗回撤一致下降;只套 00631L (全股套用會過擬合)。
+// 合成資料指紋隨之更新 (buys 97→88、trail 12→9、finalTotal 微調);後續任何非刻意改動都應維持此數字。
 const (
-	goldenBuys       = 97
-	goldenSells      = 79
+	goldenBuys       = 88
+	goldenSells      = 71
 	goldenSkipped    = 0
-	goldenTrail      = 12
+	goldenTrail      = 9
 	goldenProfit     = 5
-	goldenFinalCash  = 51170
-	goldenFinalTotal = 325485
+	goldenFinalCash  = 59285
+	goldenFinalTotal = 323166
 )

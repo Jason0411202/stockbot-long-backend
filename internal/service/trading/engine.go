@@ -57,6 +57,7 @@ type Engine struct {
 	lastBuy       map[string]time.Time
 	peakSinceHold map[string]float64     // 持倉期間最高收盤 (移動停利用);全出後歸零
 	breakDates    map[string][]time.Time // 每檔歷次「動用打破冷卻額度」的日期 (滾動視窗計數用)
+	lastTrailSell map[string]time.Time   // 每檔最後一次移動停利出場日 (出場後暫停買入用);未持久化,重啟靠 catch-up 回放重建
 
 	totalBuys   int
 	totalSells  int
@@ -86,6 +87,7 @@ func NewEngine(cfg *config.Config) *Engine {
 		lastBuy:       make(map[string]time.Time, len(cfg.TrackStocks)),
 		peakSinceHold: make(map[string]float64, len(cfg.TrackStocks)),
 		breakDates:    make(map[string][]time.Time, len(cfg.TrackStocks)),
+		lastTrailSell: make(map[string]time.Time, len(cfg.TrackStocks)),
 	}
 }
 
@@ -96,7 +98,8 @@ func (e *Engine) SetRecorder(r *DayRecorder) { e.rec = r }
 func (e *Engine) SeedCash(cash float64) { e.cash = cash }
 
 // AddCash 把一筆外部注資 (定期定額) 加進現金池,當日即可動用。amount <= 0 為 no-op。
-// 用於回測/評估的「每月解鎖新資金」問題設定;上線真實餘額另由 BotState 還原,不經此注入。
+// 用於「每月解鎖新資金」問題設定;回測由 backtest 逐視窗注入,上線由 TradingService 在 catch-up
+// 回放與每日 loop 依同一排程 (backtest.ContributionDue) 注入,兩邊現金軌跡一致。
 func (e *Engine) AddCash(amount float64) {
 	if amount > 0 {
 		e.cash += amount
@@ -289,9 +292,19 @@ func (e *Engine) processStock(stockID string, today time.Time, decisionPrice flo
 	if eff.CooldownBreakBudget > 0 {
 		snap.CooldownBreaksLeft = eff.CooldownBreakBudget - e.breaksInWindow(eff, stockID, today)
 	}
-	if buy := DecideBuy(eff, snap); buy.Should {
-		if err := e.applyBuy(stockID, today, buy, exec); err != nil {
-			return err
+	// 移動停利出場後的「暫停買入」閘:避免空頭中「停損→隔日又逢低買→再停損」的 whipsaw 循環 (zero-value 不暫停)。
+	reentryBlocked := false
+	if eff.TrailReentryCooldownDays > 0 {
+		if ts, ok := e.lastTrailSell[stockID]; ok &&
+			today.Sub(ts) < time.Duration(eff.TrailReentryCooldownDays)*24*time.Hour {
+			reentryBlocked = true
+		}
+	}
+	if !reentryBlocked {
+		if buy := DecideBuy(eff, snap); buy.Should {
+			if err := e.applyBuy(stockID, today, buy, exec); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -507,6 +520,7 @@ func (e *Engine) applySell(stockID string, today time.Time, intent SellIntent, e
 	if soldShares > 0 {
 		if intent.Reason == "trail" {
 			e.trailSells++
+			e.lastTrailSell[stockID] = today // 記錄出場日,供「暫停買入」閘判定
 		} else {
 			e.profitSells++
 		}

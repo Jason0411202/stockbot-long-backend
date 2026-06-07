@@ -58,11 +58,21 @@ func (f fakeHistory) StockHistoryData(ctx context.Context, stockID string) ([]dt
 	return f.rows, f.err
 }
 
+// fakePerformance implements PerformanceReporter with a canned summary or error.
+type fakePerformance struct {
+	summary dto.PerformanceSummary
+	err     error
+}
+
+func (f fakePerformance) Summary(ctx context.Context) (dto.PerformanceSummary, error) {
+	return f.summary, f.err
+}
+
 // newController builds a Controller from the supplied fakes + a discard logger.
-func newController(p PortfolioService, s StatisticService, h StockHistoryService) *Controller {
+func newController(p PortfolioService, s StatisticService, h StockHistoryService, perf PerformanceReporter) *Controller {
 	log := logrus.New()
 	log.SetOutput(io.Discard)
-	return New(log, p, s, h)
+	return New(log, p, s, h, perf)
 }
 
 // invoke builds a GET request and runs the handler method, returning the recorder.
@@ -80,7 +90,7 @@ func invoke(t *testing.T, h echo.HandlerFunc, target string) *httptest.ResponseR
 // TestHomeHandler 驗證 Home handler 回傳 200 且 body 為 "Hello, World!"。
 func TestHomeHandler(t *testing.T) {
 	// Arrange
-	ctl := newController(fakePortfolio{}, fakeStatistic{}, fakeHistory{})
+	ctl := newController(fakePortfolio{}, fakeStatistic{}, fakeHistory{}, fakePerformance{})
 	// Act
 	rec := invoke(t, ctl.Home, "/")
 	// Assert
@@ -94,7 +104,7 @@ func TestUnrealizedHandler_OK(t *testing.T) {
 	// Arrange
 	ctl := newController(fakePortfolio{
 		unrealized: []dto.UnrealizedGainLoss{{StockID: "00631L", StockName: "n"}},
-	}, fakeStatistic{}, fakeHistory{})
+	}, fakeStatistic{}, fakeHistory{}, fakePerformance{})
 
 	// Act
 	rec := invoke(t, ctl.UnrealizedGainsLosses, "/api/get_unrealized_gains_losses")
@@ -108,7 +118,7 @@ func TestUnrealizedHandler_OK(t *testing.T) {
 // TestUnrealizedHandler_DBErrorReturnsEmpty 驗證 service 失敗時 handler 回傳 200 加空陣列，不外洩錯誤。
 func TestUnrealizedHandler_DBErrorReturnsEmpty(t *testing.T) {
 	// Arrange — service 失敗 → handler 應回 200 + 空陣列 (不外洩錯誤)。
-	ctl := newController(fakePortfolio{unrealizedErr: errFake}, fakeStatistic{}, fakeHistory{})
+	ctl := newController(fakePortfolio{unrealizedErr: errFake}, fakeStatistic{}, fakeHistory{}, fakePerformance{})
 
 	// Act
 	rec := invoke(t, ctl.UnrealizedGainsLosses, "/api/get_unrealized_gains_losses")
@@ -124,7 +134,7 @@ func TestRealizedHandler_OK(t *testing.T) {
 	// Arrange
 	ctl := newController(fakePortfolio{
 		realized: []dto.RealizedGainLoss{{StockID: "00631L", StockName: "n"}},
-	}, fakeStatistic{}, fakeHistory{})
+	}, fakeStatistic{}, fakeHistory{}, fakePerformance{})
 
 	// Act + Assert
 	if rec := invoke(t, ctl.RealizedGainsLosses, "/x"); rec.Code != http.StatusOK {
@@ -135,7 +145,7 @@ func TestRealizedHandler_OK(t *testing.T) {
 // TestStockHistoryHandler_RequiresStockId 驗證缺少 stockId 查詢參數時 handler 回傳 400。
 func TestStockHistoryHandler_RequiresStockId(t *testing.T) {
 	// Arrange
-	ctl := newController(fakePortfolio{}, fakeStatistic{}, fakeHistory{})
+	ctl := newController(fakePortfolio{}, fakeStatistic{}, fakeHistory{}, fakePerformance{})
 
 	// Act — 缺 stockId → 400。
 	rec := invoke(t, ctl.StockHistoryData, "/api/get_stock_history_data")
@@ -151,7 +161,7 @@ func TestStockHistoryHandler_OK(t *testing.T) {
 	// Arrange
 	ctl := newController(fakePortfolio{}, fakeStatistic{}, fakeHistory{
 		rows: []dto.StockHistoryPoint{{Date: "2024-01-02", Price: 50.0}},
-	})
+	}, fakePerformance{})
 
 	// Act + Assert
 	if rec := invoke(t, ctl.StockHistoryData, "/x?stockId=00631L"); rec.Code != http.StatusOK {
@@ -162,10 +172,33 @@ func TestStockHistoryHandler_OK(t *testing.T) {
 // TestStockStatisticHandler_DBErrorReturnsEmpty 驗證 service 失敗時 StockStatisticData handler 回傳 200 加空陣列。
 func TestStockStatisticHandler_DBErrorReturnsEmpty(t *testing.T) {
 	// Arrange — service 失敗 → handler 回 200 空陣列。
-	ctl := newController(fakePortfolio{}, fakeStatistic{err: errFake}, fakeHistory{})
+	ctl := newController(fakePortfolio{}, fakeStatistic{err: errFake}, fakeHistory{}, fakePerformance{})
 
 	// Act + Assert
 	if rec := invoke(t, ctl.StockStatisticData, "/x"); rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
+	}
+}
+
+// TestPerformanceHandler_OK 驗證 PerformanceSummary handler 在 service 正常時回傳 200。
+func TestPerformanceHandler_OK(t *testing.T) {
+	// Arrange
+	ctl := newController(fakePortfolio{}, fakeStatistic{}, fakeHistory{},
+		fakePerformance{summary: dto.PerformanceSummary{InitialCash: 100000}})
+
+	// Act + Assert
+	if rec := invoke(t, ctl.PerformanceSummary, "/api/get_performance_summary"); rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+}
+
+// TestPerformanceHandler_ErrorReturnsEmpty 驗證 service 失敗時 handler 回傳 200 加空物件，不外洩錯誤。
+func TestPerformanceHandler_ErrorReturnsEmpty(t *testing.T) {
+	// Arrange — service 失敗 → handler 應回 200 + 空物件。
+	ctl := newController(fakePortfolio{}, fakeStatistic{}, fakeHistory{}, fakePerformance{err: errFake})
+
+	// Act + Assert
+	if rec := invoke(t, ctl.PerformanceSummary, "/api/get_performance_summary"); rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 with empty object", rec.Code)
 	}
 }

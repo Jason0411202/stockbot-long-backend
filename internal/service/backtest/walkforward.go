@@ -211,20 +211,27 @@ func generateWindows(cfg *config.Config, series map[string]*trading.StockSeries,
 	return windows
 }
 
+// ContributionDue 回傳「交易日 d 相對前一個已處理交易日 prev」該注入的金額:
+// prev 為零值 (無前一日,如序列首日) 或 d 與 prev 落在同一日曆月 → 0;跨月 → monthly。monthly<=0 一律 0。
+//
+// 此函式是回測 (ContributionAmounts) 與線上 (TradingService catch-up / 每日 loop) 共用的注資排程單一事實來源,
+// 確保兩條路徑對同一段交易日序列產生「逐日完全相同」的注資時點,使線上忠實反映回測的每月定額注資情境。
+func ContributionDue(prev, d time.Time, monthly float64) float64 {
+	if monthly <= 0 || prev.IsZero() {
+		return 0
+	}
+	if prev.Year() == d.Year() && prev.Month() == d.Month() {
+		return 0
+	}
+	return monthly
+}
+
 // ContributionAmounts 回傳與 windowDates 對齊的「每日注資額」:每個日曆月的第一個交易日 (視窗起始月除外)
-// 注入 monthly,其餘為 0。monthly<=0 時全為 0 (退化回無注資)。
+// 注入 monthly,其餘為 0。monthly<=0 時全為 0 (退化回無注資)。逐日委派給 ContributionDue,與線上注資同一邏輯。
 func ContributionAmounts(windowDates []time.Time, monthly float64) []float64 {
 	out := make([]float64, len(windowDates))
-	if monthly <= 0 || len(windowDates) == 0 {
-		return out
-	}
-	prev := windowDates[0].Year()*100 + int(windowDates[0].Month())
 	for i := 1; i < len(windowDates); i++ {
-		m := windowDates[i].Year()*100 + int(windowDates[i].Month())
-		if m != prev {
-			out[i] = monthly
-			prev = m
-		}
+		out[i] = ContributionDue(windowDates[i-1], windowDates[i], monthly)
 	}
 	return out
 }

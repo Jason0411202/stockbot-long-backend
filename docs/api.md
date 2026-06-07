@@ -19,10 +19,31 @@
 | `GET` | `/api/get_realized_gains_losses` | 取得已實現損益紀錄 |
 | `GET` | `/api/get_stock_statistic_data` | 取得追蹤標的統計資料 |
 | `GET` | `/api/get_stock_history_data?stock_id=00631L` | 取得指定股票歷史收盤資料 |
+| `GET` | `/api/get_performance_summary` | 取得策略績效摘要（本金明細 + 實盤現況 + 回測指標） |
+
+## `/api/get_performance_summary`
+
+一次回傳三類資訊，供前端呈現「投入了多少本金、目前賺賠多少、策略本身好不好」：
+
+- **本金明細**（外部注入股市的資金，不含後續滾出的獲利）：
+  `initial_cash`（期初一次性本金）、`monthly_contribution`（每月定額注資設定）、
+  `total_contributed`（累計已注資）、`total_invested`（投入本金合計 = 期初 + 累計注資）。
+- **實盤現況**（真實帳本 + BotState）：`current_cash`、`holding_value`、`total_equity`、
+  `realized_pnl`、`unrealized_pnl`、`total_pnl`（= 總權益 − 投入本金）、`total_return_rate`（%）。
+- **回測績效** `backtest`（資料不足或評估失敗時為 `null`）：
+  - 全期 headline：`span_start`/`span_end`/`years`/`total_in`，以及 `strategy` 與 `buy_hold` 各自的
+    `final_equity`/`multiple`/`mwr`（資金加權年化報酬）/`max_drawdown`（NAV 回撤）/`calmar`/`sortino`/`avg_exposure`，
+    外加策略交易統計 `buys`/`sells`/`trail_sells`/`profit_sells`/`skipped`/`final_cash`。
+  - `walk_forward` 多視窗穩健性 scorecard：中位 MWR / 回撤 / Calmar、`calmar_win_rate`、`blend_skill_rate`、
+    `ret_participation`，及五道關卡 `g1_return_participation`～`g5_robustness` 與 `overall_pass`。
+
+回測比率欄位（`mwr`/`calmar`/`sortino` 等）在邊界情況可能為 `null`（對應 NaN/±Inf，見 `dto.JSONFloat`）。
+本金與每月注資對齊回測與上線共用的 `monthly_contribution` 設定，故實盤帳本與回測情境一致。
 
 ## 回應資料
 
-API 回應由 `internal/dto` 定義。`portfolio.go` 對應投資組合損益，`market.go` 對應價格統計與歷史價格點。
+API 回應由 `internal/dto` 定義。`portfolio.go` 對應投資組合損益，`market.go` 對應價格統計與歷史價格點，
+`performance.go` 對應策略績效摘要（含 `JSONFloat`：NaN/±Inf 序列化為 `null`）。
 
 ## 錯誤處理
 

@@ -587,6 +587,84 @@ func TestTradingService_RunOneDayAtOpen_NotReadyDoesNotAdvance(t *testing.T) {
 	}
 }
 
+// TestTradingService_CatchUp_InjectsMonthlyContribution 驗證首次啟動 catch-up 會在每個月份切換的交易日
+// 注入 monthly_contribution,並把累計注資持久化到 BotState (total_contributed)。
+func TestTradingService_CatchUp_InjectsMonthlyContribution(t *testing.T) {
+	cfg := tradingTestCfg("AAA")
+	cfg.MonthlyContribution = 2500
+	svc, _, state, _, _, _ := newTradingFixture(cfg)
+	// 90 連續日從 2024-01-01 (平坦價格,無交易);跨月於 02-01、03-01 各注資一次 = 5000。
+	series := map[string]*trading.StockSeries{
+		"AAA": flatSeries(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC), 90, 100),
+	}
+
+	startCash := svc.engine.Cash()
+	if err := svc.CatchUp(context.Background(), series); err != nil {
+		t.Fatalf("CatchUp: %v", err)
+	}
+
+	// 引擎現金應比期初多 5000 (平坦序列不交易,注資全留現金)。
+	if got := svc.engine.Cash(); got != startCash+5000 {
+		t.Fatalf("cash after contributions = %.2f, want %.2f", got, startCash+5000)
+	}
+	// total_contributed 持久化為 5000。
+	if v := state.values["total_contributed"]; v != "5000" {
+		t.Fatalf("total_contributed persisted = %q, want \"5000\"", v)
+	}
+}
+
+// TestTradingService_CatchUp_NoContributionWhenDisabled 驗證 monthly_contribution<=0 時 catch-up 不注資、
+// 不寫入 total_contributed (退化回舊行為)。
+func TestTradingService_CatchUp_NoContributionWhenDisabled(t *testing.T) {
+	cfg := tradingTestCfg("AAA") // MonthlyContribution 預設 0
+	svc, _, state, _, _, _ := newTradingFixture(cfg)
+	series := map[string]*trading.StockSeries{
+		"AAA": flatSeries(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC), 90, 100),
+	}
+
+	startCash := svc.engine.Cash()
+	if err := svc.CatchUp(context.Background(), series); err != nil {
+		t.Fatalf("CatchUp: %v", err)
+	}
+	if got := svc.engine.Cash(); got != startCash {
+		t.Fatalf("cash should be unchanged when contributions disabled, got %.2f want %.2f", got, startCash)
+	}
+	if _, ok := state.values["total_contributed"]; ok {
+		t.Fatalf("total_contributed must not be persisted when contributions disabled")
+	}
+}
+
+// TestTradingService_RunOneDayAtOpen_InjectsContributionOnMonthBoundary 驗證跨月當日開盤決策前會注資並累計持久化。
+func TestTradingService_RunOneDayAtOpen_InjectsContributionOnMonthBoundary(t *testing.T) {
+	cfg := tradingTestCfg("AAA")
+	cfg.MonthlyContribution = 2500
+	svc, _, state, _, _, stock := newTradingFixture(cfg)
+	stock.names["AAA"] = "測試股"
+	// 水位線停在 1 月底;今日為 2 月初 → 跨月應注資。
+	state.values["last_processed_date"] = "2024-01-31"
+
+	start := time.Date(2023, 12, 1, 0, 0, 0, 0, time.UTC)
+	svc.series = &fakeSeriesLoader{data: map[string][]entity.StockHistory{
+		"AAA": risingHistory(start, 70, 100), // 多頭,涵蓋到 2 月初
+	}}
+	svc.realtime.(*fakeRealtime).opens = map[string]float64{"AAA": 200}
+	today := time.Date(2024, 2, 1, 0, 0, 0, 0, time.UTC)
+
+	exec := &tradingExecutor{svc: svc, ctx: context.Background(), notify: false}
+	if err := svc.runOneDayAtOpen(context.Background(), exec, today, true); err != nil {
+		t.Fatalf("runOneDayAtOpen: %v", err)
+	}
+
+	// 跨月應注資 2500 並持久化 total_contributed (注資在決策前注入,故當日即可動用)。
+	if state.values["total_contributed"] != "2500" {
+		t.Fatalf("total_contributed = %q, want \"2500\"", state.values["total_contributed"])
+	}
+	// 水位線前進至今日。
+	if state.values["last_processed_date"] != today.Format("2006-01-02") {
+		t.Fatalf("watermark not advanced to today, got %q", state.values["last_processed_date"])
+	}
+}
+
 // TestInOpenDecisionWindow 驗證開盤決策時段 [09:10, 09:30) 的邊界判斷。
 func TestInOpenDecisionWindow(t *testing.T) {
 	tz, _ := time.LoadLocation("Asia/Taipei")
