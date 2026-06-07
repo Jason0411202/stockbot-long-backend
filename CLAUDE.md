@@ -24,7 +24,7 @@ go run ./cmd/evaluate    # 用 DB 資料跑 walk-forward 評估
 go run ./cmd/research_run# 用 DB 資料跑單一研究回測
 go run ./cmd/db_probe    # 檢查 DB schema / table / 筆數
 
-docker compose up -d --build   # 本機/正式機一鍵部署
+docker compose up -d     # 正式機部署（拉 GHCR image；升級用 docker compose pull）
 ```
 
 提交前的最低門檻：`gofmt -l .` 為空、`go vet ./...` 與 `go test ./...` 全綠。

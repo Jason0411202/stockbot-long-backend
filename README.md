@@ -2,22 +2,46 @@
 
 台股 ETF 長線與波段交易後端。系統會回補 TWSE 歷史價量、執行牛熊 regime 感知的加減碼策略，並提供 REST API 與 Prometheus metrics 給前端與監控使用。
 
-目前追蹤標的預設為 `00631L` 與 `00830`，部署組合為 Go app、MariaDB 與 Caddy，可用同一份 `docker-compose.yml` 在本機或正式機啟動。
+目前追蹤標的預設為 `00631L` 與 `00830`。正式機以 Docker Compose 拉取 GHCR 上的 app image 部署（Go app + MariaDB + Caddy）；本機開發則直接 `go run`，不需 Compose（見 [docs/development.md](docs/development.md)）。
 
-## 快速啟動
+## 快速啟動（在一台全空的 Linux 正式機部署）
+
+app image 由 GitHub Actions 自動 build 並推送到 GHCR，`config.yaml` 已烤進 image。
+因此正式機**不需要原始碼**，只要 `docker-compose.yml` 與 `.env` 兩個檔案即可部署。
 
 ```bash
-cp .env.example .env
-docker compose up -d --build
+# 1) 安裝 Docker（含 compose plugin，需 v2.23+）
+curl -fsSL https://get.docker.com | sh
+
+# 2) 取得部署所需的兩個檔案
+mkdir -p stockbot && cd stockbot
+curl -fsSLO https://raw.githubusercontent.com/Jason0411202/stockbot-long-backend/main/docker-compose.yml
+curl -fsSL  https://raw.githubusercontent.com/Jason0411202/stockbot-long-backend/main/.env.example -o .env
+
+# 3) 編輯 .env：改掉 DB 密碼，填入網域與 Discord（沒有就留空）
+#    SITE_ADDRESS=your-domain.com → Caddy 自動申請 HTTPS；本機/無網域測試填 :80
+vi .env
+
+# 4) 拉 image 並啟動
+docker compose pull
+docker compose up -d
 ```
 
-第一次啟動會依 `config.yaml` 回補 TWSE 歷史資料，可能需要數分鐘。完成後可用下列指令檢查：
+第一次啟動會依烤進 image 的 `config.yaml` 回補約 5 年 TWSE 歷史資料，需要數分鐘；
+回補完成前 Caddy 可能短暫回 502。可用 `docker compose logs -f app` 觀察進度，完成後檢查：
 
 ```bash
 curl http://localhost:8080/health
 curl http://localhost:8080/ready
 curl http://localhost:8080/metrics
 ```
+
+> **網域 + HTTPS**：先把 DNS A record 指到本機並對外開放 80/443，於 `.env` 設
+> `SITE_ADDRESS=your-domain.com` 與 `ACME_EMAIL`，Caddy 會自動向 Let's Encrypt 申請憑證。
+>
+> **GHCR image 為私有時**：先 `docker login ghcr.io`（用具 `read:packages` 的 PAT）再 `docker compose pull`。
+>
+> 完整部署、維運命令與 HTTPS 細節見 [docs/deployment.md](docs/deployment.md)。
 
 ## 文件導覽
 

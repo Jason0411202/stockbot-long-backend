@@ -10,22 +10,30 @@
 
 ## 本機環境
 
+本機開發直接 `go run`，不需要 Docker Compose（Compose 僅用於正式機部署，見 [deployment.md](deployment.md)）。
+`server` 唯一的外部依賴是一個可連線的 MariaDB。
+
 ```bash
-cp .env.example .env
 go mod download
+
+# 起一個 MariaDB（預建 StockLongData，否則 app 連線會失敗）
+docker run -d --name stockbot-db \
+  -e MARIADB_ROOT_PASSWORD=rootpassword \
+  -e MARIADB_DATABASE=StockLongData \
+  -p 3306:3306 mariadb:11.4
+
+# 從 repo 根目錄啟動（本機用 root 省去 CREATE DATABASE 授權；schema 由 app 自建）
+export DB_DSN="root:rootpassword@tcp(127.0.0.1:3306)/"
+go run ./cmd/server
 ```
 
-若要完整跑 HTTP server 與 DB，使用 Docker Compose：
+需要 Discord 通知時，另外設定 `DISCORD_BOT_TOKEN` 與 `DISCORD_BOT_CHANNELID`（可放進 `.env`，見 `.env.example`）。
+
+若只做離線回測，連 MariaDB 都不需要：
 
 ```bash
-docker compose up -d --build
-```
-
-若只做離線回測，可先抓 CSV，不一定需要 MariaDB：
-
-```bash
-go run ./cmd/fetch_data
-go run ./cmd/eval_csv
+go run ./cmd/fetch_data   # 抓 TWSE 歷史到 data/*.csv
+go run ./cmd/eval_csv     # 全期 + walk-forward + IS/OOS 評估
 ```
 
 ## 常用命令
