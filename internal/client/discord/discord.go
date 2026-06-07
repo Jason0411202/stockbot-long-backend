@@ -109,6 +109,67 @@ func (c *Client) SendEmbed(title, message string, color int) error {
 	return nil
 }
 
+// TradeField 為交易通知 embed 的單一欄位 (對應 discordgo.MessageEmbedField)。
+// 由 service 層組裝、本套件渲染,使 discord client 維持「只負責傳輸」不含業務語意。
+type TradeField struct {
+	Name   string // 欄位標題 (如「股票」「成交價」「交易理由」)
+	Value  string // 欄位內容
+	Inline bool   // 是否與相鄰欄位並排顯示
+}
+
+// TradeNotification 為一筆買賣成交通知的完整內容 (中性 DTO)。
+type TradeNotification struct {
+	Title  string       // embed 標題 (含 emoji,如「🟥 買入成交」)
+	Color  int          // 左側色條 (買=紅、賣=綠)
+	Fields []TradeField // 分欄資訊 (股票 / 股數 / 單價 / 金額 / 剩餘現金 / 交易理由…)
+	Footer string       // 頁尾 (如「成交日 2026-06-08｜開盤價即時決策」)
+}
+
+// SendTradeEmbed 將一筆結構化交易通知渲染為多欄位 discordgo embed 並送至設定的頻道。
+// 相較 SendEmbed 的單行描述,本方法以 Fields 分欄 + 頁尾呈現,排版更清楚 (買賣通知專用)。
+func (c *Client) SendTradeEmbed(n TradeNotification) error {
+	// session 未初始化或缺 channel id 時提前回傳錯誤 (與 SendEmbed 一致的防呆)。
+	if c == nil || c.session == nil {
+		err := fmt.Errorf("SendTradeEmbed() 失敗, Discord session 尚未初始化")
+		if c != nil && c.log != nil {
+			c.log.Error(err)
+		}
+		return err
+	}
+	if c.channelID == "" {
+		err := fmt.Errorf("SendTradeEmbed() 失敗, 缺少 Discord channel id, 請確認環境變數設定無誤")
+		if c.log != nil {
+			c.log.Error(err)
+		}
+		return err
+	}
+
+	// 將中性 TradeField 轉為 discordgo 欄位結構。
+	fields := make([]*discordgo.MessageEmbedField, 0, len(n.Fields))
+	for _, f := range n.Fields {
+		fields = append(fields, &discordgo.MessageEmbedField{Name: f.Name, Value: f.Value, Inline: f.Inline})
+	}
+
+	// 組裝多欄位 embed (含頁尾) 並送出。
+	embed := &discordgo.MessageEmbed{
+		Title:  n.Title,
+		Color:  n.Color,
+		Fields: fields,
+	}
+	if n.Footer != "" {
+		embed.Footer = &discordgo.MessageEmbedFooter{Text: n.Footer}
+	}
+
+	if _, err := c.session.ChannelMessageSendEmbed(c.channelID, embed); err != nil {
+		wrapped := fmt.Errorf("SendTradeEmbed() 發送訊息失敗: %w", err)
+		if c.log != nil {
+			c.log.Error(wrapped)
+		}
+		return wrapped
+	}
+	return nil
+}
+
 // Close closes the underlying Discord session. It is a no-op when the client or
 // its session is nil.
 func (c *Client) Close() error {

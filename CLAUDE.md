@@ -59,6 +59,11 @@ cmd/*            程式進入點（server 與各 CLI 工具）
 5. Discord boot notice（失敗僅 Error，非致命）→ 6. `go server.Run`（背景 Echo）→
 7. `tradingSvc.DailyCheck`（阻塞的上線交易 loop）。
 
+上線 loop 於台灣時間**開盤時段 09:10–09:30** 抓 TWSE MIS 即時開盤價、以開盤價即時決策
+（`Engine.ProcessOpenDecision`），水位線去重、09:29 起逾時 fallback；啟動時 catch-up 用 DB 歷史
+`open_price` 同基準回放。即時報價來源為 `internal/client/twse.RealtimeClient`（MIS getStockInfo.jsp，
+經 `RealtimeFetcher` port 注入）。
+
 ## 不可破壞的不變量（CRITICAL）
 
 改動前務必確認下列規則不被破壞，否則行為會錯且測試會紅：
@@ -71,6 +76,12 @@ cmd/*            程式進入點（server 與各 CLI 工具）
 - **golden fingerprint 測試。** `internal/service/backtest/characterization_test.go` 的
   `TestCharacterization_LiveStrategyFingerprint` 釘住 live 策略的回測指紋。**此測試失敗 = 你改到了
   策略行為。** 若非刻意調整策略，請回退；若刻意調整，需以 IS/OOS 驗證並更新指紋（且說明理由）。
+- **決策成交價基準。** `decision_price_basis: open`（config.yaml）→ 當日**開盤價**成交、指標只看到
+  **前一交易日收盤**（無未來資訊）；線上經 TWSE MIS 取即時開盤、回測/CSV 用歷史 `open_price`，兩邊同基準。
+  帳本成交價由引擎決策價寫入（`PortfolioService.BuyShares/SellShares` 收 `price` 參數），**不可**改回
+  `GetPriceAsOf` 查 DB（開盤決策當下 DB 尚無當日 K 棒，會誤拿 T-1 收盤）。現行參數為**開盤基準專調**
+  （`regime_ma_window 85`、`trail_stop_bear 0.08`，00631L override 維持 60）；改回收盤基準或改決策基準
+  都需重新以 `cmd/eval_csv` 跑 walk-forward / IS-OOS 調參並重釘指紋。
 - **API wire keys 不可變。** `internal/dto` 的 JSON tag 是前端既有契約（含唯一的 camelCase
   `todayClosePrice`），不得更名。
 - **realized-P&L 端點的日期格式。** DSN 不得加 `parseTime`；`RealizedGainsLosses` 的 `DATE` 欄位

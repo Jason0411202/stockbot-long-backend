@@ -7,6 +7,7 @@ package service
 import (
 	"context"
 
+	"github.com/Jason0411202/stockbot-long-backend/internal/client/discord"
 	"github.com/Jason0411202/stockbot-long-backend/internal/entity"
 )
 
@@ -41,6 +42,13 @@ type MarketFetcher interface {
 	FetchMonth(date, stockID string) ([]entity.Bar, string, error)
 }
 
+// RealtimeFetcher 是盤中即時開盤價 port，線上模式於開盤後抓當日各股開盤價以即時決策，
+// 由 *twse.RealtimeClient 實作。回傳「當日且開盤價>0」的開盤價;尚未就緒的股票不在 map 中
+// （呼叫端據此判斷是否重試）。
+type RealtimeFetcher interface {
+	FetchOpens(ctx context.Context, stockIDs []string) (map[string]float64, error)
+}
+
 // LedgerSeedStore 是線上啟動時用於還原引擎狀態的帳本唯讀 port，
 // 提供 TradingService 從 DB 讀取持倉與各股最後買入日所需的查詢方法。
 // 由 *repository.LedgerRepository 實作（與 LedgerStore 為同一具體型別）。
@@ -62,8 +70,11 @@ type StateStore interface {
 	Set(ctx context.Context, key, value string) error
 }
 
-// Notifier 是對外通知 port，TradingService 使用它發送每筆成交的 Discord embed，
+// Notifier 是對外通知 port，TradingService 使用它發送開機通知與每筆成交的 Discord embed，
 // 由 *client/discord.Client 實作。
+//   - SendEmbed:單行描述 embed (開機 / 系統通知用)。
+//   - SendTradeEmbed:多欄位 embed (買賣成交專用,附交易理由與美化排版)。
 type Notifier interface {
 	SendEmbed(title, message string, color int) error
+	SendTradeEmbed(n discord.TradeNotification) error
 }

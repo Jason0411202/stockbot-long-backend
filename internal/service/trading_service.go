@@ -10,6 +10,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 
+	"github.com/Jason0411202/stockbot-long-backend/internal/client/discord"
 	"github.com/Jason0411202/stockbot-long-backend/internal/config"
 	"github.com/Jason0411202/stockbot-long-backend/internal/service/backtest"
 	"github.com/Jason0411202/stockbot-long-backend/internal/service/trading"
@@ -28,6 +29,7 @@ type TradingService struct {
 	ledger    LedgerSeedStore
 	state     StateStore
 	notify    Notifier
+	realtime  RealtimeFetcher
 	cfg       *config.Config
 	log       *logrus.Logger
 }
@@ -54,6 +56,7 @@ func NewTradingService(
 	ledger LedgerSeedStore,
 	state StateStore,
 	notify Notifier,
+	realtime RealtimeFetcher,
 	cfg *config.Config,
 	log *logrus.Logger,
 ) *TradingService {
@@ -65,6 +68,7 @@ func NewTradingService(
 		ledger:    ledger,
 		state:     state,
 		notify:    notify,
+		realtime:  realtime,
 		cfg:       cfg,
 		log:       log,
 	}
@@ -80,8 +84,8 @@ func (s *TradingService) DailyCheck(ctx context.Context) error {
 //  1. 抓取最新 TWSE 資料（失敗為非致命，沿用既有 DB）。
 //  2. 從 DB 載入價格序列。
 //  3. 從 DB（BotState + UnrealizedGainsLosses）還原引擎狀態。
-//  4. Catch-up：靜默回放 [水位線+1, 最新日] 區間，寫入 DB 但不發 Discord 通知。
-//  5. 進入每日 loop：每天 14:00 台灣時間抓取資料、執行當日決策並發送通知。
+//  4. Catch-up：靜默回放 [水位線+1, 最新日] 區間（開盤價基準,用 DB 歷史開盤價），寫入 DB 但不發 Discord 通知。
+//  5. 進入每日 loop：每天台灣時間開盤時段 (09:10~09:30) 抓即時開盤價、即時決策並發送通知。
 func (s *TradingService) RunOnline(ctx context.Context) error {
 	if s.cfg.ScalingStrategy != "Baseline" {
 		return fmt.Errorf("目前僅支援 Scaling_Strategy=Baseline, got %s", s.cfg.ScalingStrategy)
@@ -248,7 +252,22 @@ func (s *TradingService) CatchUp(ctx context.Context, series map[string]*trading
 	return nil
 }
 
-// runDailyLoop 是線上模式的主迴圈：每天台灣時間 14:00 執行一次當日決策，並發送 Discord 通知。
+// 開盤決策時段 (台灣時間):09:00 集合競價後開盤價即穩定,故於 [09:10, 09:30) 內擇機決策一次。
+// 採時段而非單一分鐘,可容忍 loop 偶爾錯過某一分鐘;當日處理後即以水位線去重不再重跑。
+const (
+	openDecisionHour     = 9
+	openWindowStartMin   = 10 // 09:10 起 (集合競價後開盤價已穩定)
+	openWindowEndMin     = 30 // 至 09:30 前
+	openWindowForceFromM = 29 // 09:29 起即使未全部就緒也以現有開盤價決策 (逾時 fallback)
+)
+
+// inOpenDecisionWindow 回傳 now (台灣時間) 是否落在當日開盤決策時段 [09:10, 09:30)。
+func inOpenDecisionWindow(now time.Time) bool {
+	return now.Hour() == openDecisionHour && now.Minute() >= openWindowStartMin && now.Minute() < openWindowEndMin
+}
+
+// runDailyLoop 是線上模式的主迴圈：每天台灣時間開盤時段抓即時開盤價、即時決策並發送 Discord 通知。
+// 每分鐘檢查一次;當日尚未處理且落在開盤時段才嘗試決策,成功後以水位線去重避免重跑。
 func (s *TradingService) runDailyLoop(ctx context.Context) error {
 	taiwanTimeZone, err := time.LoadLocation("Asia/Taipei")
 	if err != nil {
@@ -256,22 +275,45 @@ func (s *TradingService) runDailyLoop(ctx context.Context) error {
 	}
 	noisy := &tradingExecutor{svc: s, ctx: ctx, notify: true}
 
-	// 每分鐘檢查一次是否到達 14:00，到達時執行當日決策。
+	// 每分鐘檢查一次是否到達開盤決策時段;到達且今日未處理時執行當日開盤決策。
 	for {
 		now := time.Now().In(taiwanTimeZone)
-		if now.Hour() == 14 && now.Minute() == 0 {
-			s.log.Info("現在時間:", now)
-			if err := s.runOneDay(ctx, noisy, now); err != nil {
-				s.log.Error("runOneDay 錯誤:", err)
+		if inOpenDecisionWindow(now) {
+			today := taiwanDate(now)
+			if s.processedToday(ctx, today) {
+				time.Sleep(60 * time.Second)
+				continue
+			}
+			s.log.Info("開盤決策時段,現在時間:", now)
+			// 09:29 起即使未全部就緒也以現有開盤價決策 (逾時 fallback,避免無限等待)。
+			force := now.Minute() >= openWindowForceFromM
+			if err := s.runOneDayAtOpen(ctx, noisy, today, force); err != nil {
+				s.log.Error("runOneDayAtOpen 錯誤:", err)
 			}
 		}
 		time.Sleep(60 * time.Second)
 	}
 }
 
-// runOneDay 抓取當日 TWSE 資料、重新載入序列、執行引擎單日決策，並持久化水位線與現金。
-func (s *TradingService) runOneDay(ctx context.Context, exec trading.Executor, now time.Time) error {
-	// 更新今日 TWSE 資料。
+// taiwanDate 由台灣時間的 now 取出該日的 UTC 午夜日期 (與水位線 / 引擎日期格式一致)。
+func taiwanDate(now time.Time) time.Time {
+	return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+}
+
+// processedToday 回傳水位線是否已等於 today (今日已決策過,避免時段內重複下單)。
+func (s *TradingService) processedToday(ctx context.Context, today time.Time) bool {
+	wm, err := s.loadWatermark(ctx)
+	if err != nil {
+		return false
+	}
+	return !wm.IsZero() && wm.Format(dateLayout) == today.Format(dateLayout)
+}
+
+// runOneDayAtOpen 執行「當日開盤即時決策」:回補 DB (確保收盤到 T-1)、載入序列、抓即時開盤價,
+// 全部就緒 (或 force 逾時) 才以 ProcessOpenDecision 決策,並持久化水位線與現金。
+// 未就緒時不前進水位線 → 下一分鐘於時段內重試;逾時仍無任何開盤價則記錄錯誤、今日略過。
+func (s *TradingService) runOneDayAtOpen(ctx context.Context, exec trading.Executor, today time.Time, force bool) error {
+	// 回補 TWSE 月資料,確保 DB 收盤序列補到前一交易日 (T-1)。
 	if err := s.market.UpdateDatabase(ctx); err != nil {
 		return fmt.Errorf("UpdateDatabase: %w", err)
 	}
@@ -279,10 +321,35 @@ func (s *TradingService) runOneDay(ctx context.Context, exec trading.Executor, n
 	if err != nil {
 		return fmt.Errorf("loadSeries: %w", err)
 	}
-	// 執行引擎單日決策並持久化狀態。
-	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
-	if err := s.engine.ProcessDay(today, series, exec); err != nil {
-		return fmt.Errorf("ProcessDay: %w", err)
+
+	// 抓取當日各追蹤股的即時開盤價 (僅回傳已就緒者)。
+	opens, err := s.realtime.FetchOpens(ctx, s.cfg.TrackStocks)
+	if err != nil {
+		return fmt.Errorf("FetchOpens: %w", err)
+	}
+
+	// 計算「有歷史序列、應有開盤價」的股票數;全部就緒或逾時 force 才決策。
+	needed := 0
+	for _, id := range s.cfg.TrackStocks {
+		if _, ok := series[id]; ok {
+			needed++
+		}
+	}
+	if len(opens) < needed && !force {
+		s.log.Infof("開盤價尚未全部就緒 (%d/%d),時段內稍後重試", len(opens), needed)
+		return nil // 不前進水位線,下一分鐘再試
+	}
+	if len(opens) == 0 {
+		s.log.Error("逾時仍無任何即時開盤價,今日略過開盤決策 (留待下次重啟由 catch-up 以 DB 開盤價回放)")
+		return nil
+	}
+	if len(opens) < needed {
+		s.log.Warnf("逾時僅 %d/%d 檔開盤價就緒,以現有開盤價決策 (缺漏股今日不交易)", len(opens), needed)
+	}
+
+	// 以即時開盤價執行當日決策並持久化狀態。
+	if err := s.engine.ProcessOpenDecision(today, opens, series, exec); err != nil {
+		return fmt.Errorf("ProcessOpenDecision: %w", err)
 	}
 	if err := s.saveWatermark(ctx, today); err != nil {
 		s.log.Warn("saveWatermark 失敗 (不致命):", err)
@@ -348,44 +415,86 @@ func (e *tradingExecutor) context() context.Context {
 	return context.Background()
 }
 
-// OnBuyApplied 將引擎套用後的買進成交寫入 portfolio，並視設定發送通知。
-func (e *tradingExecutor) OnBuyApplied(stockID string, day time.Time, shares int, price float64, cashAfter float64) error {
+// buyColor / sellColor 為買賣 embed 的左側色條 (紅買 / 綠賣)。
+const (
+	buyColor  = 0xD50000
+	sellColor = 0x00C853
+)
+
+// OnBuyApplied 將引擎套用後的買進成交寫入 portfolio，記錄交易理由 log，並視設定發送通知。
+func (e *tradingExecutor) OnBuyApplied(stockID string, day time.Time, shares int, price float64, cashAfter float64, reason trading.TradeReason) error {
 	dateStr := day.Format(dateLayout)
-	// 將買進成交寫入未實現帳本。
-	if err := e.svc.portfolio.BuyShares(e.context(), stockID, dateStr, shares); err != nil {
+	// 將買進成交以引擎成交價 (開盤價) 寫入未實現帳本。
+	if err := e.svc.portfolio.BuyShares(e.context(), stockID, dateStr, shares, price); err != nil {
 		return fmt.Errorf("BuyShares: %w", err)
 	}
-	cost := float64(shares) * price
-	e.svc.log.Infof("%s 買入: shares=%d, price=%.2f, cost=%.2f, cash=%.2f",
-		stockID, shares, price, cost, cashAfter)
-	// 通知模式下發送 Discord 買入嵌入訊息。
+	// 以結構化欄位記錄本筆買入及其決策理由 (每筆交易理由皆進 log)。
+	e.logTrade("買入成交", stockID, dateStr, reason)
+	// 通知模式下發送美化的 Discord 買入嵌入訊息 (附交易理由);失敗僅記錄,不影響成交。
 	if e.notify {
-		if err := e.svc.notify.SendEmbed("🔴 買入通知",
-			fmt.Sprintf("stockID: %s, 股數: %d, 單價: %.2f, 金額: %.2f\n剩餘現金: %.2f",
-				stockID, shares, price, cost, cashAfter), 0xD50000); err != nil {
+		if err := e.svc.notify.SendTradeEmbed(buildTradeNotification("🟥 買入成交", buyColor, stockID, dateStr, reason)); err != nil {
 			e.svc.log.Error("發送 Discord 訊息失敗:", err)
 		}
 	}
 	return nil
 }
 
-// OnSellApplied 將引擎套用後的賣出成交寫入 portfolio，並視設定發送通知。
-func (e *tradingExecutor) OnSellApplied(stockID string, day time.Time, shares int, price float64, cashAfter float64) error {
+// OnSellApplied 將引擎套用後的賣出成交寫入 portfolio，記錄交易理由 log，並視設定發送通知。
+func (e *tradingExecutor) OnSellApplied(stockID string, day time.Time, shares int, price float64, cashAfter float64, reason trading.TradeReason) error {
 	dateStr := day.Format(dateLayout)
-	// 將賣出成交從未實現帳本轉為已實現損益。
-	if err := e.svc.portfolio.SellShares(e.context(), stockID, dateStr, shares); err != nil {
+	// 將賣出成交以引擎成交價 (開盤價) 從未實現帳本轉為已實現損益。
+	if err := e.svc.portfolio.SellShares(e.context(), stockID, dateStr, shares, price); err != nil {
 		return fmt.Errorf("SellShares: %w", err)
 	}
-	revenue := float64(shares) * price
-	e.svc.log.Infof("%s 賣出: shares=%d, price=%.2f, revenue=%.2f, cash=%.2f",
-		stockID, shares, price, revenue, cashAfter)
-	// 通知模式下發送 Discord 賣出嵌入訊息。
+	// 以結構化欄位記錄本筆賣出及其決策理由 (每筆交易理由皆進 log)。
+	e.logTrade("賣出成交", stockID, dateStr, reason)
+	// 通知模式下發送美化的 Discord 賣出嵌入訊息 (附交易理由);失敗僅記錄,不影響成交。
 	if e.notify {
-		if err := e.svc.notify.SendEmbed("🟢 賣出通知",
-			fmt.Sprintf("stockID: %s, 股數: %d, 單價: %.2f, 金額: %.2f\n剩餘現金: %.2f",
-				stockID, shares, price, revenue, cashAfter), 0x00C853); err != nil {
+		if err := e.svc.notify.SendTradeEmbed(buildTradeNotification("🟩 賣出成交", sellColor, stockID, dateStr, reason)); err != nil {
 			e.svc.log.Error("發送 Discord 訊息失敗:", err)
 		}
 	}
 	return nil
+}
+
+// logTrade 以結構化欄位 (logrus.Fields) 記錄一筆成交的方向、標的、價量與決策理由摘要。
+// 確保 log 完整保留「每筆交易為什麼成交」,供日後稽核與重現。
+func (e *tradingExecutor) logTrade(action, stockID, dateStr string, reason trading.TradeReason) {
+	e.svc.log.WithFields(logrus.Fields{
+		"stock_id":   stockID,
+		"date":       dateStr,
+		"trigger":    reason.Trigger,
+		"regime":     reason.Regime,
+		"shares":     reason.Shares,
+		"price":      fmt.Sprintf("%.2f", reason.Price),
+		"amount":     fmt.Sprintf("%.2f", reason.Amount),
+		"cash_after": fmt.Sprintf("%.2f", reason.CashAfter),
+		"reason":     reason.Summary(),
+	}).Info(action)
+}
+
+// buildTradeNotification 由交易理由組裝一則多欄位、附理由的 Discord 成交通知。
+func buildTradeNotification(title string, color int, stockID, dateStr string, reason trading.TradeReason) discord.TradeNotification {
+	return discord.TradeNotification{
+		Title: fmt.Sprintf("%s — %s", title, stockID),
+		Color: color,
+		Fields: []discord.TradeField{
+			{Name: "股票", Value: stockID, Inline: true},
+			{Name: "市況", Value: regimeText(reason.Regime), Inline: true},
+			{Name: "成交價(開盤)", Value: fmt.Sprintf("%.2f", reason.Price), Inline: true},
+			{Name: "股數", Value: fmt.Sprintf("%d 股", reason.Shares), Inline: true},
+			{Name: "金額", Value: fmt.Sprintf("$%.0f", reason.Amount), Inline: true},
+			{Name: "剩餘現金", Value: fmt.Sprintf("$%.0f", reason.CashAfter), Inline: true},
+			{Name: "📋 交易理由", Value: reason.Summary(), Inline: false},
+		},
+		Footer: fmt.Sprintf("成交日 %s｜開盤價即時決策", dateStr),
+	}
+}
+
+// regimeText 將 regime 代碼轉為帶 emoji 的繁中標籤。
+func regimeText(regime string) string {
+	if regime == "bull" {
+		return "🐂 牛市"
+	}
+	return "🐻 熊市"
 }

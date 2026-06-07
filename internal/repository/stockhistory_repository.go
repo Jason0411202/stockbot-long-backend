@@ -87,21 +87,21 @@ func (r *StockHistoryRepository) GetClosePricesDescAsOf(ctx context.Context, sto
 	return prices, nil
 }
 
-// GetCloseHistoryAsc 回傳 stockID 依日期升冪排列的 (date, close_price) 序列。
-// 每筆 entity 僅填入 Date 與 ClosePrice 兩個欄位。
+// GetCloseHistoryAsc 回傳 stockID 依日期升冪排列的 (date, open_price, close_price) 序列。
+// 每筆 entity 填入 Date、OpenPrice 與 ClosePrice 三個欄位 (開盤價供 decision_price_basis=open 決策使用)。
 func (r *StockHistoryRepository) GetCloseHistoryAsc(ctx context.Context, stockID string) ([]entity.StockHistory, error) {
-	const query = "SELECT date, close_price FROM StockHistory WHERE stock_id = ? ORDER BY date ASC;"
+	const query = "SELECT date, open_price, close_price FROM StockHistory WHERE stock_id = ? ORDER BY date ASC;"
 	rows, err := r.db.QueryContext(ctx, query, stockID)
 	if err != nil {
 		return nil, fmt.Errorf("query close history for %s: %w", stockID, err)
 	}
 	defer rows.Close()
 
-	// 逐列掃描並收集歷史資料。
+	// 逐列掃描並收集歷史資料 (開盤 + 收盤)。
 	history := make([]entity.StockHistory, 0)
 	for rows.Next() {
 		var h entity.StockHistory
-		if err := rows.Scan(&h.Date, &h.ClosePrice); err != nil {
+		if err := rows.Scan(&h.Date, &h.OpenPrice, &h.ClosePrice); err != nil {
 			return nil, fmt.Errorf("scan close history row: %w", err)
 		}
 		history = append(history, h)

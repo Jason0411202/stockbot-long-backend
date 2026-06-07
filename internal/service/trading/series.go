@@ -27,7 +27,9 @@ type StockSeries struct {
 	ClosePrices []float64
 	MA20        []float64 // MA20[i] = 截至 Dates[i] 的 20 日均價;不足 20 日以 NaN 表示
 
-	// 選用欄位:DB 路徑僅填 PrefixClose;CSV 快取路徑另填 OHLCV。供旋鈕計算指標用。
+	// 選用欄位:DB 路徑填 OpenPrices + PrefixClose;CSV 快取路徑另填 OHLCV。供旋鈕計算指標用。
+	// OpenPrices 為「開盤價基準決策」(decision_price_basis=open) 的成交價來源;close 基準時不讀取。
+	OpenPrices  []float64 // 開盤價 (可為 nil;close 基準路徑不需要)
 	Highs       []float64 // 最高價 (可為 nil)
 	Lows        []float64 // 最低價 (可為 nil)
 	Volumes     []float64 // 成交量 (可為 nil)
@@ -38,8 +40,8 @@ type StockSeries struct {
 
 // NewStockSeries 由升冪日期 + OHLCV 建立完整 StockSeries,並以「與 loadStockSeries / loadOneCSV
 // 完全相同的方式」預先計算 MA20 = RollingMA(closes,20) 與 PrefixClose = BuildPrefixClose(closes)。
-// highs/lows/vols 可為 nil (DB 路徑)。呼叫端須先完成 split-adjust 與排序。
-func NewStockSeries(dates []time.Time, closes, highs, lows, vols []float64) *StockSeries {
+// opens/highs/lows/vols 可為 nil (close 基準的精簡路徑)。呼叫端須先完成 split-adjust 與排序。
+func NewStockSeries(dates []time.Time, opens, closes, highs, lows, vols []float64) *StockSeries {
 	// 建立日期字串 → 索引的反查表,供 ProcessDay 以 O(1) 定位當日位置。
 	idx := make(map[string]int, len(dates))
 	for i, d := range dates {
@@ -51,11 +53,24 @@ func NewStockSeries(dates []time.Time, closes, highs, lows, vols []float64) *Sto
 		DateIndex:   idx,
 		ClosePrices: closes,
 		MA20:        RollingMA(closes, 20),
+		OpenPrices:  opens,
 		Highs:       highs,
 		Lows:        lows,
 		Volumes:     vols,
 		PrefixClose: BuildPrefixClose(closes),
 	}
+}
+
+// OpenAt 回傳 index i 的開盤價;OpenPrices 未填或越界時回退到該日收盤價 (close 基準語意下不受影響)。
+// 供「開盤價基準決策」取成交價;退回 close 確保缺開盤資料時不致回傳 0 而誤判為無效價。
+func (s *StockSeries) OpenAt(i int) float64 {
+	if i < 0 || i >= len(s.ClosePrices) {
+		return 0
+	}
+	if i < len(s.OpenPrices) && s.OpenPrices[i] > 0 {
+		return s.OpenPrices[i]
+	}
+	return s.ClosePrices[i]
 }
 
 // CloseAsOf 回傳「在 day 當天或之前最近一個交易日」的收盤價 (as-of 查價)。

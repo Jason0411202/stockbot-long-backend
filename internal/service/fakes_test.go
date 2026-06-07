@@ -234,5 +234,21 @@ func (f *fakeFetcher) FetchMonth(date, stockID string) ([]entity.Bar, string, er
 	return f.bars, f.stockName, nil
 }
 
+// fakeRealtime 模擬 RealtimeFetcher，回傳預設的即時開盤價 map 供線上開盤決策測試使用。
+type fakeRealtime struct {
+	opens map[string]float64
+	err   error
+	calls int
+}
+
+// FetchOpens 回傳預設的開盤價 map，err 非 nil 時回傳錯誤,並記錄呼叫次數。
+func (f *fakeRealtime) FetchOpens(_ context.Context, _ []string) (map[string]float64, error) {
+	f.calls++
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.opens, nil
+}
+
 // errFake is a sentinel error for the fakes.
 var errFake = fmt.Errorf("fake error")

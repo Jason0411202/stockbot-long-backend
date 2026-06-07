@@ -26,7 +26,8 @@ func TestSellShares_FullLotSale(t *testing.T) {
 	stock.prices["00631L"] = 12 // todayClose
 
 	svc := newPortfolioService(ledger, stock)
-	if err := svc.SellShares(context.Background(), "00631L", "2024-03-01", 100); err != nil {
+	// 成交價 12 由呼叫端傳入 (引擎開盤成交價);不再以 DB 查價。
+	if err := svc.SellShares(context.Background(), "00631L", "2024-03-01", 100, 12); err != nil {
 		t.Fatalf("SellShares: %v", err)
 	}
 
@@ -65,7 +66,7 @@ func TestSellShares_PartialLotSale(t *testing.T) {
 	stock.prices["00631L"] = 15
 
 	svc := newPortfolioService(ledger, stock)
-	if err := svc.SellShares(context.Background(), "00631L", "2024-03-01", 40); err != nil {
+	if err := svc.SellShares(context.Background(), "00631L", "2024-03-01", 40, 15); err != nil {
 		t.Fatalf("SellShares: %v", err)
 	}
 
@@ -109,7 +110,7 @@ func TestSellShares_MultiLotDrainToTarget(t *testing.T) {
 
 	svc := newPortfolioService(ledger, stock)
 	// target 80 = full first lot (50) + partial 30 of second lot
-	if err := svc.SellShares(context.Background(), "X", "2024-03-01", 80); err != nil {
+	if err := svc.SellShares(context.Background(), "X", "2024-03-01", 80, 25); err != nil {
 		t.Fatalf("SellShares: %v", err)
 	}
 
@@ -150,7 +151,7 @@ func TestSellShares_LegacyZeroShareLotDeleted(t *testing.T) {
 	stock.prices["X"] = 20
 
 	svc := newPortfolioService(ledger, stock)
-	if err := svc.SellShares(context.Background(), "X", "2024-03-01", 100); err != nil {
+	if err := svc.SellShares(context.Background(), "X", "2024-03-01", 100, 20); err != nil {
 		t.Fatalf("SellShares: %v", err)
 	}
 
@@ -179,7 +180,7 @@ func TestSellShares_NoInventoryNoOp(t *testing.T) {
 	stock.prices["X"] = 20
 
 	svc := newPortfolioService(ledger, stock)
-	if err := svc.SellShares(context.Background(), "X", "2024-03-01", 100); err != nil {
+	if err := svc.SellShares(context.Background(), "X", "2024-03-01", 100, 20); err != nil {
 		t.Fatalf("SellShares no-op should not error: %v", err)
 	}
 	if len(ledger.deletes) != 0 || len(ledger.updates) != 0 || len(ledger.realized) != 0 {
@@ -194,7 +195,7 @@ func TestSellShares_NonPositiveTargetNoOp(t *testing.T) {
 	}
 	stock := newFakeStock()
 	svc := newPortfolioService(ledger, stock)
-	if err := svc.SellShares(context.Background(), "X", "2024-03-01", 0); err != nil {
+	if err := svc.SellShares(context.Background(), "X", "2024-03-01", 0, 20); err != nil {
 		t.Fatalf("zero target should be a no-op without error: %v", err)
 	}
 	if len(ledger.realized) != 0 {
@@ -209,7 +210,7 @@ func TestBuyShares_NonPositiveSharesError(t *testing.T) {
 	ledger := &fakeLedger{}
 	stock := newFakeStock()
 	svc := newPortfolioService(ledger, stock)
-	if err := svc.BuyShares(context.Background(), "X", "2024-03-01", 0); err == nil {
+	if err := svc.BuyShares(context.Background(), "X", "2024-03-01", 0, 10); err == nil {
 		t.Fatal("expected error for shares<=0")
 	}
 	if len(ledger.lots) != 0 {
@@ -225,7 +226,8 @@ func TestBuyShares_HappyPathInsertsCorrectCost(t *testing.T) {
 	stock.names["00631L"] = "元大台灣50正2"
 
 	svc := newPortfolioService(ledger, stock)
-	if err := svc.BuyShares(context.Background(), "00631L", "2024-03-01", 100); err != nil {
+	// 成交價 12.5 由呼叫端傳入 (引擎開盤成交價)。
+	if err := svc.BuyShares(context.Background(), "00631L", "2024-03-01", 100, 12.5); err != nil {
 		t.Fatalf("BuyShares: %v", err)
 	}
 	if len(ledger.lots) != 1 {

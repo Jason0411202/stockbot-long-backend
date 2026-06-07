@@ -12,18 +12,24 @@ import (
 type BuyIntent struct {
 	Should bool
 	Shares int
-	Price  float64 // = 當日收盤價
+	Price  float64 // = 當日成交價 (close 基準=收盤;open 基準=開盤)
 
 	// BrokeCooldown:本次買入是靠「打破冷卻額度」放行的 → 執行層套用後需扣 1 次額度。
 	BrokeCooldown bool
+
+	// TradeReason 為本筆買入的決策理由 (決策端欄位已填;成交股數 / 金額 / 餘額由引擎 apply 時補上)。
+	TradeReason TradeReason
 }
 
 // SellIntent 是 DecideSell 的純函式輸出。
 type SellIntent struct {
 	Should       bool
 	TargetShares int
-	Price        float64 // = 當日收盤價
+	Price        float64 // = 當日成交價 (close 基準=收盤;open 基準=開盤)
 	Reason       string  // "trail" / "profit";供統計觸發次數
+
+	// TradeReason 為本筆賣出的決策理由 (決策端欄位已填;成交股數 / 金額 / 餘額由引擎 apply 時補上)。
+	TradeReason TradeReason
 }
 
 // Snapshot 為某一 (stockID, today) 的凍結市場 + 持倉檢視。
@@ -78,7 +84,17 @@ func DecideBuy(cfg *config.Config, snap Snapshot) BuyIntent {
 	if shares <= 0 {
 		return BuyIntent{}
 	}
-	return BuyIntent{Should: true, Shares: shares, Price: snap.TodayPrice, BrokeCooldown: broke}
+	// 組裝決策端理由 (regime / 進場均線 / 帶寬 / 深度 / 是否打破冷卻);成交股數與金額由引擎 apply 時補上。
+	regime := "bear"
+	if snap.IsBull {
+		regime = "bull"
+	}
+	reason := TradeReason{
+		Action: "buy", Trigger: "dip", Regime: regime,
+		Price: snap.TodayPrice, EntryMA: snap.MA20, BandPct: band,
+		DepthPct: buyDepthPct(cfg, snap), BrokeCooldown: broke,
+	}
+	return BuyIntent{Should: true, Shares: shares, Price: snap.TodayPrice, BrokeCooldown: broke, TradeReason: reason}
 }
 
 // passesCooldown 判斷是否通過冷卻,並回報是否動用了一次「打破冷卻」額度。
@@ -166,7 +182,11 @@ func DecideSell(cfg *config.Config, snap Snapshot) SellIntent {
 	if !snap.IsBull && cfg.TrailStopBear > 0 && snap.PeakSinceHold > 0 && snap.HeldShares > 0 {
 		peakGain := snap.PeakSinceHold/snap.LowestHeldPrice - 1
 		if peakGain >= cfg.TrailMinGain && snap.TodayPrice <= snap.PeakSinceHold*(1-cfg.TrailStopBear) {
-			return SellIntent{Should: true, TargetShares: snap.HeldShares, Price: snap.TodayPrice, Reason: "trail"}
+			reason := TradeReason{
+				Action: "sell", Trigger: "trail", Regime: "bear",
+				Price: snap.TodayPrice, GainPct: peakGain, TrailStopPct: cfg.TrailStopBear,
+			}
+			return SellIntent{Should: true, TargetShares: snap.HeldShares, Price: snap.TodayPrice, Reason: "trail", TradeReason: reason}
 		}
 	}
 
@@ -186,7 +206,11 @@ func DecideSell(cfg *config.Config, snap Snapshot) SellIntent {
 	if shares < 1 {
 		shares = 1
 	}
-	return SellIntent{Should: true, TargetShares: shares, Price: snap.TodayPrice, Reason: "profit"}
+	reason := TradeReason{
+		Action: "sell", Trigger: "profit", Regime: "bull",
+		Price: snap.TodayPrice, GainPct: gain,
+	}
+	return SellIntent{Should: true, TargetShares: shares, Price: snap.TodayPrice, Reason: "profit", TradeReason: reason}
 }
 
 // buyDepthPct 回傳「加碼深度」判斷值 (越負代表跌越深 → 命中越深的 tier → 買越多)。

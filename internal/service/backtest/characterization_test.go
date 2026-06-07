@@ -24,11 +24,12 @@ func liveStrategyCfg() *config.Config {
 	return &config.Config{
 		TrackStocks:             []string{"00631L", "00830"},
 		ScalingStrategy:         "Baseline",
+		DecisionPriceBasis:      "open", // 開盤價基準:當日開盤成交,指標只看到前一交易日收盤 (鏡像 config.yaml)
 		InitialCash:             100000,
 		MonthlyContribution:     2500,
 		MAWindow:                10,
 		RegimeMethod:            "ma_pos",
-		RegimeMAWindow:          95,
+		RegimeMAWindow:          85,
 		CooldownDays:            14,
 		BullCooldownDays:        14,
 		BullBuyBand:             0.05,
@@ -45,7 +46,7 @@ func liveStrategyCfg() *config.Config {
 		},
 		BaselineSellThreshold: 1.0,
 		SellFracOfPosition:    0.33,
-		TrailStopBear:         0.10,
+		TrailStopBear:         0.08,
 		TrailMinGain:          0.10,
 		StockOverrides: map[string]config.StockParams{
 			"00631L": {RegimeMAWindow: iptr(60)},
@@ -79,7 +80,16 @@ func charSeries(seed int64, n int, startPx, drift, vol float64) *trading.StockSe
 	for i := 0; i < n; i++ {
 		dates[i] = start.AddDate(0, 0, i)
 	}
-	return trading.NewStockSeries(dates, prices, nil, nil, nil)
+	// 開盤價 = 前一日收盤 (gap-less open;首日取自身)。確定性、無額外亂數,供開盤價基準指紋使用。
+	opens := make([]float64, n)
+	for i := 0; i < n; i++ {
+		if i == 0 {
+			opens[i] = prices[i]
+		} else {
+			opens[i] = prices[i-1]
+		}
+	}
+	return trading.NewStockSeries(dates, opens, prices, nil, nil, nil)
 }
 
 // TestCharacterization_LiveStrategyFingerprint 鎖定 live 策略的端到端指紋。
@@ -149,12 +159,21 @@ func TestCharacterization_LiveStrategyFingerprint(t *testing.T) {
 }
 
 // golden 指紋常數 — 首次以 -1 跑出實際值後填入 (見上方 CAPTURE 分支)。
+//
+// 2026-06 刻意策略變更:決策基準由「收盤價」改為「開盤價」(decision_price_basis=open),
+// 讓回測忠實反映「線上開盤即時決策」。此為經使用者核可的刻意調整,故重新釘定指紋。
+// 同時為開盤價基準重新調參 (用 cmd/eval_csv 的 walk-forward / IS-OOS 掃描):
+//
+//	regime_ma_window 95→85、trail_stop_bear 0.10→0.08 (補償開盤決策只看到前一日收盤的較慢翻空);
+//	00631L 覆寫維持 60、bull_buy_frac 維持 0.20。實測 (真實 CSV) full Calmar 1.34、wf 四關全過、OOS 保留 93%。
+//
+// 此處合成資料的指紋隨之更新 (trail 收緊使 trail 12/profit 5、finalTotal 提高);後續任何非刻意改動都應維持此數字。
 const (
-	goldenBuys       = 96
-	goldenSells      = 84
+	goldenBuys       = 97
+	goldenSells      = 79
 	goldenSkipped    = 0
-	goldenTrail      = 11
-	goldenProfit     = 7
-	goldenFinalCash  = 50747
-	goldenFinalTotal = 319543
+	goldenTrail      = 12
+	goldenProfit     = 5
+	goldenFinalCash  = 51170
+	goldenFinalTotal = 325485
 )

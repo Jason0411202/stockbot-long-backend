@@ -47,8 +47,8 @@ func loadOneCSV(path string) (*trading.StockSeries, error) {
 	defer f.Close()
 
 	var (
-		dates                     []time.Time
-		closes, highs, lows, vols []float64
+		dates                            []time.Time
+		opens, closes, highs, lows, vols []float64
 	)
 	// 逐行掃描 CSV,略過標頭、空行與解析失敗的列;收盤價 <= 0 視為無效資料略過。
 	sc := bufio.NewScanner(f)
@@ -76,6 +76,7 @@ func loadOneCSV(path string) (*trading.StockSeries, error) {
 			continue
 		}
 		dates = append(dates, t)
+		opens = append(opens, parseFloat(cols[1]))
 		highs = append(highs, parseFloat(cols[2]))
 		lows = append(lows, parseFloat(cols[3]))
 		closes = append(closes, c)
@@ -97,16 +98,17 @@ func loadOneCSV(path string) (*trading.StockSeries, error) {
 		}
 		sort.SliceStable(idxs, func(a, b int) bool { return dates[idxs[a]].Before(dates[idxs[b]]) })
 		dates = reorderTime(dates, idxs)
+		opens = reorderF(opens, idxs)
 		closes = reorderF(closes, idxs)
 		highs = reorderF(highs, idxs)
 		lows = reorderF(lows, idxs)
 		vols = reorderF(vols, idxs)
 	}
 
-	// 還原股票分割 (split):使價格序列連續,再計算 MA / 前綴和 / peak。
-	trading.ApplySplitAdjust(closes, highs, lows)
+	// 還原股票分割 (split):使價格序列連續 (開盤同步縮放),再計算 MA / 前綴和 / peak。
+	trading.ApplySplitAdjust(closes, opens, highs, lows)
 
-	return trading.NewStockSeries(dates, closes, highs, lows, vols), nil
+	return trading.NewStockSeries(dates, opens, closes, highs, lows, vols), nil
 }
 
 // parseFloat 將 CSV 欄位轉成 float64，解析失敗時回傳 0。

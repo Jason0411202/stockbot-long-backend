@@ -69,6 +69,7 @@ func main() {
 
 	// --- clients (外部系統) ---
 	twseClient := twse.NewClient()
+	realtimeClient := twse.NewRealtimeClient() // 盤中即時開盤價 (MIS),供開盤即時決策
 	discordClient, err := discord.NewClient(os.Getenv("DISCORD_BOT_TOKEN"), os.Getenv("DISCORD_BOT_CHANNELID"), log)
 	if err != nil {
 		log.Error("初始化 Discord 錯誤:", err) // 非致命:沿用舊 InitDiscord 的「Error 後繼續」行為
@@ -80,7 +81,7 @@ func main() {
 	statSvc := service.NewStatisticService(stockRepo, cfg, log)
 	histSvc := service.NewStockHistoryService(stockRepo, log)
 	engine := trading.NewEngine(cfg)
-	tradingSvc := service.NewTradingService(engine, portfolioSvc, marketSvc, stockRepo, ledgerRepo, stateRepo, discordClient, cfg, log)
+	tradingSvc := service.NewTradingService(engine, portfolioSvc, marketSvc, stockRepo, ledgerRepo, stateRepo, discordClient, realtimeClient, cfg, log)
 
 	// --- 初始 DB 回補 (取代舊 sqls.InitDatabase 的回補邏輯) ---
 	if cfg.InitDBBackMonths > cfg.MaxBackMonths {

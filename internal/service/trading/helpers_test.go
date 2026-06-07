@@ -82,7 +82,10 @@ func seriesFrom(start time.Time, prices []float64) *StockSeries {
 	}
 	cp := make([]float64, n)
 	copy(cp, prices)
-	return NewStockSeries(dates, cp, nil, nil, nil)
+	// 開盤=收盤 (open==close):close 基準不讀開盤,open 基準下成交價等於該日收盤,便於共用。
+	op := make([]float64, n)
+	copy(op, prices)
+	return NewStockSeries(dates, op, cp, nil, nil, nil)
 }
 
 // constPrices 回傳 n 個值皆為 v 的價格切片 (平盤序列;策略零成交,方便驗起點 / 區間)。

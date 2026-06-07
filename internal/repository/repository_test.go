@@ -138,15 +138,15 @@ func TestGetCloseHistoryAsc(t *testing.T) {
 	// Arrange
 	db, mock := newMock(t)
 	repo := NewStockHistoryRepository(db)
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT date, close_price FROM StockHistory WHERE stock_id = ? ORDER BY date ASC;")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT date, open_price, close_price FROM StockHistory WHERE stock_id = ? ORDER BY date ASC;")).
 		WithArgs("00631L").
-		WillReturnRows(sqlmock.NewRows([]string{"date", "close_price"}).AddRow("2024-01-02", 50.0).AddRow("2024-01-03", 51.0))
+		WillReturnRows(sqlmock.NewRows([]string{"date", "open_price", "close_price"}).AddRow("2024-01-02", 49.0, 50.0).AddRow("2024-01-03", 50.5, 51.0))
 
 	// Act
 	hist, err := repo.GetCloseHistoryAsc(ctx, "00631L")
 
 	// Assert
-	if err != nil || len(hist) != 2 || hist[1].Date != "2024-01-03" || hist[1].ClosePrice != 51.0 {
+	if err != nil || len(hist) != 2 || hist[1].Date != "2024-01-03" || hist[1].OpenPrice != 50.5 || hist[1].ClosePrice != 51.0 {
 		t.Fatalf("GetCloseHistoryAsc = (%+v, %v)", hist, err)
 	}
 	assertMet(t, mock)
@@ -157,11 +157,11 @@ func TestLoadSeries(t *testing.T) {
 	// Arrange — one query per stockID.
 	db, mock := newMock(t)
 	repo := NewStockHistoryRepository(db)
-	q := regexp.QuoteMeta("SELECT date, close_price FROM StockHistory WHERE stock_id = ? ORDER BY date ASC;")
+	q := regexp.QuoteMeta("SELECT date, open_price, close_price FROM StockHistory WHERE stock_id = ? ORDER BY date ASC;")
 	mock.ExpectQuery(q).WithArgs("AAA").
-		WillReturnRows(sqlmock.NewRows([]string{"date", "close_price"}).AddRow("2024-01-02", 10.0))
+		WillReturnRows(sqlmock.NewRows([]string{"date", "open_price", "close_price"}).AddRow("2024-01-02", 9.5, 10.0))
 	mock.ExpectQuery(q).WithArgs("BBB").
-		WillReturnRows(sqlmock.NewRows([]string{"date", "close_price"}).AddRow("2024-01-02", 20.0).AddRow("2024-01-03", 21.0))
+		WillReturnRows(sqlmock.NewRows([]string{"date", "open_price", "close_price"}).AddRow("2024-01-02", 19.0, 20.0).AddRow("2024-01-03", 20.5, 21.0))
 
 	// Act
 	series, err := repo.LoadSeries(ctx, []string{"AAA", "BBB"})

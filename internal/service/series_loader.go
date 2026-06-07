@@ -14,8 +14,8 @@ import (
 // 抽成可共用的匯出函式，讓 cmd/research_run、cmd/evaluate 與 cmd/server（透過 TradingService）
 // 共用同一條路徑，確保行為完全一致。
 //
-// 對每檔 stockID：讀取（date, close_price）→ 以 "2006-01-02" 解析日期（失敗者跳過）→
-// ApplySplitAdjust 還原分割 → NewStockSeries（highs/lows/vols 皆 nil，與 DB 路徑相同）。
+// 對每檔 stockID：讀取（date, open_price, close_price）→ 以 "2006-01-02" 解析日期（失敗者跳過）→
+// ApplySplitAdjust 還原分割（開盤同步縮放）→ NewStockSeries（highs/lows/vols 皆 nil，與 DB 路徑相同）。
 // 沒有任何有效資料的股票會被略過（不出現在回傳 map 中）。
 func LoadTradingSeries(ctx context.Context, loader SeriesLoader, stockIDs []string) (map[string]*trading.StockSeries, error) {
 	raw, err := loader.LoadSeries(ctx, stockIDs)
@@ -27,9 +27,10 @@ func LoadTradingSeries(ctx context.Context, loader SeriesLoader, stockIDs []stri
 	for _, stockID := range stockIDs {
 		history := raw[stockID]
 
-		// 解析日期字串並收集有效的時間點與收盤價序列。
+		// 解析日期字串並收集有效的時間點與開盤 / 收盤價序列。
 		dates := make([]time.Time, 0, len(history))
-		prices := make([]float64, 0, len(history))
+		opens := make([]float64, 0, len(history))
+		closes := make([]float64, 0, len(history))
 		for _, h := range history {
 			t, perr := time.Parse(dateLayout, h.Date)
 			if perr != nil {
@@ -39,16 +40,17 @@ func LoadTradingSeries(ctx context.Context, loader SeriesLoader, stockIDs []stri
 				}
 			}
 			dates = append(dates, t)
-			prices = append(prices, h.ClosePrice)
+			opens = append(opens, h.OpenPrice)
+			closes = append(closes, h.ClosePrice)
 		}
 
 		if len(dates) == 0 {
 			continue
 		}
 
-		// 還原股票分割 (split):使價格序列連續,再由 NewStockSeries 計算 MA / 前綴和。
-		trading.ApplySplitAdjust(prices)
-		series[stockID] = trading.NewStockSeries(dates, prices, nil, nil, nil)
+		// 還原股票分割 (split):使收盤與開盤序列同步連續,再由 NewStockSeries 計算 MA / 前綴和。
+		trading.ApplySplitAdjust(closes, opens)
+		series[stockID] = trading.NewStockSeries(dates, opens, closes, nil, nil, nil)
 	}
 
 	return series, nil

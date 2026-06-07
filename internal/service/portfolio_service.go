@@ -113,18 +113,15 @@ func (s *PortfolioService) RealizedGainsLosses(ctx context.Context) ([]dto.Reali
 	return out, nil
 }
 
-// BuyShares 依今日收盤價寫入一筆新的未實現 lot；investmentCost = price * shares。
-// shares 必須大於 0，否則回傳錯誤。
-func (s *PortfolioService) BuyShares(ctx context.Context, stockID, today string, shares int) error {
+// BuyShares 依引擎決策的「成交價 price」寫入一筆新的未實現 lot；investmentCost = price * shares。
+// price 由呼叫端 (執行器) 傳入引擎實際成交價 (開盤價基準=當日開盤),確保帳本與引擎現金 / 決策一致;
+// 不再以 DB 查價,因線上開盤決策當下 DB 尚無當日 K 棒 (查 close 會誤拿前一交易日)。shares 必須大於 0。
+func (s *PortfolioService) BuyShares(ctx context.Context, stockID, today string, shares int, price float64) error {
 	if shares <= 0 {
 		return fmt.Errorf("shares 必須大於 0, got %d", shares)
 	}
 
-	// 查詢當日收盤價與股票名稱，作為 lot 的寫入依據。
-	price, err := s.stock.GetPriceAsOf(ctx, stockID, today, "close_price")
-	if err != nil {
-		return fmt.Errorf("get close price for %s: %w", stockID, err)
-	}
+	// 查詢股票名稱作為 lot 顯示用;成交價由呼叫端傳入,不再以 DB 查價。
 	name, err := s.stock.GetStockName(ctx, stockID)
 	if err != nil {
 		return fmt.Errorf("get stock name for %s: %w", stockID, err)
@@ -147,17 +144,12 @@ func (s *PortfolioService) BuyShares(ctx context.Context, stockID, today string,
 }
 
 // SellShares 從成本最低的未實現 lot 開始賣出 targetShares 股（FIFO 最低成本順序），
-// 逐筆從帳本刪除或更新 lot，並寫入對應的已實現損益紀錄。
+// 逐筆從帳本刪除或更新 lot，並以引擎決策的「成交價 todayClose」寫入對應的已實現損益紀錄。
+// todayClose 由呼叫端 (執行器) 傳入引擎實際成交價 (開盤價基準=當日開盤),確保已實現損益與引擎一致;
 // targetShares <= 0 為 no-op；找不到持倉時視為 no-op 並記錄警告。
-func (s *PortfolioService) SellShares(ctx context.Context, stockID, today string, targetShares int) error {
+func (s *PortfolioService) SellShares(ctx context.Context, stockID, today string, targetShares int, todayClose float64) error {
 	if targetShares <= 0 {
 		return nil
-	}
-
-	// 查詢今日收盤價，作為賣出計算的依據。
-	todayClose, err := s.stock.GetPriceAsOf(ctx, stockID, today, "close_price")
-	if err != nil {
-		return fmt.Errorf("get close price for %s: %w", stockID, err)
 	}
 
 	remaining := targetShares

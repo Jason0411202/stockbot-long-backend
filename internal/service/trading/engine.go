@@ -30,18 +30,22 @@ type DayRecorder struct {
 //
 // 引擎內部的「決策 + 現金 / 持倉變動」對兩種模式完全相同;Executor 只負責持久化與通知。
 type Executor interface {
-	OnBuyApplied(stockID string, day time.Time, shares int, price float64, cashAfter float64) error
-	OnSellApplied(stockID string, day time.Time, shares int, price float64, cashAfter float64) error
+	OnBuyApplied(stockID string, day time.Time, shares int, price float64, cashAfter float64, reason TradeReason) error
+	OnSellApplied(stockID string, day time.Time, shares int, price float64, cashAfter float64, reason TradeReason) error
 }
 
 // NoopExecutor 是回測用,什麼副作用都不做。
 type NoopExecutor struct{}
 
 // OnBuyApplied 接收買進成交但不執行任何副作用。
-func (NoopExecutor) OnBuyApplied(string, time.Time, int, float64, float64) error { return nil }
+func (NoopExecutor) OnBuyApplied(string, time.Time, int, float64, float64, TradeReason) error {
+	return nil
+}
 
 // OnSellApplied 接收賣出成交但不執行任何副作用。
-func (NoopExecutor) OnSellApplied(string, time.Time, int, float64, float64) error { return nil }
+func (NoopExecutor) OnSellApplied(string, time.Time, int, float64, float64, TradeReason) error {
+	return nil
+}
 
 // Engine 是上線與回測共用的 in-memory 模擬器。
 // 它持有「策略觀點下的真實狀態」:現金、未實現持倉、每檔股票最後買入日。
@@ -160,18 +164,23 @@ func (e *Engine) HoldingValueAsOf(series map[string]*StockSeries, day time.Time)
 }
 
 // ProcessDay 處理單一日期下所有追蹤股票的買賣決策。
-// 流程 (對每檔股票):
-//  1. 用記憶體狀態組 Snapshot
-//  2. DecideBuy → 套用 (帶現金夾取)
-//  3. 重新組 Snapshot → DecideSell → 套用
-//  4. 通知 Executor (上線:寫 DB / 發 Discord;回測:no-op)
+// 依 cfg.DecisionPriceBasis 決定成交價基準:
+//   - "close"(預設):用當日收盤價成交,指標看到當日收盤 (asOfIdx = idx)。
+//   - "open"        :用當日開盤價成交,指標只看到前一交易日收盤 (asOfIdx = idx-1;idx==0 跳過)。
+//
+// 單檔流程委派給 processStock (買→更新峰值→賣→通知 Executor),使 close / open / 線上三條路徑共用同一決策核心。
 func (e *Engine) ProcessDay(today time.Time, series map[string]*StockSeries, exec Executor) error {
 	todayStr := today.Format("2006-01-02")
-	// BuyFracBasis=="equity" 時,先算當日總權益 (用今日收盤即決策價,無未來資訊);cash 基準則零成本略過。
+	openBasis := e.cfg.DecisionPriceBasis == "open"
+	// BuyFracBasis=="equity" 時先算當日總權益;open 基準以前一交易日估值 (不偷看當日收盤);cash 基準零成本略過。
 	needEquity := e.cfg.BuyFracBasis == "equity"
 	eqToday := 0.0
 	if needEquity {
-		eqToday = e.cash + e.HoldingValueAsOf(series, today)
+		eqAsOfDay := today
+		if openBasis {
+			eqAsOfDay = today.AddDate(0, 0, -1)
+		}
+		eqToday = e.cash + e.HoldingValueAsOf(series, eqAsOfDay)
 	}
 	for _, stockID := range e.cfg.TrackStocks {
 		s, ok := series[stockID]
@@ -182,56 +191,19 @@ func (e *Engine) ProcessDay(today time.Time, series map[string]*StockSeries, exe
 		if !ok {
 			continue
 		}
-		todayPrice := s.ClosePrices[idx]
-		if todayPrice <= 0 {
-			continue
-		}
 
-		// 套用該股 per-stock override (無 override 時 == 共用 cfg,零成本)。其後該股決策一律用 eff。
-		eff := e.cfg.ForStock(stockID)
-
-		// 進場均線:預設用預先算好的 20MA;若 eff.MAWindow 指定其他長度則用 PrefixClose O(1) 重算。
-		entryMA := s.MA20[idx]
-		if eff.MAWindow > 0 && eff.MAWindow != 20 {
-			entryMA = s.maAt(idx, eff.MAWindow)
-		}
-
-		// 牛熊判定 (一天一次);套到買賣兩個 snapshot。
-		isBullToday := false
-		if eff.RegimeMethod != "" {
-			isBullToday = regimeBull(eff, s, idx)
-		}
-
-		// === 買入 ===
-		snap := e.buildSnapshot(stockID, today, todayPrice, entryMA)
-		e.applyGateInputs(&snap, s, idx)
-		snap.IsBull = isBullToday
-		snap.Cash = e.cash
-		if needEquity {
-			snap.Equity = eqToday
-		}
-		if eff.CooldownBreakBudget > 0 {
-			snap.CooldownBreaksLeft = eff.CooldownBreakBudget - e.breaksInWindow(eff, stockID, today)
-		}
-		if buy := DecideBuy(eff, snap); buy.Should {
-			if err := e.applyBuy(stockID, today, buy, exec); err != nil {
-				return err
+		// 依決策基準決定成交價與「指標可見的最後一筆收盤索引」。
+		decisionPrice := s.ClosePrices[idx]
+		asOfIdx := idx
+		if openBasis {
+			if idx == 0 {
+				continue // 無前一交易日收盤,無法在不偷看當日收盤下決策
 			}
+			decisionPrice = s.OpenAt(idx)
+			asOfIdx = idx - 1
 		}
-
-		// 更新持倉峰值 (移動停利用):有持倉才追蹤,含今日價與剛買進的部位。
-		if len(e.positions[stockID]) > 0 && todayPrice > e.peakSinceHold[stockID] {
-			e.peakSinceHold[stockID] = todayPrice
-		}
-
-		// === 賣出 (重新組 Snapshot:剛買的 lot 也可能影響 lowest / highest) ===
-		snap = e.buildSnapshot(stockID, today, todayPrice, entryMA)
-		e.applyGateInputs(&snap, s, idx)
-		snap.IsBull = isBullToday
-		if sell := DecideSell(eff, snap); sell.Should {
-			if err := e.applySell(stockID, today, sell, exec); err != nil {
-				return err
-			}
+		if err := e.processStock(stockID, today, decisionPrice, asOfIdx, s, exec, eqToday, needEquity); err != nil {
+			return err
 		}
 	}
 	if e.cash < 0 {
@@ -242,6 +214,100 @@ func (e *Engine) ProcessDay(today time.Time, series map[string]*StockSeries, exe
 	if e.rec != nil && e.rec.OnEquity != nil {
 		holdings := e.HoldingValueAsOf(series, today)
 		e.rec.OnEquity(today, e.cash+holdings, e.cash, holdings)
+	}
+	return nil
+}
+
+// ProcessOpenDecision 為線上「開盤價基準」決策進入點。
+// series 僅含到前一交易日 (T-1) 的收盤;opens 提供當日 (T) 各股即時開盤價。
+// 每檔以 asOfIdx = 最新收盤索引 (= T-1) 計算指標、用即時開盤價成交,與回測 open 基準共用 processStock,
+// 確保線上 / 回測決策邏輯完全一致。未提供開盤價或 <=0 的股票直接略過 (呼叫端負責重試 / fallback)。
+func (e *Engine) ProcessOpenDecision(today time.Time, opens map[string]float64, series map[string]*StockSeries, exec Executor) error {
+	needEquity := e.cfg.BuyFracBasis == "equity"
+	eqToday := 0.0
+	if needEquity {
+		// series 最末筆即 T-1,as-of(today) 估值自然落在前一交易日收盤,無未來資訊。
+		eqToday = e.cash + e.HoldingValueAsOf(series, today)
+	}
+	for _, stockID := range e.cfg.TrackStocks {
+		s, ok := series[stockID]
+		if !ok || len(s.Dates) == 0 {
+			continue
+		}
+		openPx, ok := opens[stockID]
+		if !ok || openPx <= 0 {
+			continue
+		}
+		asOfIdx := len(s.Dates) - 1
+		if err := e.processStock(stockID, today, openPx, asOfIdx, s, exec, eqToday, needEquity); err != nil {
+			return err
+		}
+	}
+	if e.cash < 0 {
+		return fmt.Errorf("internal invariant violated: cash went negative (%.6f) on %s", e.cash, today.Format("2006-01-02"))
+	}
+	if e.rec != nil && e.rec.OnEquity != nil {
+		holdings := e.HoldingValueAsOf(series, today)
+		e.rec.OnEquity(today, e.cash+holdings, e.cash, holdings)
+	}
+	return nil
+}
+
+// processStock 對單檔股票執行「買入 → 更新持倉峰值 → 賣出」並通知 Executor。
+// decisionPrice 為當日成交價 (close 基準=當日收盤;open 基準=當日開盤);
+// asOfIdx 為「指標可見到的最後一筆收盤索引」(close 基準=當日;open 基準=前一交易日),
+// 進場均線 / 牛熊判定 / 近期高點皆截至 asOfIdx,確保 open 基準在開盤決策時不使用尚未發生的當日收盤。
+func (e *Engine) processStock(stockID string, today time.Time, decisionPrice float64, asOfIdx int, s *StockSeries, exec Executor, eqToday float64, needEquity bool) error {
+	// 成交價無效或無可見收盤 (尚未上市 / 第一天) 直接略過。
+	if decisionPrice <= 0 || asOfIdx < 0 || asOfIdx >= len(s.ClosePrices) {
+		return nil
+	}
+
+	// 套用該股 per-stock override (無 override 時 == 共用 cfg,零成本)。其後該股決策一律用 eff。
+	eff := e.cfg.ForStock(stockID)
+
+	// 進場均線:預設用預先算好的 20MA;若 eff.MAWindow 指定其他長度則用 PrefixClose O(1) 重算。皆截至 asOfIdx。
+	entryMA := s.MA20[asOfIdx]
+	if eff.MAWindow > 0 && eff.MAWindow != 20 {
+		entryMA = s.maAt(asOfIdx, eff.MAWindow)
+	}
+
+	// 牛熊判定 (一天一次);套到買賣兩個 snapshot。
+	isBullToday := false
+	if eff.RegimeMethod != "" {
+		isBullToday = regimeBull(eff, s, asOfIdx)
+	}
+
+	// === 買入 ===
+	snap := e.buildSnapshot(stockID, today, decisionPrice, entryMA)
+	e.applyGateInputs(&snap, s, asOfIdx)
+	snap.IsBull = isBullToday
+	snap.Cash = e.cash
+	if needEquity {
+		snap.Equity = eqToday
+	}
+	if eff.CooldownBreakBudget > 0 {
+		snap.CooldownBreaksLeft = eff.CooldownBreakBudget - e.breaksInWindow(eff, stockID, today)
+	}
+	if buy := DecideBuy(eff, snap); buy.Should {
+		if err := e.applyBuy(stockID, today, buy, exec); err != nil {
+			return err
+		}
+	}
+
+	// 更新持倉峰值 (移動停利用):有持倉才追蹤,含今日成交價與剛買進的部位。
+	if len(e.positions[stockID]) > 0 && decisionPrice > e.peakSinceHold[stockID] {
+		e.peakSinceHold[stockID] = decisionPrice
+	}
+
+	// === 賣出 (重新組 Snapshot:剛買的 lot 也可能影響 lowest / highest) ===
+	snap = e.buildSnapshot(stockID, today, decisionPrice, entryMA)
+	e.applyGateInputs(&snap, s, asOfIdx)
+	snap.IsBull = isBullToday
+	if sell := DecideSell(eff, snap); sell.Should {
+		if err := e.applySell(stockID, today, sell, exec); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -311,14 +377,15 @@ func (e *Engine) breaksInWindow(cfg *config.Config, stockID string, today time.T
 }
 
 // applyGateInputs 依 cfg 旗標「按需」把選用指標填入 snapshot (近期高點 RecentPeak,供 peak 深度基準 /
-// 熊市現金比例的深度權重使用)。IsBull / Cash / Equity / CooldownBreaksLeft 由 ProcessDay 設定。
-func (e *Engine) applyGateInputs(snap *Snapshot, s *StockSeries, idx int) {
+// 熊市現金比例的深度權重使用)。近期高點截至 asOfIdx (open 基準時為前一交易日,不含當日收盤)。
+// IsBull / Cash / Equity / CooldownBreaksLeft 由 processStock 設定。
+func (e *Engine) applyGateInputs(snap *Snapshot, s *StockSeries, asOfIdx int) {
 	if e.cfg.BuyDepthBasis == "peak" {
 		lb := e.cfg.BuyPeakLookback
 		if lb <= 0 {
 			lb = 252
 		}
-		snap.RecentPeak = s.peakAt(idx, lb)
+		snap.RecentPeak = s.peakAt(asOfIdx, lb)
 	}
 }
 
@@ -388,7 +455,13 @@ func (e *Engine) applyBuy(stockID string, today time.Time, intent BuyIntent, exe
 	if e.rec != nil && e.rec.OnCashflow != nil {
 		e.rec.OnCashflow(today, -cost)
 	}
-	return exec.OnBuyApplied(stockID, today, shares, intent.Price, e.cash)
+	// 補上成交端理由欄位 (夾取後的實際股數 / 金額 / 餘額),供執行器寫 log 與發通知。
+	reason := intent.TradeReason
+	reason.Shares = shares
+	reason.Price = intent.Price
+	reason.Amount = cost
+	reason.CashAfter = e.cash
+	return exec.OnBuyApplied(stockID, today, shares, intent.Price, e.cash, reason)
 }
 
 // applySell 將賣出意圖套用到現金與持倉，並通知 executor 寫入副作用。
@@ -440,7 +513,13 @@ func (e *Engine) applySell(stockID string, today time.Time, intent SellIntent, e
 		if e.rec != nil && e.rec.OnCashflow != nil {
 			e.rec.OnCashflow(today, float64(soldShares)*intent.Price)
 		}
-		return exec.OnSellApplied(stockID, today, soldShares, intent.Price, e.cash)
+		// 補上成交端理由欄位 (實際賣出股數 / 金額 / 餘額),供執行器寫 log 與發通知。
+		reason := intent.TradeReason
+		reason.Shares = soldShares
+		reason.Price = intent.Price
+		reason.Amount = float64(soldShares) * intent.Price
+		reason.CashAfter = e.cash
+		return exec.OnSellApplied(stockID, today, soldShares, intent.Price, e.cash, reason)
 	}
 	return nil
 }

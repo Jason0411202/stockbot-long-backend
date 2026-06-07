@@ -41,6 +41,12 @@ type Config struct {
 	// 進場均線長度。<=0 視為 20。
 	MAWindow int `yaml:"ma_window"`
 
+	// 決策成交價基準:決定「當日用什麼價格成交」與「指標可見到哪一天的收盤」。
+	//   "" / "close":當日收盤價成交,指標含當日收盤 (盤後決策的舊行為)。
+	//   "open"      :當日開盤價成交,指標只看到前一交易日 (含) 的收盤 (開盤即時決策,無未來資訊)。
+	// 線上與回測共用同一基準,使回測能忠實預測線上行為。
+	DecisionPriceBasis string `yaml:"decision_price_basis"`
+
 	// 加碼「深度基準」(決定 tier 判斷值要拿什麼當「跌多深」):
 	//   "" / "held_high":(今價-持倉最高買入價)/持倉最高買入價 (原始,較粗糙)
 	//   "ma"            :(今價-進場均線)/進場均線 (乖離率)
@@ -174,6 +180,14 @@ func Load(path string) (*Config, error) {
 
 	if c.ScalingStrategy == "" {
 		c.ScalingStrategy = "Baseline"
+	}
+
+	// 決策成交價基準:空字串退化為 "close"(舊盤後行為);只接受 close / open,其餘 fail-fast。
+	if c.DecisionPriceBasis == "" {
+		c.DecisionPriceBasis = "close"
+	}
+	if c.DecisionPriceBasis != "close" && c.DecisionPriceBasis != "open" {
+		return nil, fmt.Errorf("decision_price_basis 只接受 \"close\" 或 \"open\",得 %q", c.DecisionPriceBasis)
 	}
 	if c.CooldownDays <= 0 {
 		c.CooldownDays = 14

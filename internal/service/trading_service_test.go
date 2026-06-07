@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Jason0411202/stockbot-long-backend/internal/client/discord"
 	"github.com/Jason0411202/stockbot-long-backend/internal/config"
 	"github.com/Jason0411202/stockbot-long-backend/internal/entity"
 	"github.com/Jason0411202/stockbot-long-backend/internal/service/trading"
@@ -69,10 +70,11 @@ func (f *fakeState) Set(_ context.Context, key, value string) error {
 	return nil
 }
 
-// fakeNotifier 模擬 Notifier，記錄每次 SendEmbed 呼叫的參數供斷言使用。
+// fakeNotifier 模擬 Notifier，記錄每次 SendEmbed / SendTradeEmbed 呼叫的參數供斷言使用。
 type fakeNotifier struct {
-	sent []embedCall
-	err  error
+	sent      []embedCall
+	tradeSent []discord.TradeNotification
+	err       error
 }
 
 // embedCall 記錄一次 SendEmbed 呼叫的標題、訊息與顏色。
@@ -85,6 +87,12 @@ type embedCall struct {
 // SendEmbed 記錄通知呼叫並在 err 非 nil 時回傳錯誤。
 func (f *fakeNotifier) SendEmbed(title, message string, color int) error {
 	f.sent = append(f.sent, embedCall{title: title, message: message, color: color})
+	return f.err
+}
+
+// SendTradeEmbed 記錄成交通知呼叫並在 err 非 nil 時回傳錯誤。
+func (f *fakeNotifier) SendTradeEmbed(n discord.TradeNotification) error {
+	f.tradeSent = append(f.tradeSent, n)
 	return f.err
 }
 
@@ -163,12 +171,14 @@ func constHistory(start time.Time, n int, price float64) []entity.StockHistory {
 // flatSeries 建立價格完全平坦的 StockSeries，用於驗證追趕回放不產生任何交易。
 func flatSeries(start time.Time, n int, price float64) *trading.StockSeries {
 	dates := make([]time.Time, n)
+	opens := make([]float64, n)
 	closes := make([]float64, n)
 	for i := 0; i < n; i++ {
 		dates[i] = start.AddDate(0, 0, i)
+		opens[i] = price
 		closes[i] = price
 	}
-	return trading.NewStockSeries(dates, closes, nil, nil, nil)
+	return trading.NewStockSeries(dates, opens, closes, nil, nil, nil)
 }
 
 // newTradingFixture 組裝以假實作驅動的 TradingService，回傳服務本體與各假實作供測試斷言使用。
@@ -182,9 +192,10 @@ func newTradingFixture(cfg *config.Config) (*TradingService, *fakeSeed, *fakeSta
 	seed := &fakeSeed{lastBuy: map[string]string{}}
 	state := newFakeState()
 	notify := &fakeNotifier{}
+	realtime := &fakeRealtime{opens: map[string]float64{}}
 	series := &fakeSeriesLoader{data: map[string][]entity.StockHistory{}}
 
-	svc := NewTradingService(engine, portfolio, market, series, seed, state, notify, cfg, log)
+	svc := NewTradingService(engine, portfolio, market, series, seed, state, notify, realtime, cfg, log)
 	return svc, seed, state, notify, ledger, stock
 }
 
@@ -351,18 +362,32 @@ func TestTradingExecutor_OnBuy_RoutesToPortfolioAndNotifies(t *testing.T) {
 
 	exec := &tradingExecutor{svc: svc, ctx: context.Background(), notify: true}
 	day := time.Date(2024, 6, 6, 0, 0, 0, 0, time.UTC)
+	reason := trading.TradeReason{Action: "buy", Trigger: "dip", Regime: "bull", Price: 50.0, Shares: 10, Amount: 500, CashAfter: 1000}
 
-	if err := exec.OnBuyApplied("AAA", day, 10, 50.0, 1000); err != nil {
+	if err := exec.OnBuyApplied("AAA", day, 10, 50.0, 1000, reason); err != nil {
 		t.Fatalf("OnBuyApplied: %v", err)
 	}
 	// portfolio wrote one unrealized lot.
 	if len(ledger.lots) != 1 || ledger.lots[0].StockID != "AAA" || ledger.lots[0].Shares != 10 {
 		t.Fatalf("buy not routed to portfolio: %+v", ledger.lots)
 	}
-	// notified with the buy embed (title/color).
-	if len(notify.sent) != 1 || notify.sent[0].title != "🔴 買入通知" || notify.sent[0].color != 0xD50000 {
-		t.Fatalf("buy embed mismatch: %+v", notify.sent)
+	// notified with the beautified trade embed (buy color + reason field present).
+	if len(notify.tradeSent) != 1 || notify.tradeSent[0].Color != buyColor {
+		t.Fatalf("buy embed mismatch: %+v", notify.tradeSent)
 	}
+	if !hasReasonField(notify.tradeSent[0]) {
+		t.Fatalf("buy embed missing 交易理由 field: %+v", notify.tradeSent[0].Fields)
+	}
+}
+
+// hasReasonField 檢查交易通知是否含「交易理由」欄位且內容非空。
+func hasReasonField(n discord.TradeNotification) bool {
+	for _, f := range n.Fields {
+		if f.Name == "📋 交易理由" && f.Value != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // TestTradingExecutor_OnSell_RoutesToPortfolioAndNotifies 驗證 OnSellApplied 將已實現損益寫入帳冊並發送賣出通知嵌入訊息。
@@ -377,16 +402,20 @@ func TestTradingExecutor_OnSell_RoutesToPortfolioAndNotifies(t *testing.T) {
 
 	exec := &tradingExecutor{svc: svc, ctx: context.Background(), notify: true}
 	day := time.Date(2024, 6, 6, 0, 0, 0, 0, time.UTC)
+	reason := trading.TradeReason{Action: "sell", Trigger: "profit", Regime: "bull", Price: 80.0, Shares: 100, Amount: 8000, CashAfter: 9000, GainPct: 1.0}
 
-	if err := exec.OnSellApplied("AAA", day, 100, 80.0, 9000); err != nil {
+	if err := exec.OnSellApplied("AAA", day, 100, 80.0, 9000, reason); err != nil {
 		t.Fatalf("OnSellApplied: %v", err)
 	}
 	// portfolio recorded a realized row and removed the lot.
 	if len(ledger.realized) != 1 || ledger.realized[0].Shares != 100 {
 		t.Fatalf("sell not routed to portfolio: %+v", ledger.realized)
 	}
-	if len(notify.sent) != 1 || notify.sent[0].title != "🟢 賣出通知" || notify.sent[0].color != 0x00C853 {
-		t.Fatalf("sell embed mismatch: %+v", notify.sent)
+	if len(notify.tradeSent) != 1 || notify.tradeSent[0].Color != sellColor {
+		t.Fatalf("sell embed mismatch: %+v", notify.tradeSent)
+	}
+	if !hasReasonField(notify.tradeSent[0]) {
+		t.Fatalf("sell embed missing 交易理由 field: %+v", notify.tradeSent[0].Fields)
 	}
 }
 
@@ -399,15 +428,16 @@ func TestTradingExecutor_Silent_WritesButNoNotify(t *testing.T) {
 
 	exec := &tradingExecutor{svc: svc, ctx: context.Background(), notify: false}
 	day := time.Date(2024, 6, 6, 0, 0, 0, 0, time.UTC)
+	reason := trading.TradeReason{Action: "buy", Trigger: "dip", Regime: "bear", Price: 50.0, Shares: 10, Amount: 500, CashAfter: 1000}
 
-	if err := exec.OnBuyApplied("AAA", day, 10, 50.0, 1000); err != nil {
+	if err := exec.OnBuyApplied("AAA", day, 10, 50.0, 1000, reason); err != nil {
 		t.Fatalf("OnBuyApplied silent: %v", err)
 	}
 	if len(ledger.lots) != 1 {
 		t.Fatalf("silent buy should still write DB: %+v", ledger.lots)
 	}
-	if len(notify.sent) != 0 {
-		t.Fatalf("silent executor must not notify, got %+v", notify.sent)
+	if len(notify.tradeSent) != 0 {
+		t.Fatalf("silent executor must not notify, got %+v", notify.tradeSent)
 	}
 }
 
@@ -421,9 +451,10 @@ func TestTradingExecutor_NotifyFailure_NonFatal(t *testing.T) {
 
 	exec := &tradingExecutor{svc: svc, ctx: context.Background(), notify: true}
 	day := time.Date(2024, 6, 6, 0, 0, 0, 0, time.UTC)
+	reason := trading.TradeReason{Action: "buy", Trigger: "dip", Regime: "bull", Price: 50.0, Shares: 10, Amount: 500, CashAfter: 1000}
 
 	// A notify failure is logged only — the buy still succeeds.
-	if err := exec.OnBuyApplied("AAA", day, 10, 50.0, 1000); err != nil {
+	if err := exec.OnBuyApplied("AAA", day, 10, 50.0, 1000, reason); err != nil {
 		t.Fatalf("OnBuyApplied with failing notifier should still succeed, got %v", err)
 	}
 }
@@ -478,5 +509,101 @@ func TestTradingService_CashRoundTrip(t *testing.T) {
 	got, ok, err := svc.loadCash(ctx)
 	if err != nil || !ok || got != 12345.67 {
 		t.Fatalf("cash round-trip mismatch: %v %v %v", got, ok, err)
+	}
+}
+
+// risingHistory 建立由 start 起算共 n 筆、開盤=收盤皆線性上漲 (base..base+n-1) 的歷史資料 (多頭序列)。
+func risingHistory(start time.Time, n int, base float64) []entity.StockHistory {
+	out := make([]entity.StockHistory, n)
+	for i := 0; i < n; i++ {
+		px := base + float64(i)
+		out[i] = entity.StockHistory{
+			Date:       start.AddDate(0, 0, i).Format("2006-01-02"),
+			OpenPrice:  px,
+			ClosePrice: px,
+		}
+	}
+	return out
+}
+
+// TestTradingService_RunOneDayAtOpen_DecidesAtOpenAndPersists 驗證開盤決策流程:
+// 以 T-1 歷史 + 注入即時開盤價,於開盤價成交、寫帳本與發通知,並前進水位線 / 現金。
+func TestTradingService_RunOneDayAtOpen_DecidesAtOpenAndPersists(t *testing.T) {
+	cfg := tradingTestCfg("AAA")
+	svc, _, state, notify, ledger, stock := newTradingFixture(cfg)
+	stock.names["AAA"] = "測試股"
+
+	start := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	svc.series = &fakeSeriesLoader{data: map[string][]entity.StockHistory{
+		"AAA": risingHistory(start, 60, 100), // 收盤 100..159 (多頭)
+	}}
+	// 注入今日即時開盤價 160 (< MA10(asOf)×1.05 → 觸發逢低買入)。
+	svc.realtime.(*fakeRealtime).opens = map[string]float64{"AAA": 160}
+	today := start.AddDate(0, 0, 60)
+
+	exec := &tradingExecutor{svc: svc, ctx: context.Background(), notify: true}
+	if err := svc.runOneDayAtOpen(context.Background(), exec, today, false); err != nil {
+		t.Fatalf("runOneDayAtOpen: %v", err)
+	}
+
+	// 一筆買入寫入帳本,成交價為注入的開盤價 160 (而非 DB 收盤)。
+	if len(ledger.lots) != 1 || ledger.lots[0].TransactionPrice != 160 {
+		t.Fatalf("expected one buy lot at open price 160, got %+v", ledger.lots)
+	}
+	// 發出一則美化的買入通知 (含理由欄位)。
+	if len(notify.tradeSent) != 1 || notify.tradeSent[0].Color != buyColor || !hasReasonField(notify.tradeSent[0]) {
+		t.Fatalf("expected one buy trade embed with reason, got %+v", notify.tradeSent)
+	}
+	// 水位線前進至今日、現金已持久化。
+	if state.values["last_processed_date"] != today.Format("2006-01-02") {
+		t.Fatalf("watermark not advanced to today, got %q", state.values["last_processed_date"])
+	}
+	if _, ok := state.values["current_cash"]; !ok {
+		t.Fatalf("cash not persisted")
+	}
+}
+
+// TestTradingService_RunOneDayAtOpen_NotReadyDoesNotAdvance 驗證開盤價未就緒且非 force 時不下單、不前進水位線。
+func TestTradingService_RunOneDayAtOpen_NotReadyDoesNotAdvance(t *testing.T) {
+	cfg := tradingTestCfg("AAA")
+	svc, _, state, notify, ledger, _ := newTradingFixture(cfg)
+	start := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	svc.series = &fakeSeriesLoader{data: map[string][]entity.StockHistory{
+		"AAA": risingHistory(start, 60, 100),
+	}}
+	// 無即時開盤價 (尚未就緒) + force=false → 應略過且不前進水位線。
+	svc.realtime.(*fakeRealtime).opens = map[string]float64{}
+	today := start.AddDate(0, 0, 60)
+
+	exec := &tradingExecutor{svc: svc, ctx: context.Background(), notify: true}
+	if err := svc.runOneDayAtOpen(context.Background(), exec, today, false); err != nil {
+		t.Fatalf("runOneDayAtOpen: %v", err)
+	}
+	if len(ledger.lots) != 0 || len(notify.tradeSent) != 0 {
+		t.Fatalf("not-ready should not trade, lots=%+v sent=%+v", ledger.lots, notify.tradeSent)
+	}
+	if _, ok := state.values["last_processed_date"]; ok {
+		t.Fatalf("not-ready must not advance watermark")
+	}
+}
+
+// TestInOpenDecisionWindow 驗證開盤決策時段 [09:10, 09:30) 的邊界判斷。
+func TestInOpenDecisionWindow(t *testing.T) {
+	tz, _ := time.LoadLocation("Asia/Taipei")
+	at := func(h, m int) time.Time { return time.Date(2026, 6, 8, h, m, 0, 0, tz) }
+	cases := []struct {
+		t    time.Time
+		want bool
+	}{
+		{at(9, 9), false},
+		{at(9, 10), true},
+		{at(9, 29), true},
+		{at(9, 30), false},
+		{at(14, 0), false},
+	}
+	for _, c := range cases {
+		if got := inOpenDecisionWindow(c.t); got != c.want {
+			t.Fatalf("inOpenDecisionWindow(%s) = %v, want %v", c.t.Format("15:04"), got, c.want)
+		}
 	}
 }
