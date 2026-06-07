@@ -2,6 +2,13 @@
 
 > 由 walk-forward 掃描逐項驗證採納。本報告可直接復現;對應 config.yaml,證實無效的旋鈕已從程式碼移除。
 >
+> 🆕 **2026-06 決策基準改開盤價 (`decision_price_basis: open`) + 為其重新調參:** 線上改成**開盤即時決策**
+> (台灣 09:10–09:30 抓 TWSE MIS 即時開盤價;指標只看到前一交易日收盤,無未來資訊),回測同基準。沿用收盤調的參數直接改開盤會明顯退化
+> (full Calmar 1.51→1.12、walk-forward 四關 PASS→FAIL、OOS 保留 75%→48%);故重新 walk-forward / IS-OOS 掃描定版:
+> **`regime_ma_window` 95→85、`trail_stop_bear` 0.10→0.08** (00631L 覆寫維持 60、`bull_buy_frac` 維持 0.20),
+> 落在 reg{80~85}×trail 0.08 一整片皆通過的平台 (非單點)。結果:全期 Calmar **1.34**、wf 四關全過 / Calmar 勝率 **100%** /
+> 真擇時 **90.5%**、**OOS 保留 93%「穩健」**。**下方第一節績效表與規則細節為更早的收盤基準歷史值;現行值一律以 config.yaml + `go run ./cmd/eval_csv` 為準。**
+>
 > ⚠️ **本文件是 006208(1x 大盤 ETF)+ 00830、「每月解鎖新資金」設定下的調校記錄與基準** (評估用資金加權報酬 MWR/XIRR
 > + NAV 單位淨值回撤,見 [../backtest.md](../backtest.md))。下方第一節績效表為更早「期初一次性資金、無注資」的歷史值。
 > 後續經 Task 2 把 `bull_buy_frac` 上調到 0.25 解決 1x 注資情境的「現金尾巴」(利用率 74%→80%)。
@@ -93,9 +100,10 @@ track_stocks: ["00631L", "00830"]
 initial_cash: 100000
 monthly_contribution: 2500   # 問題設定:每月第一個交易日解鎖新資金 (見 ../backtest.md)
 
+decision_price_basis: open   # 當日開盤價決策 (指標只看到前一交易日收盤);線上/回測同基準
 ma_window: 10
 regime_method: ma_pos
-regime_ma_window: 95         # 2x 00631L 調校:由 200 縮短 (1x 基準為 200)
+regime_ma_window: 85         # 開盤基準重調:由 95 再縮短 (補償開盤決策的較慢翻空;2x 由 200→95→85,1x 基準為 200)
 
 cooldown_days: 14
 bull_cooldown_days: 14       # 牛市冷卻 (與空頭同,規則最簡)
@@ -112,7 +120,7 @@ baseline_buy_tiers: [{above: -0.1}, {above: -0.2}, {above: -0.3}, {above: -0.4}]
 
 baseline_sell_threshold: 1.0 # +100% 獲利了結 (僅多頭觸發)
 sell_frac_of_position: 0.33  # 獲利了結賣當前持股 33% (分批)
-trail_stop_bear: 0.10        # 熊市移動停利 (2x 調校:由 0.08 放寬避免 whipsaw)
+trail_stop_bear: 0.08        # 熊市移動停利 (開盤基準重調:由 0.10 收緊,補回較慢翻空的回撤保護)
 trail_min_gain: 0.10         # 賺過 10% 才武裝 (2x 調校:由 0.20 降低,更早鎖利)
 ```
 
