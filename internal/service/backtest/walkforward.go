@@ -60,6 +60,11 @@ type WindowReport struct {
 	TrailSells, ProfitSells int     // 策略賣出原因拆解 (移動停利 / 獲利了結)
 	StratFinalCash          float64 // 策略期末閒置現金 (現金尾巴)
 
+	// 每日權益曲線 (與三者等長,逐日對齊;供前端折線圖 / 視覺化,評估指標不使用)。
+	Dates      []time.Time // 視窗內每個交易日
+	StratCurve []float64   // 策略每日總權益 (現金 + 持股市值)
+	BHCurve    []float64   // B&H 每日總權益
+
 	// per-window 判定
 	CalmarBeatsBH    bool    // Strat.Calmar > BH.Calmar (排除 Inf/NaN 不可比)
 	BeatsBlendBoth   bool    // Strat 在 Calmar 與 MWR 雙雙贏 Blend (真擇時)
@@ -283,6 +288,7 @@ func evaluateWindow(cfg *config.Config, series map[string]*trading.StockSeries, 
 		Strat: strat, BH: bh, Blend: blend,
 		Buys: stratArm.buys, Sells: stratArm.sells, Skipped: stratArm.skipped, BHBuys: bhArm.buys,
 		TrailSells: stratArm.trailSells, ProfitSells: stratArm.profitSells, StratFinalCash: stratArm.finalCash,
+		Dates: windowDates, StratCurve: stratArm.curve, BHCurve: bhArm.curve,
 		CalmarBeatsBH: calmarBeatsBH, BeatsBlendBoth: beatsBlend, RetParticipation: part,
 	}, nil
 }

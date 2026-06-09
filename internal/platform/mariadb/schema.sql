@@ -66,3 +66,16 @@ CREATE TABLE IF NOT EXISTS BotState (
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (state_key)
 );
+
+-- EquityHistory: 上線引擎逐日寫入的真實帳戶權益快照 (現金 + 持股市值),供前端歷史權益折線圖。
+-- 每個交易日一列;catch-up 回放與每日 loop 皆以 date 為 PK upsert,故重覆處理同一天會覆寫而非重複插入。
+-- 與回測 equity_curve 不同,此為真實帳本走勢,隨上線運行逐日累積 (既有部署升級後從升級點起累積;
+-- 清空 BotState + 帳本可讓其從 common issuance 重新 catch-up,補齊全期曲線)。
+CREATE TABLE IF NOT EXISTS EquityHistory (
+    date VARCHAR(10) NOT NULL, -- "YYYY-MM-DD" 交易日
+    cash DECIMAL(14, 2) NOT NULL, -- 當日閒置現金 (未投入股市的預備現金)
+    holding_value DECIMAL(14, 2) NOT NULL, -- 當日持股市值
+    total_equity DECIMAL(14, 2) NOT NULL, -- 當日總權益 = 現金 + 持股市值
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (date)
+);

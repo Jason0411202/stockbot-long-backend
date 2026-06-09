@@ -194,8 +194,9 @@ func newTradingFixture(cfg *config.Config) (*TradingService, *fakeSeed, *fakeSta
 	notify := &fakeNotifier{}
 	realtime := &fakeRealtime{opens: map[string]float64{}}
 	series := &fakeSeriesLoader{data: map[string][]entity.StockHistory{}}
+	equity := newFakeEquity()
 
-	svc := NewTradingService(engine, portfolio, market, series, seed, state, notify, realtime, cfg, log)
+	svc := NewTradingService(engine, portfolio, market, series, seed, state, equity, notify, realtime, cfg, log)
 	return svc, seed, state, notify, ledger, stock
 }
 
@@ -350,6 +351,33 @@ func TestTradingService_CatchUp_EmptySeries(t *testing.T) {
 	}
 	if len(state.setKeys) != 0 {
 		t.Fatalf("empty series should not persist state, got %v", state.setKeys)
+	}
+}
+
+// TestTradingService_CatchUp_RecordsEquitySnapshots 驗證追趕回放對每個交易日寫入一筆權益快照 (供前端歷史權益折線圖)。
+func TestTradingService_CatchUp_RecordsEquitySnapshots(t *testing.T) {
+	cfg := tradingTestCfg("AAA")
+	svc, _, _, _, _, _ := newTradingFixture(cfg)
+	series := map[string]*trading.StockSeries{
+		"AAA": flatSeries(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC), 60, 100),
+	}
+
+	if err := svc.CatchUp(context.Background(), series); err != nil {
+		t.Fatalf("CatchUp: %v", err)
+	}
+
+	// 首次啟動從 common issuance 回放全部 60 個交易日 → 每日一筆快照。
+	eq := svc.equity.(*fakeEquity)
+	if len(eq.recorded) != 60 {
+		t.Fatalf("expected 60 equity snapshots, got %d", len(eq.recorded))
+	}
+	// 平坦序列無交易:每日持股 0、現金 = 期初本金、總權益 = 期初本金;最後一筆對齊序列末日。
+	last := eq.recorded[len(eq.recorded)-1]
+	if last.HoldingValue != 0 || last.Cash != cfg.InitialCash || last.TotalEquity != cfg.InitialCash {
+		t.Fatalf("flat snapshot mismatch: %+v", last)
+	}
+	if last.Date != "2024-02-29" {
+		t.Fatalf("last snapshot date = %q, want 2024-02-29", last.Date)
 	}
 }
 

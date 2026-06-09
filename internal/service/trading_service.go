@@ -12,6 +12,7 @@ import (
 
 	"github.com/Jason0411202/stockbot-long-backend/internal/client/discord"
 	"github.com/Jason0411202/stockbot-long-backend/internal/config"
+	"github.com/Jason0411202/stockbot-long-backend/internal/entity"
 	"github.com/Jason0411202/stockbot-long-backend/internal/service/backtest"
 	"github.com/Jason0411202/stockbot-long-backend/internal/service/trading"
 )
@@ -28,6 +29,7 @@ type TradingService struct {
 	series    SeriesLoader
 	ledger    LedgerSeedStore
 	state     StateStore
+	equity    EquityStore
 	notify    Notifier
 	realtime  RealtimeFetcher
 	cfg       *config.Config
@@ -56,6 +58,7 @@ func NewTradingService(
 	series SeriesLoader,
 	ledger LedgerSeedStore,
 	state StateStore,
+	equity EquityStore,
 	notify Notifier,
 	realtime RealtimeFetcher,
 	cfg *config.Config,
@@ -68,6 +71,7 @@ func NewTradingService(
 		series:    series,
 		ledger:    ledger,
 		state:     state,
+		equity:    equity,
 		notify:    notify,
 		realtime:  realtime,
 		cfg:       cfg,
@@ -247,6 +251,8 @@ func (s *TradingService) CatchUp(ctx context.Context, series map[string]*trading
 		if err := s.engine.ProcessDay(d, series, silent); err != nil {
 			return fmt.Errorf("ProcessDay(%s): %w", d.Format(dateLayout), err)
 		}
+		// 逐日記錄收盤後權益快照,使前端歷史權益折線圖在首次 catch-up 後即具備完整全期走勢。
+		s.recordEquitySnapshot(ctx, d, series)
 		prev = d
 	}
 
@@ -393,6 +399,8 @@ func (s *TradingService) runOneDayAtOpen(ctx context.Context, exec trading.Execu
 			s.log.Warn("addTotalContributed 失敗 (不致命):", err)
 		}
 	}
+	// 記錄當日權益快照 (供前端歷史權益折線圖);當日收盤未進 DB,以最近收盤估值。
+	s.recordEquitySnapshot(ctx, today, series)
 	return nil
 }
 
@@ -431,6 +439,24 @@ func (s *TradingService) loadCash(ctx context.Context) (float64, bool, error) {
 // saveCash 持久化引擎當前現金至 BotState。
 func (s *TradingService) saveCash(ctx context.Context, cash float64) error {
 	return s.state.Set(ctx, stateKeyCash, strconv.FormatFloat(cash, 'f', -1, 64))
+}
+
+// recordEquitySnapshot 以 as-of 估值結算 day 收盤後的真實帳戶權益 (現金 + 持股市值),
+// upsert 寫入 EquityHistory 供前端歷史權益折線圖。寫入失敗僅記錄警告 (不致命),不影響交易流程。
+// day 當天收盤尚未進 DB 時 (如盤中開盤決策),HoldingValueAsOf 以最近一筆 (T-1) 收盤估值,
+// 故最新一點可能有約一個交易日的估值落後,對多年折線圖屬可接受誤差。
+func (s *TradingService) recordEquitySnapshot(ctx context.Context, day time.Time, series map[string]*trading.StockSeries) {
+	cash := s.engine.Cash()
+	holding := s.engine.HoldingValueAsOf(series, day)
+	snap := entity.EquitySnapshot{
+		Date:         day.Format(dateLayout),
+		Cash:         cash,
+		HoldingValue: holding,
+		TotalEquity:  cash + holding,
+	}
+	if err := s.equity.RecordEquity(ctx, snap); err != nil {
+		s.log.Warn("RecordEquity 失敗 (不致命):", err)
+	}
 }
 
 // loadTotalContributed 讀取 BotState 的 total_contributed (除期初現金外、累計從外部注入的定額資金);

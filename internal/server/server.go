@@ -57,6 +57,7 @@ func registerRoutes(e *echo.Echo, ctl *controller.Controller) {
 	e.GET("/api/get_stock_statistic_data", ctl.StockStatisticData)
 	e.GET("/api/get_stock_history_data", ctl.StockHistoryData)
 	e.GET("/api/get_performance_summary", ctl.PerformanceSummary)
+	e.GET("/api/get_equity_history", ctl.EquityHistory)
 }
 
 // Run builds the Echo server and starts listening on :8080 (HTTP only; TLS is

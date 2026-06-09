@@ -72,6 +72,10 @@ func TestPerformanceService_LiveSummaryMath(t *testing.T) {
 		t.Fatalf("equity/pnl/return mismatch: equity=%.2f pnl=%.2f rate=%.2f",
 			got.TotalEquity, got.TotalPnL, got.TotalReturnRate)
 	}
+	// 資產配置比例:持股 80000/130000=61.54%、現金 50000/130000=38.46% (合計≈100)。
+	if got.HoldingRatio != 61.54 || got.CashRatio != 38.46 {
+		t.Fatalf("ratio mismatch: holding=%.2f cash=%.2f", got.HoldingRatio, got.CashRatio)
+	}
 	// 序列載入失敗 → 回測區塊應為 nil。
 	if got.Backtest != nil {
 		t.Fatalf("backtest should be nil when series load fails, got %+v", got.Backtest)
@@ -140,5 +144,16 @@ func TestPerformanceService_BacktestPopulated(t *testing.T) {
 	}
 	if bt.WalkForward.NWindows < 1 {
 		t.Fatalf("expected at least one walk-forward window, got %d", bt.WalkForward.NWindows)
+	}
+	// 權益曲線應被填入、點數受取樣上限約束,且末點對齊 span 終點 (期末權益)。
+	if len(bt.EquityCurve) == 0 {
+		t.Fatalf("equity_curve should be populated with sufficient data")
+	}
+	if len(bt.EquityCurve) > maxEquityCurvePoints {
+		t.Fatalf("equity_curve exceeds sample cap %d: %d", maxEquityCurvePoints, len(bt.EquityCurve))
+	}
+	lastPt := bt.EquityCurve[len(bt.EquityCurve)-1]
+	if lastPt.Date != bt.SpanEnd || lastPt.StratEquity <= 0 || lastPt.BHEquity <= 0 {
+		t.Fatalf("equity_curve last point mismatch: %+v (spanEnd=%s)", lastPt, bt.SpanEnd)
 	}
 }
