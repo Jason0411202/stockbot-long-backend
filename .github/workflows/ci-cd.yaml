@@ -5,6 +5,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 env:
   IMAGE: ghcr.io/${{ github.repository }}
@@ -25,15 +26,21 @@ jobs:
   # ─── Job 2：Build & Push Image ───
   build:
     needs: test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.image.outputs.image }}
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v4
-      - name: Lowercase image name
-        run: echo "IMAGE_LC=${IMAGE,,}" >> $GITHUB_ENV
+      - name: Compute lowercase image refs
+        id: image
+        run: |
+          IMAGE_LC=${IMAGE,,}
+          echo "IMAGE_LC=$IMAGE_LC" >> $GITHUB_ENV
+          echo "image=${IMAGE_LC}:${{ github.sha }}" >> $GITHUB_OUTPUT
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -47,16 +54,22 @@ jobs:
             ${{ env.IMAGE_LC }}:${{ github.sha }}
             ${{ env.IMAGE_LC }}:latest
 
-  # ─── Job 3：更新 Manifest Repo（觸發 ArgoCD）───
-  deploy:
+  # ─── Job 3a：CD（k8s / ArgoCD）── 更新 manifest repo 的 image tag ───
+  # 由 vars.STOCKBOT_LONG_K8S_DEPLOY_ENABLED 開關控制（選填，預設視為 false）；
+  # 未設或非 'true' 則整個 job 自動 skip（不影響 fork CI 全綠）。要部署才設為 'true'。
+  # manifest repo 位置走 vars.STOCKBOT_LONG_MANIFEST_REPO，fork 者指向自己的 repo 即可，不需改本檔。
+  deploy-k8s:
     needs: build
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: >-
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      github.ref == 'refs/heads/main' &&
+      vars.STOCKBOT_LONG_K8S_DEPLOY_ENABLED == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          repository: Jason0411202/stockbot-long-backend-k8s-manifests
-          token: ${{ secrets.MANIFEST_REPO_PAT }}
+          repository: ${{ vars.STOCKBOT_LONG_MANIFEST_REPO }}
+          token: ${{ secrets.STOCKBOT_LONG_MANIFEST_REPO_PAT }}
           path: manifests
 
       - name: Update image tag
@@ -72,3 +85,54 @@ jobs:
           git add values.yaml
           git diff --staged --quiet || git commit -m "deploy: stockbot-long-backend@${{ github.sha }}"
           git push
+
+  # ─── Job 3b：CD（Docker Compose）── SSH 到 server 全自動 bootstrap + 滾動更新 ───
+  # 由 vars.STOCKBOT_LONG_DEPLOY_ENABLED 開關控制（選填，預設視為 false）；
+  # 未設或非 'true' 則整個 job 自動 skip（不影響 fork CI 全綠）。要部署才設為 'true'。
+  # 一次完成「裝 Docker → 取得部署檔 → 寫 .env → 拉 image → 啟動」，可在全新 server 直接跑，
+  # 已架好的 server 會自動略過安裝、走滾動更新。除 SSH 連線資訊外不需任何手動步驟。
+  # 部署目錄固定為登入帳號 home 下的 ~/stockbot-long-backend，SSH port 固定 22。
+  deploy-ssh:
+    needs: build
+    if: >-
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      github.ref == 'refs/heads/main' &&
+      vars.STOCKBOT_LONG_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Bootstrap & deploy over SSH
+        uses: appleboy/ssh-action@v1
+        env:
+          # .env 全文以單一 secret 帶入（單一事實來源）；未提供則寫入空 .env，由 compose 用內建預設值
+          DEPLOY_ENV_FILE: ${{ secrets.STOCKBOT_LONG_ENV_FILE }}
+        with:
+          host: ${{ secrets.STOCKBOT_LONG_DEPLOY_HOST }}
+          username: ${{ secrets.STOCKBOT_LONG_DEPLOY_USER }}
+          # 一律以密碼登入
+          password: ${{ secrets.STOCKBOT_LONG_DEPLOY_PASSWORD }}
+          envs: DEPLOY_ENV_FILE
+          script: |
+            set -e
+
+            # 全新 server 自動安裝 Docker（含 compose plugin）；已安裝則略過
+            if ! command -v docker >/dev/null 2>&1; then
+              curl -fsSL https://get.docker.com | sudo sh
+              sudo systemctl enable --now docker || true
+            fi
+
+            # 取得 / 更新部署檔到 home 下固定目錄（compose 一律同步 main 最新版）
+            APP_DIR="$HOME/stockbot-long-backend"
+            mkdir -p "$APP_DIR" && cd "$APP_DIR"
+            curl -fsSLO "https://raw.githubusercontent.com/${{ github.repository }}/main/docker-compose.yml"
+
+            # .env 以 GitHub 的 STOCKBOT_LONG_ENV_FILE 為單一來源，每次覆蓋寫入
+            printf '%s\n' "$DEPLOY_ENV_FILE" > .env
+
+            # 部署 image：直接取用 build job 推出的不可變 :sha image
+            # （compose 代換 ${APP_IMAGE} 時 shell 環境變數優先於 .env，不需寫入 .env）
+            IMAGE="${{ needs.build.outputs.image }}"
+
+            # 拉新 image 並滾動更新（全新與既有 server 皆 idempotent）
+            sudo APP_IMAGE="$IMAGE" docker compose pull
+            sudo APP_IMAGE="$IMAGE" docker compose up -d
+            sudo docker image prune -f

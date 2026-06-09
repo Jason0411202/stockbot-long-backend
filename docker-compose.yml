@@ -25,7 +25,7 @@ services:
       - stockbot
 
   app:
-    image: ghcr.io/jason0411202/stockbot-long-backend:latest
+    image: ${APP_IMAGE:-ghcr.io/jason0411202/stockbot-long-backend:latest}
     container_name: stockbot-app
     restart: unless-stopped
     depends_on:
