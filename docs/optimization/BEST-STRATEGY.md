@@ -2,6 +2,13 @@
 
 > 由 walk-forward 掃描逐項驗證採納。本報告可直接復現;對應 config.yaml,證實無效的旋鈕已從程式碼移除。
 >
+> 💰 **2026-06 資金模型改 lump-sum (期初一次性本金、不再外部注資;`monthly_contribution` 2500→0) + 重新調參:**
+> 改為「投入 $100,000 後讓策略自行進出」(不再每月定額注資)。以 walk-forward / IS-OOS 重掃發現只需放寬兩個共用旋鈕:
+> **`bull_buy_band` 0.05→0.08** (一次性本金在確認牛市時更快部署;0.08 以上已飽和)、**`cooldown_break_budget` 2→3** (封閉資金池更需把握深跌買點);
+> 其餘旋鈕 (reg85 / trail0.08 / 00631L 覆寫 60+42) 重掃確認不變仍最佳。結果 ($100,000 lump-sum,全期 7.0 年):
+> 全期 Calmar **1.65→1.80**、MWR **+44.4%**、回撤 **−24.7%** (B&H 0.92 / −51.6%)、wf 四關全過 / Calmar 勝率 **95.2%** / 真擇時 **76.2%**、
+> **OOS 保留 130%「穩健」、最差折 Calmar 1.96**。**現行值一律以 config.yaml + `go run ./cmd/eval_csv` 為準;下方歷史記錄為更早的注資情境調校。**
+>
 > 🆕 **2026-06 決策基準改開盤價 (`decision_price_basis: open`) + 為其重新調參:** 線上改成**開盤即時決策**
 > (台灣 09:10–09:30 抓 TWSE MIS 即時開盤價;指標只看到前一交易日收盤,無未來資訊),回測同基準。沿用收盤調的參數直接改開盤會明顯退化
 > (full Calmar 1.51→1.12、walk-forward 四關 PASS→FAIL、OOS 保留 75%→48%);故重新 walk-forward / IS-OOS 掃描定版:
@@ -105,7 +112,7 @@
 ```yaml
 track_stocks: ["00631L", "00830"]
 initial_cash: 100000
-monthly_contribution: 2500   # 問題設定:每月第一個交易日解鎖新資金 (見 ../backtest.md)
+monthly_contribution: 0      # 問題設定:期初一次性本金、不再外部注資 (lump-sum;>0 則啟用每月定額注資,見 ../backtest.md)
 
 decision_price_basis: open   # 當日開盤價決策 (指標只看到前一交易日收盤);線上/回測同基準
 ma_window: 10
@@ -114,9 +121,9 @@ regime_ma_window: 85         # 開盤基準重調:由 95 再縮短 (補償開盤
 
 cooldown_days: 14
 bull_cooldown_days: 14       # 牛市冷卻 (與空頭同,規則最簡)
-cooldown_break_budget: 2          # 每檔近 365 日內最多 2 次「打破冷卻」(idea-2,滾動視窗)
+cooldown_break_budget: 3          # 每檔近 365 日內最多 3 次「打破冷卻」(idea-2,滾動視窗;lump-sum 重調由 2 放寬)
 cooldown_break_window_days: 365   # 滾動視窗 (≈252 交易日≈1 年)
-bull_buy_band: 0.05
+bull_buy_band: 0.08          # 牛市:收盤 < 10MA×1.08 即可買 (lump-sum 重調由 0.05 放寬,更快部署一次性本金;0.08 以上飽和)
 buy_frac_basis: cash         # 買入基準 = 剩餘現金 (idea-1)
 bull_buy_frac: 0.20          # 牛市每次買「現金的 20%」(2x 調校;1x 注資基準為 0.25)
 bear_buy_frac: 0.02          # 熊市每次買「現金的 2% × 深度權重」(根治深跌沒錢;取代固定 tier)

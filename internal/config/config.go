@@ -30,13 +30,12 @@ type Config struct {
 	InitialCash           float64           `yaml:"initial_cash"`
 	InitDBBackMonths      int               `yaml:"init_db_back_months"`
 
-	// ── 問題設定 (problem setting):定期定額注資 ──
-	// 除了期初 InitialCash 外,「每個日曆月的第一個交易日」再注入 MonthlyContribution 元可動用資金 (起始月不注入)。
-	// 模擬「每月解鎖一筆新資金」的真實使用情境。
-	//   - 因有持續外部注資,報酬一律用資金加權 (XIRR / MWR),回撤用 NAV/單位淨值 (扣除注資的真實投資回撤)。
-	//   - <=0 視為關閉 (退化回「期初一次性資金、無注資」的舊行為,所有指標與舊版一致)。
+	// ── 問題設定 (problem setting):外部注資排程 ──
+	// MonthlyContribution = 期初 InitialCash 之外,「每個日曆月第一個交易日」再注入的新可動用資金 (起始月不注入)。
+	//   - 預設 0 (定版) = 關閉外部注資,回測與上線都只動用期初一次性本金 (lump-sum 封閉資金池);資金加權報酬退化為 CAGR。
+	//   - >0 = 啟用「每月定期定額注資」情境;報酬用資金加權 (XIRR/MWR),回撤用 NAV/單位淨值 (扣除注資的真實投資回撤)。
 	//   - 回測 / 評估與上線交易共用同一注資排程 (backtest.ContributionDue):上線 catch-up 回放與每日 loop
-	//     也會在每月第一個交易日注資,並把累計注資持久化到 BotState (total_contributed),使上線忠實對齊回測情境。
+	//     也依此排程注資,並把累計注資持久化到 BotState (total_contributed),使上線忠實對齊回測情境。
 	MonthlyContribution float64 `yaml:"monthly_contribution"`
 
 	// 進場均線長度。<=0 視為 20。

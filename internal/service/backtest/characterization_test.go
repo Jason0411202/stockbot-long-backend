@@ -26,17 +26,17 @@ func liveStrategyCfg() *config.Config {
 		ScalingStrategy:         "Baseline",
 		DecisionPriceBasis:      "open", // 開盤價基準:當日開盤成交,指標只看到前一交易日收盤 (鏡像 config.yaml)
 		InitialCash:             100000,
-		MonthlyContribution:     2500,
+		MonthlyContribution:     0, // lump-sum:期初一次性本金,無外部注資 (鏡像 config.yaml)
 		MAWindow:                10,
 		RegimeMethod:            "ma_pos",
 		RegimeMAWindow:          85,
 		CooldownDays:            14,
 		BullCooldownDays:        14,
-		BullBuyBand:             0.05,
+		BullBuyBand:             0.08,
 		BuyFracBasis:            "cash",
 		BullBuyFrac:             0.20,
 		BearBuyFrac:             0.02,
-		CooldownBreakBudget:     2,
+		CooldownBreakBudget:     3,
 		CooldownBreakWindowDays: 365,
 		BuyDepthBasis:           "peak",
 		BuyPeakLookback:         252,
@@ -102,7 +102,7 @@ func TestCharacterization_LiveStrategyFingerprint(t *testing.T) {
 		"00830":  charSeries(2, 700, 30, 0.0035, 0.014),
 	}
 
-	// Act — 以 common issuance 為起點、每月注資,跑完整引擎 (與 RunBacktestWindow 同路徑,額外取 trail/profit 拆解)。
+	// Act — 以 common issuance 為起點跑完整引擎 (lump-sum:contribOnDay 全為 0;與 RunBacktestWindow 同路徑,額外取 trail/profit 拆解)。
 	allDates := trading.CollectDateUnion(series)
 	start := allDates[0]
 	if ci, ok := CommonIssuanceStart(cfg, series); ok && ci.After(start) {
@@ -171,13 +171,21 @@ func TestCharacterization_LiveStrategyFingerprint(t *testing.T) {
 // 移動停利出場後暫停逢低買入 ≈42 日,打斷 2x 槓桿空頭的「停損→又接刀→再停損」whipsaw 循環。
 // 經 IS/OOS 與 18/24/30 月三視窗驗證 (真實 CSV):full Calmar 1.34→1.79、MWR +40.5→+45.9%、
 // 回撤 -30.2→-25.7%、OOS 保留 ~153% 不退化、三視窗回撤一致下降;只套 00631L (全股套用會過擬合)。
-// 合成資料指紋隨之更新 (buys 97→88、trail 12→9、finalTotal 微調);後續任何非刻意改動都應維持此數字。
+//
+// 2026-06 第三次刻意變更 (經使用者核可):問題設定由「每月定額注資」改為「期初一次性本金、不再外部注資」
+// (lump-sum 封閉資金池;monthly_contribution 2500→0)。並為 lump-sum 重新調參 (cmd/eval_csv walk-forward / IS-OOS):
+//
+//	bull_buy_band 0.05→0.08 (一次性本金在確認牛市時更快部署;0.08 以上飽和)、
+//	cooldown_break_budget 2→3 (封閉資金池更需把握深跌買點)。其餘旋鈕與 00631L 覆寫經重掃確認不變仍最佳。
+//
+// 實測 (真實 CSV,$100,000 lump-sum):full Calmar 1.65→1.80、MWR +44.4%、回撤 -24.7%、wf 四關全過、OOS 保留 130%、最差折 1.96。
+// 合成資料指紋隨之更新 (注資歸零 + band/brk 調整:buys 88→91、profit 5→1、finalCash/finalTotal 改變);後續任何非刻意改動都應維持此數字。
 const (
-	goldenBuys       = 88
-	goldenSells      = 71
+	goldenBuys       = 91
+	goldenSells      = 69
 	goldenSkipped    = 0
-	goldenTrail      = 9
-	goldenProfit     = 5
-	goldenFinalCash  = 59285
-	goldenFinalTotal = 323166
+	goldenTrail      = 10
+	goldenProfit     = 1
+	goldenFinalCash  = 10500
+	goldenFinalTotal = 228136
 )

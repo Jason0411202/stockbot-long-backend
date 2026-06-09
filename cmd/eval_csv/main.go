@@ -1,8 +1,9 @@
 // cmd/eval_csv/main.go 讀取本機 CSV 快取執行全期回測與 walk-forward 評估並印出 scorecard。
 package main
 
-// cmd/eval_csv 用本機 CSV 快取 (由 cmd/fetch_data 產生) 對 config.yaml 跑「每月定期定額注資」問題設定下的
-// 評估,印出策略 vs B&H(立刻買滿) vs 同曝險 Blend 的 scorecard。完全不依賴 MariaDB / docker。
+// cmd/eval_csv 用本機 CSV 快取 (由 cmd/fetch_data 產生) 對 config.yaml 跑問題設定 (預設 lump-sum:期初一次性本金、
+// 無外部注資;monthly_contribution>0 則為每月定期定額注資) 下的評估,印出策略 vs B&H(立刻買滿) vs 同曝險 Blend 的 scorecard。
+// 完全不依賴 MariaDB / docker。
 //
 // 兩段輸出:
 //  1) Headline — 全期連續回測 (注資動態最明顯):資金加權報酬 (XIRR/MWR)、NAV 真實回撤、資金利用率、現金尾巴。
@@ -121,8 +122,14 @@ func gateStr(a backtest.AggregateReport) string {
 
 // printHeadline 印出全期連續回測的 headline 指標對照表 (策略 vs B&H)。
 func printHeadline(cfg *config.Config, r backtest.WindowReport) {
-	fmt.Printf("問題設定:期初 %s + 每月解鎖 %s,標的 %v\n",
-		money(cfg.InitialCash), money(cfg.MonthlyContribution), cfg.TrackStocks)
+	// 問題設定一行:依是否啟用每月注資切換 lump-sum / 定期定額注資文案。
+	if cfg.MonthlyContribution > 0 {
+		fmt.Printf("問題設定:期初 %s + 每月解鎖 %s,標的 %v\n",
+			money(cfg.InitialCash), money(cfg.MonthlyContribution), cfg.TrackStocks)
+	} else {
+		fmt.Printf("問題設定:期初一次性本金 %s,之後不再外部注資 (lump-sum),標的 %v\n",
+			money(cfg.InitialCash), cfg.TrackStocks)
+	}
 	fmt.Printf("全期連續回測 %s ~ %s (%.1f 年);投入本金合計 %s\n",
 		r.Start.Format("2006-01-02"), r.End.Format("2006-01-02"), r.Years, money(r.TotalIn))
 	fmt.Println("══════════════════════════════════════════════════════════════")
@@ -143,7 +150,12 @@ func printHeadline(cfg *config.Config, r backtest.WindowReport) {
 
 // printWalkForward 印出 walk-forward 穩健性摘要與五道關卡通過情形。
 func printWalkForward(cfg *config.Config, window, step int, agg backtest.AggregateReport) {
-	fmt.Printf("Walk-forward 穩健性 — 視窗 %d 月 / 步進 %d 月 / %d 個視窗 (每窗獨立注資)\n", window, step, agg.NWindows)
+	// 視窗注資註記:lump-sum (注資=0) 時每窗皆期初一次性本金,否則每窗各自獨立注資。
+	windowNote := "每窗期初一次性本金"
+	if cfg.MonthlyContribution > 0 {
+		windowNote = "每窗獨立注資"
+	}
+	fmt.Printf("Walk-forward 穩健性 — 視窗 %d 月 / 步進 %d 月 / %d 個視窗 (%s)\n", window, step, agg.NWindows, windowNote)
 	fmt.Println("──────────────────────────────────────────────")
 	fmt.Printf("中位 MWR      策略 %s   vs  B&H %s   (Blend %s)\n", pct(agg.MedStratMWR), pct(agg.MedBHMWR), pct(agg.MedBlendMWR))
 	fmt.Printf("中位 MaxDD    策略 %s   vs  B&H %s\n", pct(agg.MedStratMDD), pct(agg.MedBHMDD))
