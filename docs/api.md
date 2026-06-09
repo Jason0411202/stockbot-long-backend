@@ -26,8 +26,8 @@
 一次回傳三類資訊，供前端呈現「投入了多少本金、目前賺賠多少、策略本身好不好」：
 
 - **本金明細**（外部注入股市的資金，不含後續滾出的獲利）：
-  `initial_cash`（期初一次性本金）、`monthly_contribution`（每月定額注資設定）、
-  `total_contributed`（累計已注資）、`total_invested`（投入本金合計 = 期初 + 累計注資）。
+  `initial_cash`（期初一次性本金）、`monthly_contribution`（每月定額注資設定；定版為 0 = 關閉外部注資）、
+  `total_contributed`（累計已注資；注資關閉時為 0）、`total_invested`（投入本金合計 = 期初 + 累計注資）。
 - **實盤現況**（真實帳本 + BotState）：`current_cash`、`holding_value`、`total_equity`、
   `realized_pnl`、`unrealized_pnl`、`total_pnl`（= 總權益 − 投入本金）、`total_return_rate`（%）。
 - **回測績效** `backtest`（資料不足或評估失敗時為 `null`）：
@@ -38,7 +38,7 @@
     `ret_participation`，及五道關卡 `g1_return_participation`～`g5_robustness` 與 `overall_pass`。
 
 回測比率欄位（`mwr`/`calmar`/`sortino` 等）在邊界情況可能為 `null`（對應 NaN/±Inf，見 `dto.JSONFloat`）。
-本金與每月注資對齊回測與上線共用的 `monthly_contribution` 設定，故實盤帳本與回測情境一致。
+本金明細對齊回測與上線共用的 `monthly_contribution` 設定（定版為 0 = lump-sum），故實盤帳本與回測情境一致。
 
 ## 回應資料
 

@@ -64,10 +64,11 @@ cmd/*            程式進入點（server 與各 CLI 工具）
 `open_price` 同基準回放。即時報價來源為 `internal/client/twse.RealtimeClient`（MIS getStockInfo.jsp，
 經 `RealtimeFetcher` port 注入）。
 
-**每月定額注資（與回測同排程）**：catch-up 回放與每日 loop 都會在「每個日曆月第一個交易日」注入
-`monthly_contribution`（排程單一事實來源 `backtest.ContributionDue`，與回測 `ContributionAmounts` 逐日一致），
-累計注資額持久化於 BotState `total_contributed`。首次啟動（無水位線）從 common issuance 起 catch-up，
-其現金軌跡與帳本與回測全期完全一致；已在運行的部署只對「新月份」注資（過往未注資的月份不回填）。
+**資金模型：期初一次性本金、不再外部注資（lump-sum 封閉資金池）**。`monthly_contribution` 定版為 **0**，
+回測與上線都只動用期初 `initial_cash`（$100,000）。`monthly_contribution > 0` 仍是支援的選項（每月第一個交易日
+注資，排程單一事實來源 `backtest.ContributionDue`，與回測 `ContributionAmounts` 逐日一致，累計額存 BotState
+`total_contributed`）；定版設 0 時整條注資路徑為 no-op，資金加權報酬退化為 CAGR。首次啟動（無水位線）從
+common issuance 起 catch-up，其現金軌跡與帳本與回測全期完全一致。
 
 ## 不可破壞的不變量（CRITICAL）
 
@@ -84,9 +85,10 @@ cmd/*            程式進入點（server 與各 CLI 工具）
 - **決策成交價基準。** `decision_price_basis: open`（config.yaml）→ 當日**開盤價**成交、指標只看到
   **前一交易日收盤**（無未來資訊）；線上經 TWSE MIS 取即時開盤、回測/CSV 用歷史 `open_price`，兩邊同基準。
   帳本成交價由引擎決策價寫入（`PortfolioService.BuyShares/SellShares` 收 `price` 參數），**不可**改回
-  `GetPriceAsOf` 查 DB（開盤決策當下 DB 尚無當日 K 棒，會誤拿 T-1 收盤）。現行參數為**開盤基準專調**
-  （`regime_ma_window 85`、`trail_stop_bear 0.08`，00631L override `regime_ma_window 60` + `trail_reentry_cooldown_days 42`）；
-  改回收盤基準或改決策基準都需重新以 `cmd/eval_csv` 跑 walk-forward / IS-OOS 調參並重釘指紋。
+  `GetPriceAsOf` 查 DB（開盤決策當下 DB 尚無當日 K 棒，會誤拿 T-1 收盤）。現行參數為**開盤基準 + lump-sum 專調**
+  （`regime_ma_window 85`、`trail_stop_bear 0.08`、`bull_buy_band 0.08`、`cooldown_break_budget 3`，
+  00631L override `regime_ma_window 60` + `trail_reentry_cooldown_days 42`）；改回收盤基準、改決策基準、
+  或重新開啟外部注資（`monthly_contribution > 0`）都需重新以 `cmd/eval_csv` 跑 walk-forward / IS-OOS 調參並重釘指紋。
 - **API wire keys 不可變。** `internal/dto` 的 JSON tag 是前端既有契約（含唯一的 camelCase
   `todayClosePrice`），不得更名。新增端點 `/api/get_performance_summary`（`dto/performance.go`）的欄位為
   增量擴充；其比率欄位用 `dto.JSONFloat`（NaN/±Inf → `null`），不要改回裸 `float64`（`encoding/json` 無法編 NaN/Inf 會回錯）。
@@ -100,8 +102,8 @@ cmd/*            程式進入點（server 與各 CLI 工具）
 - **引擎記憶體狀態未持久化。** `peakSinceHold`、`lastTrailSell`（移動停利再進場冷卻用）等為純記憶體狀態，
   不寫入 DB；上線重啟靠 catch-up 回放重建，故 `init_db_back_months` 須涵蓋足夠回看（≥ 冷卻天數）才能正確還原。
 - **BotState 持久化欄位。** 跨重啟持久化於 `BotState` 的鍵為 `last_processed_date`（水位線）、`current_cash`、
-  `total_contributed`（累計每月注資，供 API 本金明細）。`total_contributed` 只在「有新注資的月份」累加，
-  既有部署升級後不回填過往未注資月份；要與回測完全對齊請清空 BotState + 帳本讓其從 common issuance 重新 catch-up。
+  `total_contributed`（累計外部注資，供 API 本金明細；`monthly_contribution=0` 定版下恆為 0）。`total_contributed`
+  只在「有新注資的月份」累加；要與回測完全對齊請清空 BotState + 帳本讓其從 common issuance 重新 catch-up。
 
 ## 程式碼與註解規範
 

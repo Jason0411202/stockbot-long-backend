@@ -10,13 +10,14 @@ import (
 	"time"
 )
 
-// walkforward.go 把「單一長區間回測」升級成「多視窗 walk-forward 評估」,並在「每月定期定額注資」
-// 問題設定下,對每個視窗同時跑策略與兩個對照組 (B&H、同曝險 Blend),最後用一張 scorecard 回答:
+// walkforward.go 把「單一長區間回測」升級成「多視窗 walk-forward 評估」:對每個視窗同時跑策略與兩個對照組
+// (B&H、同曝險 Blend),最後用一張 scorecard 回答:
 //
-//   「在所有進場時點下,面對每月固定解鎖的新資金,策略能否守住 B&H 七成以上的(資金加權)報酬、
-//     用顯著更小的(真實 NAV)回撤,且 Calmar 穩定贏 B&H —— 而且這份優勢來自擇時,不是單純抱現金?」
+//   「在所有進場時點下,策略能否守住 B&H 七成以上的(資金加權)報酬、用顯著更小的(真實 NAV)回撤、
+//     且 Calmar 穩定贏 B&H —— 而且這份優勢來自擇時,不是單純抱現金?」
 //
-// 問題設定 (problem setting):期初 cfg.InitialCash + 每月第一個交易日注入 cfg.MonthlyContribution。
+// 問題設定 (problem setting):期初 cfg.InitialCash;cfg.MonthlyContribution>0 時每月第一個交易日再注入該額
+// (定版為 0 = lump-sum,僅期初一次性本金、不再外部注資)。
 // 方法論:
 //   - 報酬一律用資金加權 (XIRR/MWR);外部現金流 = 期初+每月注入(負)、期末清算(正),恰一次變號故必唯一可解。
 //     MonthlyContribution=0 時退化為「期初 -E0、期末 +EN」,XIRR 恆等於封閉資金池 CAGR (與舊版一致)。
