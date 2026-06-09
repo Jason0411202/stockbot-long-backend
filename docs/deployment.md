@@ -18,6 +18,8 @@ curl -fsSL  https://raw.githubusercontent.com/Jason0411202/stockbot-long-backend
 
 `.env.example` 預設可在本機直接使用。正式環境請至少調整 DB 密碼、Discord token、`SITE_ADDRESS` 與 Caddy port。
 
+> ⚠️ **`MARIADB_USER` / `MARIADB_PASSWORD` 只在 `mariadb_data` volume「首次初始化」時生效。** volume 已存在後再改 `.env` 密碼，MariaDB 會直接忽略（仍用舊密碼），但 app 會改用新密碼，導致 `Error 1045 ... Access denied for user ... (using password: YES)` 連不上 DB。要在初始化後更換 DB 帳密，必須二選一：(a) `docker compose down -v` 砍掉 volume 重新初始化（本專案 DB 可由開機回補 + catch-up 自動重建，資料不會永久遺失）；或 (b) 以 root 進 MariaDB 手動 `ALTER USER '<MARIADB_USER>'@'%' IDENTIFIED BY '<新密碼>';` 對齊。單純改 `.env` 重新 `up -d` 無效。
+
 > 策略參數（`config.yaml`）已隨 image 版本固定；要調整請改 repo 的 `config.yaml` 重新發版，或在 `app` service 掛載一份覆寫。
 
 ## 主要環境變數
