@@ -166,6 +166,18 @@ func (e *Engine) HoldingValueAsOf(series map[string]*StockSeries, day time.Time)
 	return total
 }
 
+// CostBasis 回傳目前所有持倉的總投入成本 (Σ 各 lot 股數 × 買入價);無持倉回傳 0。
+// 純讀取記憶體持倉,零 I/O、不參與任何決策 (供「未實現損益 = 持股市值 − 成本基礎」計算)。
+func (e *Engine) CostBasis() float64 {
+	total := 0.0
+	for _, lots := range e.positions {
+		for _, l := range lots {
+			total += float64(l.shares) * l.price
+		}
+	}
+	return total
+}
+
 // ProcessDay 處理單一日期下所有追蹤股票的買賣決策。
 // 依 cfg.DecisionPriceBasis 決定成交價基準:
 //   - "close"(預設):用當日收盤價成交,指標看到當日收盤 (asOfIdx = idx)。

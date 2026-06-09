@@ -453,6 +453,7 @@ func (s *TradingService) recordEquitySnapshot(ctx context.Context, day time.Time
 		Cash:         cash,
 		HoldingValue: holding,
 		TotalEquity:  cash + holding,
+		CostBasis:    s.engine.CostBasis(),
 	}
 	if err := s.equity.RecordEquity(ctx, snap); err != nil {
 		s.log.Warn("RecordEquity 失敗 (不致命):", err)

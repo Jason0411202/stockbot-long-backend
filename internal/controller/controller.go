@@ -46,7 +46,13 @@ type EquityHistoryReporter interface {
 	EquityHistory(ctx context.Context) ([]dto.LiveEquityPoint, error)
 }
 
-// Controller wires the five business services + a logger into Echo handler
+// PerformanceHistoryReporter is the consumer-side view of the unified
+// date-axis performance history: backtest + live metrics per trading day.
+type PerformanceHistoryReporter interface {
+	History(ctx context.Context) ([]dto.PerformanceHistoryPoint, error)
+}
+
+// Controller wires the six business services + a logger into Echo handler
 // methods. Dependencies are constructor-injected so handlers stay unit-testable
 // with fakes (no DB, no server).
 type Controller struct {
@@ -56,11 +62,12 @@ type Controller struct {
 	history     StockHistoryService
 	performance PerformanceReporter
 	equity      EquityHistoryReporter
+	perfHistory PerformanceHistoryReporter
 }
 
-// New constructs a Controller from its logger and the five business services.
-func New(log *logrus.Logger, p PortfolioService, s StatisticService, h StockHistoryService, perf PerformanceReporter, eq EquityHistoryReporter) *Controller {
-	return &Controller{log: log, portfolio: p, statistic: s, history: h, performance: perf, equity: eq}
+// New constructs a Controller from its logger and the six business services.
+func New(log *logrus.Logger, p PortfolioService, s StatisticService, h StockHistoryService, perf PerformanceReporter, eq EquityHistoryReporter, ph PerformanceHistoryReporter) *Controller {
+	return &Controller{log: log, portfolio: p, statistic: s, history: h, performance: perf, equity: eq, perfHistory: ph}
 }
 
 // Home replies with the static landing string (always 200).
@@ -134,6 +141,21 @@ func (ctl *Controller) EquityHistory(c echo.Context) error {
 	if err != nil {
 		ctl.log.Error("EquityHistory 發生錯誤:", err)
 		return c.JSONPretty(http.StatusOK, []dto.LiveEquityPoint{}, "  ")
+	}
+	return c.JSONPretty(http.StatusOK, rows, "  ")
+}
+
+// PerformanceHistory returns the unified date-axis performance timeline
+// (backtest + live metrics per trading day) for the frontend's history chart.
+// On service error it logs and returns 200 + an empty typed slice, matching the
+// other handlers' lenient contract.
+func (ctl *Controller) PerformanceHistory(c echo.Context) error {
+	ctl.log.Info("GET /api/get_performance_history")
+	// 呼叫 service 取得統一日期軸績效歷史;發生錯誤時回傳空陣列維持前端寬鬆契約。
+	rows, err := ctl.perfHistory.History(c.Request().Context())
+	if err != nil {
+		ctl.log.Error("PerformanceHistory 發生錯誤:", err)
+		return c.JSONPretty(http.StatusOK, []dto.PerformanceHistoryPoint{}, "  ")
 	}
 	return c.JSONPretty(http.StatusOK, rows, "  ")
 }

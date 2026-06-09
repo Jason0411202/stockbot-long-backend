@@ -58,11 +58,17 @@ func (fakeEquity) EquityHistory(ctx context.Context) ([]dto.LiveEquityPoint, err
 	return nil, nil
 }
 
+type fakePerfHistory struct{}
+
+func (fakePerfHistory) History(ctx context.Context) ([]dto.PerformanceHistoryPoint, error) {
+	return nil, nil
+}
+
 // newTestController builds a Controller from the fakes + a discard logger.
 func newTestController() *controller.Controller {
 	log := logrus.New()
 	log.SetOutput(io.Discard)
-	return controller.New(log, fakePortfolio{}, fakeStatistic{}, fakeHistory{}, fakePerformance{}, fakeEquity{})
+	return controller.New(log, fakePortfolio{}, fakeStatistic{}, fakeHistory{}, fakePerformance{}, fakeEquity{}, fakePerfHistory{})
 }
 
 // TestBuildEcho_OpsRoutes 驗證 BuildEcho 正確掛載 /health、/ready、/metrics 及業務路由，並回傳預期狀態碼。
@@ -83,11 +89,12 @@ func TestBuildEcho_OpsRoutes(t *testing.T) {
 		path string
 		want int
 	}{
-		{"/health", http.StatusOK},                 // liveness 永遠 200
-		{"/ready", http.StatusOK},                  // mock DB ping 成功 → ready
-		{"/metrics", http.StatusOK},                // Prometheus 端點
-		{"/", http.StatusOK},                       // 業務 home
-		{"/api/get_equity_history", http.StatusOK}, // 實盤每日權益歷史
+		{"/health", http.StatusOK},                      // liveness 永遠 200
+		{"/ready", http.StatusOK},                       // mock DB ping 成功 → ready
+		{"/metrics", http.StatusOK},                     // Prometheus 端點
+		{"/", http.StatusOK},                            // 業務 home
+		{"/api/get_equity_history", http.StatusOK},      // 實盤每日權益歷史
+		{"/api/get_performance_history", http.StatusOK}, // 統一日期軸績效歷史
 	}
 	for _, c := range cases {
 		t.Run(c.path, func(t *testing.T) {

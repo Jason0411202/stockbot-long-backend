@@ -473,13 +473,13 @@ func TestEquityHistory_RecordEquity(t *testing.T) {
 	// Arrange
 	db, mock := newMock(t)
 	repo := NewEquityHistoryRepository(db)
-	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO EquityHistory (date, cash, holding_value, total_equity) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE cash = VALUES(cash), holding_value = VALUES(holding_value), total_equity = VALUES(total_equity);")).
-		WithArgs("2024-06-06", 12345.5, 67890.25, 80235.75).
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO EquityHistory (date, cash, holding_value, total_equity, cost_basis) VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE cash = VALUES(cash), holding_value = VALUES(holding_value), total_equity = VALUES(total_equity), cost_basis = VALUES(cost_basis);")).
+		WithArgs("2024-06-06", 12345.5, 67890.25, 80235.75, 50000.0).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Act + Assert
 	err := repo.RecordEquity(ctx, entity.EquitySnapshot{
-		Date: "2024-06-06", Cash: 12345.5, HoldingValue: 67890.25, TotalEquity: 80235.75,
+		Date: "2024-06-06", Cash: 12345.5, HoldingValue: 67890.25, TotalEquity: 80235.75, CostBasis: 50000.0,
 	})
 	if err != nil {
 		t.Fatalf("RecordEquity: %v", err)
@@ -492,16 +492,16 @@ func TestEquityHistory_ListEquityAsc(t *testing.T) {
 	// Arrange
 	db, mock := newMock(t)
 	repo := NewEquityHistoryRepository(db)
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT date, cash, holding_value, total_equity FROM EquityHistory ORDER BY date ASC;")).
-		WillReturnRows(sqlmock.NewRows([]string{"date", "cash", "holding_value", "total_equity"}).
-			AddRow("2024-01-02", 1000.0, 2000.0, 3000.0).
-			AddRow("2024-01-03", 900.0, 2200.0, 3100.0))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT date, cash, holding_value, total_equity, cost_basis FROM EquityHistory ORDER BY date ASC;")).
+		WillReturnRows(sqlmock.NewRows([]string{"date", "cash", "holding_value", "total_equity", "cost_basis"}).
+			AddRow("2024-01-02", 1000.0, 2000.0, 3000.0, 1800.0).
+			AddRow("2024-01-03", 900.0, 2200.0, 3100.0, 1900.0))
 
 	// Act
 	out, err := repo.ListEquityAsc(ctx)
 
 	// Assert
-	if err != nil || len(out) != 2 || out[0].Date != "2024-01-02" || out[0].HoldingValue != 2000.0 || out[1].TotalEquity != 3100.0 {
+	if err != nil || len(out) != 2 || out[0].Date != "2024-01-02" || out[0].HoldingValue != 2000.0 || out[1].TotalEquity != 3100.0 || out[0].CostBasis != 1800.0 {
 		t.Fatalf("ListEquityAsc = (%+v, %v)", out, err)
 	}
 	assertMet(t, mock)
