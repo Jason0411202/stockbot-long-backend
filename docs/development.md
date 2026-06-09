@@ -44,6 +44,7 @@ go run ./cmd/eval_csv     # 全期 + walk-forward + IS/OOS 評估
 | `go run ./cmd/server` | 啟動正式 server 與交易 loop |
 | `go run ./cmd/fetch_data` | 下載追蹤標的歷史資料到 `data/*.csv` |
 | `go run ./cmd/eval_csv` | 使用 CSV 執行全期與 walk-forward 評估 |
+| `go run ./cmd/sweep` | 對策略旋鈕暴力網格搜尋（四關卡過濾 + Calmar 排序 + OOS 護欄；不改 config） |
 | `go run ./cmd/evaluate` | 使用 DB 資料執行 walk-forward 評估 |
 | `go run ./cmd/research_run` | 使用 DB 資料跑單一研究回測 |
 | `go run ./cmd/db_probe` | 檢查 DB schema、table 與資料筆數 |

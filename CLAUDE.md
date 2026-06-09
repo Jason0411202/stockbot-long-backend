@@ -20,6 +20,7 @@ gofmt -l .               # 列出未格式化檔案（應為空）
 go run ./cmd/server      # 啟動正式 server + 上線交易 loop
 go run ./cmd/fetch_data  # 下載 TWSE 歷史資料到 data/*.csv
 go run ./cmd/eval_csv    # 用 CSV 跑全期 + walk-forward + IS/OOS 評估
+go run ./cmd/sweep       # 對策略旋鈕暴力網格搜尋 (四關卡過濾 + Calmar 排序 + OOS 護欄;不改 config)
 go run ./cmd/evaluate    # 用 DB 資料跑 walk-forward 評估
 go run ./cmd/research_run# 用 DB 資料跑單一研究回測
 go run ./cmd/db_probe    # 檢查 DB schema / table / 筆數

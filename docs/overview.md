@@ -31,6 +31,7 @@
 | `cmd/server` | 正式 HTTP server 與線上交易 loop 入口 |
 | `cmd/fetch_data` | 下載 TWSE 歷史資料到本機 CSV |
 | `cmd/eval_csv` | 用本機 CSV 離線評估策略與回測 |
+| `cmd/sweep` | 用本機 CSV 對策略旋鈕暴力網格搜尋，依四關卡 + Calmar + OOS 護欄排序 |
 | `cmd/evaluate` | 使用 DB 資料執行 walk-forward 評估 |
 | `cmd/research_run` | 執行單一長區間研究回測 |
 | `cmd/db_probe` | 檢查 MariaDB schema 與資料筆數 |

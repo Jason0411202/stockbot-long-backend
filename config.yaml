@@ -17,8 +17,12 @@ decision_price_basis: open
 
 # 資料回補相關
 max_back_months: 1
-init_db_back_months: 60
-back_testing_months: 60
+# 刻意設成遠超任何台股 ETF 資料起點的大值 (360 月 = 30 年,1996 起),讓「資料回補深度」永遠不是
+# 回測 / catch-up 起點的瓶頸;真正的下限改由「最晚上市的追蹤股票」決定 (現為 00830 約 2019)。
+# 代價:首次 (或加深後第一次) 回補會逐月往回打 TWSE,上市前的空月回傳空資料並標記完成,
+# 之後重啟即跳過 (BackfillStatus)。空月仍各睡 3 秒,故首跑較久 (約 months×檔數×3 秒),屬一次性成本。
+init_db_back_months: 360
+back_testing_months: 360
 
 # 起始現金:期初一次性投入本金 (lump-sum)。整個策略只動用這筆錢,不再從外部追加。
 initial_cash: 100000
