@@ -78,13 +78,23 @@ func (f fakeEquity) EquityHistory(ctx context.Context) ([]dto.LiveEquityPoint, e
 	return f.rows, f.err
 }
 
+// fakePerfHistory implements PerformanceHistoryReporter with canned rows or an error.
+type fakePerfHistory struct {
+	rows []dto.PerformanceHistoryPoint
+	err  error
+}
+
+func (f fakePerfHistory) History(ctx context.Context) ([]dto.PerformanceHistoryPoint, error) {
+	return f.rows, f.err
+}
+
 // newController builds a Controller from the supplied fakes + a discard logger.
-// The equity reporter defaults to an empty fakeEquity; equity-specific tests
-// build the Controller directly via New to inject canned rows / errors.
+// The equity / perf-history reporters default to empty fakes; their dedicated
+// tests build the Controller directly via New to inject canned rows / errors.
 func newController(p PortfolioService, s StatisticService, h StockHistoryService, perf PerformanceReporter) *Controller {
 	log := logrus.New()
 	log.SetOutput(io.Discard)
-	return New(log, p, s, h, perf, fakeEquity{})
+	return New(log, p, s, h, perf, fakeEquity{}, fakePerfHistory{})
 }
 
 // invoke builds a GET request and runs the handler method, returning the recorder.
@@ -219,7 +229,14 @@ func TestPerformanceHandler_ErrorReturnsEmpty(t *testing.T) {
 func newControllerWithEquity(eq EquityHistoryReporter) *Controller {
 	log := logrus.New()
 	log.SetOutput(io.Discard)
-	return New(log, fakePortfolio{}, fakeStatistic{}, fakeHistory{}, fakePerformance{}, eq)
+	return New(log, fakePortfolio{}, fakeStatistic{}, fakeHistory{}, fakePerformance{}, eq, fakePerfHistory{})
+}
+
+// newControllerWithPerfHistory builds a Controller with a specific perf-history reporter (empty fakes elsewhere).
+func newControllerWithPerfHistory(ph PerformanceHistoryReporter) *Controller {
+	log := logrus.New()
+	log.SetOutput(io.Discard)
+	return New(log, fakePortfolio{}, fakeStatistic{}, fakeHistory{}, fakePerformance{}, fakeEquity{}, ph)
 }
 
 // TestEquityHistoryHandler_OK 驗證 EquityHistory handler 在 service 正常時回傳 200。
@@ -240,6 +257,28 @@ func TestEquityHistoryHandler_ErrorReturnsEmpty(t *testing.T) {
 
 	// Act + Assert
 	if rec := invoke(t, ctl.EquityHistory, "/api/get_equity_history"); rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 with empty array", rec.Code)
+	}
+}
+
+// TestPerformanceHistoryHandler_OK 驗證 PerformanceHistory handler 在 service 正常時回傳 200。
+func TestPerformanceHistoryHandler_OK(t *testing.T) {
+	// Arrange
+	ctl := newControllerWithPerfHistory(fakePerfHistory{rows: []dto.PerformanceHistoryPoint{{Date: "2024-01-02", StratEquity: 1000}}})
+
+	// Act + Assert
+	if rec := invoke(t, ctl.PerformanceHistory, "/api/get_performance_history"); rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+}
+
+// TestPerformanceHistoryHandler_ErrorReturnsEmpty 驗證 service 失敗時 handler 回傳 200 加空陣列，不外洩錯誤。
+func TestPerformanceHistoryHandler_ErrorReturnsEmpty(t *testing.T) {
+	// Arrange — service 失敗 → handler 應回 200 + 空陣列。
+	ctl := newControllerWithPerfHistory(fakePerfHistory{err: errFake})
+
+	// Act + Assert
+	if rec := invoke(t, ctl.PerformanceHistory, "/api/get_performance_history"); rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 with empty array", rec.Code)
 	}
 }

@@ -53,9 +53,17 @@ go run ./cmd/evaluate
 go run ./cmd/research_run
 ```
 
+若要對策略旋鈕做暴力網格搜尋（每組都跑全期 + walk-forward + 滾動 IS/OOS，先以四道關卡硬性過濾、再依全期 Calmar 排序，並列出 OOS 保留率與最差折 Calmar 以避免挑到過擬合組合）：
+
+```bash
+go run ./cmd/sweep        # 不改 config.yaml,只印排行供人工核可
+```
+
 ## 目前結果
 
 追蹤標的為 `00631L + 00830`，區間約為 2019-05 到 2026-06。`00631L` 是 2 倍槓桿 ETF，現行參數已針對其波動特性重新調校。
+
+回測起點不是設定值，而是 `CommonIssuanceStart`：「所有追蹤股票都已有資料的最早日」，取各股第一筆資料日的**最大值**，故被**最晚上市**的追蹤股票（`00830`，約 2019-05）綁定——這確保整段期間每檔標的都存在、不在某檔尚未上市的空窗期做決策。`config.yaml` 的 `init_db_back_months` 刻意設成遠超任何資料起點的大值（360 月），讓「資料回補深度」不會成為更緊的天花板；真正的下限永遠由 `00830` 的上市日決定。若要把起點推到 `00631L` 的 2014 上市日，需把 `00830` 移出 `track_stocks`（兩檔聯合回測無法早於 `00830`）。
 
 決策基準為**開盤價**（`decision_price_basis: open`）：以當日開盤價成交、指標只看到前一交易日收盤（見 [strategy.md](strategy.md)）。回測與線上同此基準。下列數字為開盤基準、lump-sum 資金模型重新調參後（`regime_ma_window 85`、`trail_stop_bear 0.08`、`bull_buy_band 0.08`、`cooldown_break_budget 3`、`00631L` 覆寫 `regime_ma_window 60` 與 `trail_reentry_cooldown_days 42`）的結果。
 
@@ -96,6 +104,8 @@ go run ./cmd/research_run
 `cmd/eval_csv` 會執行滾動式 OOS 驗證，用來檢查策略是否只在樣本內好看。現行配置 OOS 中位 Calmar 約 2.43，約為 IS Calmar 1.87 的 **130%**（OOS 比 IS 更佳，非靠壓低 IS 分母），三折 OOS 皆通過 5/5 關卡、最差折 Calmar 1.96，判讀為「穩健」，表示樣本外未退化。
 
 > 註：資金模型由「每月定額注資」改為 lump-sum 後重新以 walk-forward / IS-OOS 掃描調參，發現只需放寬兩個共用旋鈕即可把全期 Calmar 由 1.65 提升到 1.80（`bull_buy_band 0.05→0.08`，讓一次性本金在確認牛市時更快部署，0.08 以上已飽和；`cooldown_break_budget 2→3`，封閉資金池更需把握深跌買點）。`regime_ma_window 85`、`trail_stop_bear 0.08` 等其餘旋鈕重掃後確認仍是最佳點，未因資金模型改變而偏移。
+
+> 暴力搜尋驗證（`cmd/sweep`，8 旋鈕 × 14,580 組合，全期 2019-05～2026-06）：2,136 組通過四道關卡，現行 config 的全期 Calmar 排名第 5。唯一在「Calmar↑ 且 MWR / 回撤 / OOS 最差折皆不輸」嚴格意義上勝過現行的組合，只是把 `bull_buy_band` 0.08→0.11（Calmar 1.80→1.83，噪聲級且與「band 飽和」結論一致），故**不採用**。MWR 更高的組合 OOS 全數退化（保留率 37–46%、最差折 < 0.8）為過擬合，被 OOS 護欄正確擋下。結論：現行參數已是該網格的近最佳解。
 
 per-stock 覆寫採用準則：
 

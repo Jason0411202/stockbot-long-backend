@@ -21,6 +21,7 @@
 | `GET` | `/api/get_stock_history_data?stock_id=00631L` | 取得指定股票歷史收盤資料 |
 | `GET` | `/api/get_performance_summary` | 取得策略績效摘要（本金明細 + 實盤現況 + 回測指標 + 回測權益曲線） |
 | `GET` | `/api/get_equity_history` | 取得實盤每日權益歷史（真實帳戶總權益時間序列，供歷史權益折線圖） |
+| `GET` | `/api/get_performance_history` | 取得統一日期軸的逐日績效序列（回測 + 實盤兩組指標對齊同一時間軸） |
 
 ## `/api/get_performance_summary`
 
@@ -56,11 +57,29 @@
 - 既有部署升級後從升級點起逐日累積（過往未持久化的日期不回填，與 `total_contributed` 的「只累計新月份」一致）。
 - 無資料時回傳 `[]`。
 
+## `/api/get_performance_history`
+
+回傳**一條統一日期時間軸**的逐日序列（升冪、等距取樣 ≤ 400 點），每個日期點同時帶「回測」與「實盤」兩組指標，
+供前端把模擬與真實表現畫在同一張折線圖。日期軸取自全期回測曲線（涵蓋共同上市日 ~ 今天）。
+
+- **回測欄位**（全期皆有值）：`strat_equity`、`bh_equity`、`strat_multiple`、`bh_multiple`、
+  `strat_return_rate`、`bh_return_rate`、`strat_drawdown`、`bh_drawdown`、`strat_cagr`（基期過短時為 `null`）。
+- **實盤欄位**（go-live 後才有，之前為 `null`）：`cash`、`holding_value`、`total_equity`、`holding_ratio`、`cash_ratio`、
+  `total_pnl`、`total_return_rate`、`multiple`、`realized_pnl`、`unrealized_pnl`、`cagr`、`max_drawdown`。
+- **共用**：`invested`（投入本金到當日；lump-sum 為常數 = 期初本金）。
+
+實盤欄位以指標型承載：對應日期無實盤快照（go-live 前）→ `null`。`unrealized_pnl = holding_value − cost_basis`、
+`realized_pnl = (total_equity − invested) − unrealized_pnl`（由 `EquityHistory.cost_basis` 還原，不需另存已/未實現損益）。
+單位：金額為元、倍數為倍、比率（report_rate / cagr / ratio / drawdown）為百分比。
+
+回測 `*_drawdown` 與實盤 `max_drawdown` 為「距當下為止歷史高點」的累進回撤（非全期單一最大回撤）。
+
 ## 回應資料
 
 API 回應由 `internal/dto` 定義。`portfolio.go` 對應投資組合損益，`market.go` 對應價格統計與歷史價格點，
 `performance.go` 對應策略績效摘要（含 `JSONFloat`：NaN/±Inf 序列化為 `null`；以及回測 `equity_curve` 的 `EquityPoint`），
-`equity.go` 對應實盤每日權益歷史（`LiveEquityPoint`）。
+`equity.go` 對應實盤每日權益歷史（`LiveEquityPoint`），
+`performance_history.go` 對應統一日期軸績效歷史（`PerformanceHistoryPoint`；實盤欄位為 `*float64`，nil → JSON `null`）。
 
 ## 錯誤處理
 

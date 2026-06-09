@@ -102,6 +102,7 @@ Primary key 是 `(stock_id, buy_date, sell_date)`。
 | `cash` | `DECIMAL(14,2)` | 當日閒置現金（未投入股市的預備現金） |
 | `holding_value` | `DECIMAL(14,2)` | 當日持股市值 |
 | `total_equity` | `DECIMAL(14,2)` | 當日總權益 = 現金 + 持股市值 |
+| `cost_basis` | `DECIMAL(14,2)` | 當日持倉總成本（供 `/api/get_performance_history` 還原未實現損益 = 持股市值 − 成本基礎） |
 | `updated_at` | `DATETIME` | 最後更新時間 |
 
 Primary key 是 `date`。catch-up 回放與每日 loop 皆以 `date` upsert（`RecordEquity`），故同一天重覆處理會覆寫而非重複插入。

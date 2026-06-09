@@ -26,4 +26,5 @@ type EquitySnapshot struct {
 	Cash         float64 // cash          DECIMAL(14,2) NOT NULL
 	HoldingValue float64 // holding_value DECIMAL(14,2) NOT NULL
 	TotalEquity  float64 // total_equity  DECIMAL(14,2) NOT NULL
+	CostBasis    float64 // cost_basis    DECIMAL(14,2) NOT NULL (持倉總成本;未實現損益 = 持股市值 − 成本基礎)
 }

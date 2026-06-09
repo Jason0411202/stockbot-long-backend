@@ -24,8 +24,8 @@ func NewEquityHistoryRepository(db *sql.DB) *EquityHistoryRepository {
 // RecordEquity 以 upsert 寫入某交易日的權益快照;date 已存在時覆寫現金 / 持股市值 / 總權益。
 // 同一天被 catch-up 與每日 loop 重覆處理時覆寫而非重複插入。
 func (r *EquityHistoryRepository) RecordEquity(ctx context.Context, snap entity.EquitySnapshot) error {
-	const query = "INSERT INTO EquityHistory (date, cash, holding_value, total_equity) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE cash = VALUES(cash), holding_value = VALUES(holding_value), total_equity = VALUES(total_equity);"
-	if _, err := r.db.ExecContext(ctx, query, snap.Date, snap.Cash, snap.HoldingValue, snap.TotalEquity); err != nil {
+	const query = "INSERT INTO EquityHistory (date, cash, holding_value, total_equity, cost_basis) VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE cash = VALUES(cash), holding_value = VALUES(holding_value), total_equity = VALUES(total_equity), cost_basis = VALUES(cost_basis);"
+	if _, err := r.db.ExecContext(ctx, query, snap.Date, snap.Cash, snap.HoldingValue, snap.TotalEquity, snap.CostBasis); err != nil {
 		return fmt.Errorf("upsert equity history %q: %w", snap.Date, err)
 	}
 	return nil
@@ -33,7 +33,7 @@ func (r *EquityHistoryRepository) RecordEquity(ctx context.Context, snap entity.
 
 // ListEquityAsc 以日期升冪回傳所有每日權益快照 (date 為 "YYYY-MM-DD" 字串,字典序即時序)。
 func (r *EquityHistoryRepository) ListEquityAsc(ctx context.Context) ([]entity.EquitySnapshot, error) {
-	const query = "SELECT date, cash, holding_value, total_equity FROM EquityHistory ORDER BY date ASC;"
+	const query = "SELECT date, cash, holding_value, total_equity, cost_basis FROM EquityHistory ORDER BY date ASC;"
 	rows, err := r.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("query equity history: %w", err)
@@ -44,7 +44,7 @@ func (r *EquityHistoryRepository) ListEquityAsc(ctx context.Context) ([]entity.E
 	var out []entity.EquitySnapshot
 	for rows.Next() {
 		var s entity.EquitySnapshot
-		if err := rows.Scan(&s.Date, &s.Cash, &s.HoldingValue, &s.TotalEquity); err != nil {
+		if err := rows.Scan(&s.Date, &s.Cash, &s.HoldingValue, &s.TotalEquity, &s.CostBasis); err != nil {
 			return nil, fmt.Errorf("scan equity history: %w", err)
 		}
 		out = append(out, s)

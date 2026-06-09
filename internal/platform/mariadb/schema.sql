@@ -76,6 +76,10 @@ CREATE TABLE IF NOT EXISTS EquityHistory (
     cash DECIMAL(14, 2) NOT NULL, -- 當日閒置現金 (未投入股市的預備現金)
     holding_value DECIMAL(14, 2) NOT NULL, -- 當日持股市值
     total_equity DECIMAL(14, 2) NOT NULL, -- 當日總權益 = 現金 + 持股市值
+    cost_basis DECIMAL(14, 2) NOT NULL DEFAULT 0, -- 當日持倉總成本 (供未實現損益 = 持股市值 − 成本基礎)
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (date)
 );
+
+-- 向後相容:既有 EquityHistory 表補上 cost_basis 欄位 (舊列以 0 計,下次 catch-up 覆寫即修正)。
+ALTER TABLE EquityHistory ADD COLUMN IF NOT EXISTS cost_basis DECIMAL(14, 2) NOT NULL DEFAULT 0;
