@@ -40,7 +40,13 @@ type PerformanceReporter interface {
 	Summary(ctx context.Context) (dto.PerformanceSummary, error)
 }
 
-// Controller wires the four business services + a logger into Echo handler
+// EquityHistoryReporter is the consumer-side view of the live daily equity
+// history: the real account's cash / holding / total-equity time series.
+type EquityHistoryReporter interface {
+	EquityHistory(ctx context.Context) ([]dto.LiveEquityPoint, error)
+}
+
+// Controller wires the five business services + a logger into Echo handler
 // methods. Dependencies are constructor-injected so handlers stay unit-testable
 // with fakes (no DB, no server).
 type Controller struct {
@@ -49,11 +55,12 @@ type Controller struct {
 	statistic   StatisticService
 	history     StockHistoryService
 	performance PerformanceReporter
+	equity      EquityHistoryReporter
 }
 
-// New constructs a Controller from its logger and the four business services.
-func New(log *logrus.Logger, p PortfolioService, s StatisticService, h StockHistoryService, perf PerformanceReporter) *Controller {
-	return &Controller{log: log, portfolio: p, statistic: s, history: h, performance: perf}
+// New constructs a Controller from its logger and the five business services.
+func New(log *logrus.Logger, p PortfolioService, s StatisticService, h StockHistoryService, perf PerformanceReporter, eq EquityHistoryReporter) *Controller {
+	return &Controller{log: log, portfolio: p, statistic: s, history: h, performance: perf, equity: eq}
 }
 
 // Home replies with the static landing string (always 200).
@@ -114,6 +121,21 @@ func (ctl *Controller) PerformanceSummary(c echo.Context) error {
 		return c.JSONPretty(http.StatusOK, dto.PerformanceSummary{}, "  ")
 	}
 	return c.JSONPretty(http.StatusOK, summary, "  ")
+}
+
+// EquityHistory returns the live daily equity time series (cash / holding /
+// total equity) for the frontend's historical equity chart. On service error it
+// logs and returns 200 + an empty typed slice, matching the other handlers'
+// lenient contract.
+func (ctl *Controller) EquityHistory(c echo.Context) error {
+	ctl.log.Info("GET /api/get_equity_history")
+	// 呼叫 service 取得每日權益歷史;發生錯誤時回傳空陣列維持前端寬鬆契約。
+	rows, err := ctl.equity.EquityHistory(c.Request().Context())
+	if err != nil {
+		ctl.log.Error("EquityHistory 發生錯誤:", err)
+		return c.JSONPretty(http.StatusOK, []dto.LiveEquityPoint{}, "  ")
+	}
+	return c.JSONPretty(http.StatusOK, rows, "  ")
 }
 
 // StockHistoryData returns the close-price series for the stockId query param.

@@ -11,6 +11,7 @@
 | `RealizedGainsLosses` | 保存已賣出的損益紀錄 | `PortfolioService.SellShares` |
 | `BackfillStatus` | 記錄某檔股票某月份是否已完整回補 | `MarketDataService` |
 | `BotState` | 保存線上交易跨重啟狀態 | `TradingService` |
+| `EquityHistory` | 保存每個交易日的真實帳戶權益快照（供歷史權益折線圖） | `TradingService` |
 
 ## `StockHistory`
 
@@ -87,5 +88,22 @@ Primary key 是 `(stock_id, buy_date, sell_date)`。
 | --- | --- |
 | `last_processed_date` | 引擎已處理過的最後交易日，格式 `YYYY-MM-DD` |
 | `current_cash` | 引擎目前現金，字串化 float64 |
+| `total_contributed` | 累計每月注資總額（不含期初），字串化 float64 |
 
-這兩個值讓服務重啟後能從正確日期接續 catch-up，並維持 no-borrow 現金約束。
+這些值讓服務重啟後能從正確日期接續 catch-up、維持 no-borrow 現金約束，並提供 API 本金明細。
+
+## `EquityHistory`
+
+`EquityHistory` 保存線上引擎逐日寫入的真實帳戶權益快照，供 `/api/get_equity_history` 繪製歷史權益折線圖。
+
+| 欄位 | 型別 | 說明 |
+| --- | --- | --- |
+| `date` | `VARCHAR(10)` | 交易日，格式 `YYYY-MM-DD`，PK |
+| `cash` | `DECIMAL(14,2)` | 當日閒置現金（未投入股市的預備現金） |
+| `holding_value` | `DECIMAL(14,2)` | 當日持股市值 |
+| `total_equity` | `DECIMAL(14,2)` | 當日總權益 = 現金 + 持股市值 |
+| `updated_at` | `DATETIME` | 最後更新時間 |
+
+Primary key 是 `date`。catch-up 回放與每日 loop 皆以 `date` upsert（`RecordEquity`），故同一天重覆處理會覆寫而非重複插入。
+此表為**真實帳本走勢**，與回測 `equity_curve` 不同：全新部署（清空 BotState + 帳本）首跑會從 common issuance 回放補齊全期；
+既有部署升級後從升級點起累積（過往日期不回填，與 `total_contributed` 的「只累計新月份」一致）。

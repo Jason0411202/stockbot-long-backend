@@ -66,6 +66,7 @@ func main() {
 	ledgerRepo := repository.NewLedgerRepository(db)
 	stateRepo := repository.NewBotStateRepository(db)
 	backfillRepo := repository.NewBackfillRepository(db)
+	equityRepo := repository.NewEquityHistoryRepository(db)
 
 	// --- clients (外部系統) ---
 	twseClient := twse.NewClient()
@@ -81,8 +82,9 @@ func main() {
 	statSvc := service.NewStatisticService(stockRepo, cfg, log)
 	histSvc := service.NewStockHistoryService(stockRepo, log)
 	perfSvc := service.NewPerformanceService(cfg, portfolioSvc, stateRepo, stockRepo, log)
+	equitySvc := service.NewEquityHistoryService(equityRepo, log)
 	engine := trading.NewEngine(cfg)
-	tradingSvc := service.NewTradingService(engine, portfolioSvc, marketSvc, stockRepo, ledgerRepo, stateRepo, discordClient, realtimeClient, cfg, log)
+	tradingSvc := service.NewTradingService(engine, portfolioSvc, marketSvc, stockRepo, ledgerRepo, stateRepo, equityRepo, discordClient, realtimeClient, cfg, log)
 
 	// --- 初始 DB 回補 (取代舊 sqls.InitDatabase 的回補邏輯) ---
 	if cfg.InitDBBackMonths > cfg.MaxBackMonths {
@@ -103,7 +105,7 @@ func main() {
 	}
 
 	// --- controller + echo (HTTP transport) ---
-	ctrl := controller.New(log, portfolioSvc, statSvc, histSvc, perfSvc)
+	ctrl := controller.New(log, portfolioSvc, statSvc, histSvc, perfSvc, equitySvc)
 	go server.Run(log, db, ctrl)
 
 	// --- 上線交易 loop (阻塞,取代舊 kernals.DailyCheck) ---

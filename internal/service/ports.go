@@ -70,6 +70,15 @@ type StateStore interface {
 	Set(ctx context.Context, key, value string) error
 }
 
+// EquityStore 是實盤每日權益快照 (EquityHistory) 的資料存取 port，
+// 由 *repository.EquityHistoryRepository 實作。
+// 線上引擎 (TradingService) 逐日以 RecordEquity 寫入快照;
+// 績效讀取 (EquityHistoryService) 以 ListEquityAsc 取回升冪全序列供歷史權益折線圖。
+type EquityStore interface {
+	RecordEquity(ctx context.Context, snap entity.EquitySnapshot) error
+	ListEquityAsc(ctx context.Context) ([]entity.EquitySnapshot, error)
+}
+
 // Notifier 是對外通知 port，TradingService 使用它發送開機通知與每筆成交的 Discord embed，
 // 由 *client/discord.Client 實作。
 //   - SendEmbed:單行描述 embed (開機 / 系統通知用)。

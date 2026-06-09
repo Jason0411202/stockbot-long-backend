@@ -250,5 +250,32 @@ func (f *fakeRealtime) FetchOpens(_ context.Context, _ []string) (map[string]flo
 	return f.opens, nil
 }
 
+// fakeEquity 模擬 EquityStore，記錄每次 RecordEquity 寫入的快照供斷言，並可回傳預設清單供讀取測試。
+type fakeEquity struct {
+	recorded []entity.EquitySnapshot
+	list     []entity.EquitySnapshot
+	recErr   error
+	listErr  error
+}
+
+// newFakeEquity 建立並回傳已初始化的 fakeEquity 實例。
+func newFakeEquity() *fakeEquity {
+	return &fakeEquity{}
+}
+
+// RecordEquity 記錄寫入的權益快照，recErr 非 nil 時回傳錯誤。
+func (f *fakeEquity) RecordEquity(_ context.Context, snap entity.EquitySnapshot) error {
+	if f.recErr != nil {
+		return f.recErr
+	}
+	f.recorded = append(f.recorded, snap)
+	return nil
+}
+
+// ListEquityAsc 回傳預設的每日權益快照清單，listErr 非 nil 時回傳錯誤。
+func (f *fakeEquity) ListEquityAsc(_ context.Context) ([]entity.EquitySnapshot, error) {
+	return f.list, f.listErr
+}
+
 // errFake is a sentinel error for the fakes.
 var errFake = fmt.Errorf("fake error")

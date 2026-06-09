@@ -68,11 +68,23 @@ func (f fakePerformance) Summary(ctx context.Context) (dto.PerformanceSummary, e
 	return f.summary, f.err
 }
 
+// fakeEquity implements EquityHistoryReporter with canned rows or an error.
+type fakeEquity struct {
+	rows []dto.LiveEquityPoint
+	err  error
+}
+
+func (f fakeEquity) EquityHistory(ctx context.Context) ([]dto.LiveEquityPoint, error) {
+	return f.rows, f.err
+}
+
 // newController builds a Controller from the supplied fakes + a discard logger.
+// The equity reporter defaults to an empty fakeEquity; equity-specific tests
+// build the Controller directly via New to inject canned rows / errors.
 func newController(p PortfolioService, s StatisticService, h StockHistoryService, perf PerformanceReporter) *Controller {
 	log := logrus.New()
 	log.SetOutput(io.Discard)
-	return New(log, p, s, h, perf)
+	return New(log, p, s, h, perf, fakeEquity{})
 }
 
 // invoke builds a GET request and runs the handler method, returning the recorder.
@@ -200,5 +212,34 @@ func TestPerformanceHandler_ErrorReturnsEmpty(t *testing.T) {
 	// Act + Assert
 	if rec := invoke(t, ctl.PerformanceSummary, "/api/get_performance_summary"); rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 with empty object", rec.Code)
+	}
+}
+
+// newControllerWithEquity builds a Controller with a specific equity reporter (empty fakes elsewhere).
+func newControllerWithEquity(eq EquityHistoryReporter) *Controller {
+	log := logrus.New()
+	log.SetOutput(io.Discard)
+	return New(log, fakePortfolio{}, fakeStatistic{}, fakeHistory{}, fakePerformance{}, eq)
+}
+
+// TestEquityHistoryHandler_OK 驗證 EquityHistory handler 在 service 正常時回傳 200。
+func TestEquityHistoryHandler_OK(t *testing.T) {
+	// Arrange
+	ctl := newControllerWithEquity(fakeEquity{rows: []dto.LiveEquityPoint{{Date: "2024-01-02", TotalEquity: 1000}}})
+
+	// Act + Assert
+	if rec := invoke(t, ctl.EquityHistory, "/api/get_equity_history"); rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+}
+
+// TestEquityHistoryHandler_ErrorReturnsEmpty 驗證 service 失敗時 handler 回傳 200 加空陣列，不外洩錯誤。
+func TestEquityHistoryHandler_ErrorReturnsEmpty(t *testing.T) {
+	// Arrange — service 失敗 → handler 應回 200 + 空陣列。
+	ctl := newControllerWithEquity(fakeEquity{err: errFake})
+
+	// Act + Assert
+	if rec := invoke(t, ctl.EquityHistory, "/api/get_equity_history"); rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 with empty array", rec.Code)
 	}
 }

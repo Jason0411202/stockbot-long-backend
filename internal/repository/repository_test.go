@@ -466,6 +466,47 @@ func TestBotState_Get_NoRow(t *testing.T) {
 	assertMet(t, mock)
 }
 
+// --- EquityHistoryRepository ---
+
+// TestEquityHistory_RecordEquity 驗證 RecordEquity 以 upsert 寫入一筆每日權益快照。
+func TestEquityHistory_RecordEquity(t *testing.T) {
+	// Arrange
+	db, mock := newMock(t)
+	repo := NewEquityHistoryRepository(db)
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO EquityHistory (date, cash, holding_value, total_equity) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE cash = VALUES(cash), holding_value = VALUES(holding_value), total_equity = VALUES(total_equity);")).
+		WithArgs("2024-06-06", 12345.5, 67890.25, 80235.75).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	// Act + Assert
+	err := repo.RecordEquity(ctx, entity.EquitySnapshot{
+		Date: "2024-06-06", Cash: 12345.5, HoldingValue: 67890.25, TotalEquity: 80235.75,
+	})
+	if err != nil {
+		t.Fatalf("RecordEquity: %v", err)
+	}
+	assertMet(t, mock)
+}
+
+// TestEquityHistory_ListEquityAsc 驗證 ListEquityAsc 依日期升冪讀取每日權益快照並掃描欄位。
+func TestEquityHistory_ListEquityAsc(t *testing.T) {
+	// Arrange
+	db, mock := newMock(t)
+	repo := NewEquityHistoryRepository(db)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT date, cash, holding_value, total_equity FROM EquityHistory ORDER BY date ASC;")).
+		WillReturnRows(sqlmock.NewRows([]string{"date", "cash", "holding_value", "total_equity"}).
+			AddRow("2024-01-02", 1000.0, 2000.0, 3000.0).
+			AddRow("2024-01-03", 900.0, 2200.0, 3100.0))
+
+	// Act
+	out, err := repo.ListEquityAsc(ctx)
+
+	// Assert
+	if err != nil || len(out) != 2 || out[0].Date != "2024-01-02" || out[0].HoldingValue != 2000.0 || out[1].TotalEquity != 3100.0 {
+		t.Fatalf("ListEquityAsc = (%+v, %v)", out, err)
+	}
+	assertMet(t, mock)
+}
+
 // --- BackfillRepository ---
 
 // TestCompletedMonths 驗證 CompletedMonths 回傳指定股票已完成回填的月份集合。

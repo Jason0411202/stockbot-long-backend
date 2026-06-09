@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"time"
 
 	"github.com/sirupsen/logrus"
 
@@ -107,6 +108,13 @@ func (s *PerformanceService) Summary(ctx context.Context) (dto.PerformanceSummar
 		returnRate = totalPnL / totalInvested * 100
 	}
 
+	// 計算資產配置比例:持股與預備現金各佔總權益的百分比 (總權益<=0 時兩者皆 0)。
+	holdingRatio, cashRatio := 0.0, 0.0
+	if totalEquity > 0 {
+		holdingRatio = holdingValue / totalEquity * 100
+		cashRatio = currentCash / totalEquity * 100
+	}
+
 	// 組裝摘要 (金額兩位小數),回測區塊以 best-effort 附加。
 	return dto.PerformanceSummary{
 		InitialCash:         s.cfg.InitialCash,
@@ -116,6 +124,8 @@ func (s *PerformanceService) Summary(ctx context.Context) (dto.PerformanceSummar
 		CurrentCash:         round2(currentCash),
 		HoldingValue:        round2(holdingValue),
 		TotalEquity:         round2(totalEquity),
+		HoldingRatio:        round2(holdingRatio),
+		CashRatio:           round2(cashRatio),
 		RealizedPnL:         round2(realizedPnL),
 		UnrealizedPnL:       round2(unrealizedPnL),
 		TotalPnL:            round2(totalPnL),
@@ -170,8 +180,53 @@ func buildBacktestDTO(full backtest.WindowReport, agg backtest.AggregateReport, 
 		ProfitSells: full.ProfitSells,
 		Skipped:     full.Skipped,
 		FinalCash:   round2(full.StratFinalCash),
+		EquityCurve: equityCurveDTO(full.Dates, full.StratCurve, full.BHCurve),
 		WalkForward: walkForwardDTO(wfp, agg),
 	}
+}
+
+// maxEquityCurvePoints 為回測權益曲線回傳的最大取樣點數;超過時以等距取樣壓縮,
+// 使多年 (數千交易日) 曲線維持合理回應大小,同時保留足夠折線解析度。
+const maxEquityCurvePoints = 400
+
+// sampleStride 回傳讓長度 n 序列等距取樣後點數不超過 maxPoints 的步長 (最小 1)。
+func sampleStride(n, maxPoints int) int {
+	if maxPoints <= 0 || n <= maxPoints {
+		return 1
+	}
+	stride := n / maxPoints
+	if n%maxPoints != 0 {
+		stride++
+	}
+	return stride
+}
+
+// equityCurveDTO 把對齊的「日期 / 策略權益 / B&H 權益」三序列轉成等距取樣的 EquityPoint 切片。
+// 三序列長度需一致 (回測引擎逐日對齊);長度不符或為空時回傳 nil。期末點 (最後一日) 必定入列,確保折線收在期末權益。
+func equityCurveDTO(dates []time.Time, strat, bh []float64) []dto.EquityPoint {
+	n := len(dates)
+	if n == 0 || len(strat) != n || len(bh) != n {
+		return nil
+	}
+	stride := sampleStride(n, maxEquityCurvePoints)
+	pts := make([]dto.EquityPoint, 0, n/stride+1)
+	// 以等距步長取樣每個權益點 (金額兩位小數)。
+	for i := 0; i < n; i += stride {
+		pts = append(pts, dto.EquityPoint{
+			Date:        dates[i].Format(dateLayout),
+			StratEquity: round2(strat[i]),
+			BHEquity:    round2(bh[i]),
+		})
+	}
+	// 補上最後一日 (期末權益),若未恰好落在取樣步長上。
+	if last := n - 1; last%stride != 0 {
+		pts = append(pts, dto.EquityPoint{
+			Date:        dates[last].Format(dateLayout),
+			StratEquity: round2(strat[last]),
+			BHEquity:    round2(bh[last]),
+		})
+	}
+	return pts
 }
 
 // armMetricsDTO 把單條曲線的 SeriesMetrics 映射成 API DTO;期末權益 = 投入本金 × 倍數。

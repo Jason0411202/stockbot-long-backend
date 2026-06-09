@@ -30,9 +30,11 @@ type PerformanceSummary struct {
 	TotalInvested       float64 `json:"total_invested"`       // 投入本金合計 = 期初 + 累計注資
 
 	// ── 實盤現況 (真實帳本 + BotState) ──
-	CurrentCash     float64 `json:"current_cash"`      // 目前閒置現金
+	CurrentCash     float64 `json:"current_cash"`      // 目前閒置現金 (未投入股市的預備現金)
 	HoldingValue    float64 `json:"holding_value"`     // 目前持股市值 (即時收盤價估)
 	TotalEquity     float64 `json:"total_equity"`      // 總權益 = 現金 + 持股市值
+	HoldingRatio    float64 `json:"holding_ratio"`     // 持股佔總資產比例 (%) = 持股市值 / 總權益;總權益<=0 時為 0
+	CashRatio       float64 `json:"cash_ratio"`        // 預備現金佔總資產比例 (%) = 現金 / 總權益;與 holding_ratio 合計約 100
 	RealizedPnL     float64 `json:"realized_pnl"`      // 累計已實現損益
 	UnrealizedPnL   float64 `json:"unrealized_pnl"`    // 目前未實現損益
 	TotalPnL        float64 `json:"total_pnl"`         // 總損益 = 總權益 - 投入本金
@@ -60,7 +62,16 @@ type BacktestPerformance struct {
 	Skipped     int     `json:"skipped"`      // 現金不足被夾取跳過的買入次數
 	FinalCash   float64 `json:"final_cash"`   // 策略期末閒置現金 (現金尾巴)
 
+	EquityCurve []EquityPoint    `json:"equity_curve"` // 全期 (取樣) 每日權益曲線:策略 vs B&H,供前端折線圖
 	WalkForward WalkForwardScore `json:"walk_forward"` // 多視窗穩健性 scorecard
+}
+
+// EquityPoint 是回測權益曲線時間軸上的單一取樣點 (供前端策略 vs B&H 折線圖)。
+// 金額為當日總權益 (現金 + 持股市值,含已注入資金);長序列會被等距取樣以控制回應大小。
+type EquityPoint struct {
+	Date        string  `json:"date"`         // 交易日 (YYYY-MM-DD)
+	StratEquity float64 `json:"strat_equity"` // 策略當日總權益
+	BHEquity    float64 `json:"bh_equity"`    // Buy & Hold 當日總權益
 }
 
 // ArmMetrics 是某一條權益曲線 (策略 / B&H) 在全期回測下的核心績效指標。
