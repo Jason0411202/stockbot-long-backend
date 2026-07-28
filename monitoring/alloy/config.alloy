@@ -1,0 +1,99 @@
+// monitoring/alloy/config.alloy Grafana Alloy 收集器設定:
+// 收集 (1) 所有 Docker 容器 stdout/stderr log、(2) 主機 systemd journal、
+// (3) 主機指標 (內嵌 node exporter)、(4) 容器指標 (內嵌 cAdvisor),
+// log 送往 Loki、指標以 remote_write 送往 Prometheus。
+
+// ---- Docker 容器 log ----
+
+// 透過 docker.sock 探索所有運行中的容器。
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+}
+
+// 將容器名稱與 compose service 名稱轉為 Loki label,方便依服務過濾 log。
+discovery.relabel "containers" {
+  targets = discovery.docker.containers.targets
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+}
+
+// 逐容器讀取 stdout/stderr 並送往 Loki (job=docker)。
+loki.source.docker "containers" {
+  host          = "unix:///var/run/docker.sock"
+  targets       = discovery.docker.containers.targets
+  relabel_rules = discovery.relabel.containers.rules
+  labels        = { job = "docker" }
+  forward_to    = [loki.write.default.receiver]
+}
+
+// ---- 主機 systemd journal (系統 log) ----
+
+// 將 systemd unit 名稱轉為 Loki label。
+loki.relabel "journal" {
+  forward_to = []
+
+  rule {
+    source_labels = ["__journal__systemd_unit"]
+    target_label  = "unit"
+  }
+}
+
+// 讀取主機 journal 並送往 Loki (job=systemd-journal)。
+loki.source.journal "system" {
+  max_age       = "12h"
+  path          = "/var/log/journal"
+  relabel_rules = loki.relabel.journal.rules
+  labels        = { job = "systemd-journal" }
+  forward_to    = [loki.write.default.receiver]
+}
+
+// ---- Loki 寫入端點 ----
+
+loki.write "default" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}
+
+// ---- 主機指標 (內嵌 node exporter) ----
+
+prometheus.exporter.unix "host" {
+  procfs_path = "/host/proc"
+  sysfs_path  = "/host/sys"
+  rootfs_path = "/host/root"
+}
+
+// ---- 容器指標 (內嵌 cAdvisor) ----
+
+prometheus.exporter.cadvisor "containers" {
+  docker_host      = "unix:///var/run/docker.sock"
+  storage_duration = "5m"
+  docker_only      = true
+}
+
+// ---- 指標抓取與轉送 ----
+
+// 每 30 秒抓取主機與容器指標,remote_write 至 Prometheus。
+prometheus.scrape "infra" {
+  targets = array.concat(
+    prometheus.exporter.unix.host.targets,
+    prometheus.exporter.cadvisor.containers.targets,
+  )
+  scrape_interval = "30s"
+  forward_to      = [prometheus.remote_write.default.receiver]
+}
+
+prometheus.remote_write "default" {
+  endpoint {
+    url = "http://prometheus:9090/api/v1/write"
+  }
+}

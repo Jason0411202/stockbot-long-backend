@@ -13,6 +13,7 @@ import (
 	"github.com/Jason0411202/stockbot-long-backend/internal/client/discord"
 	"github.com/Jason0411202/stockbot-long-backend/internal/config"
 	"github.com/Jason0411202/stockbot-long-backend/internal/entity"
+	"github.com/Jason0411202/stockbot-long-backend/internal/metrics"
 	"github.com/Jason0411202/stockbot-long-backend/internal/service/backtest"
 	"github.com/Jason0411202/stockbot-long-backend/internal/service/trading"
 )
@@ -96,9 +97,10 @@ func (s *TradingService) RunOnline(ctx context.Context) error {
 		return fmt.Errorf("目前僅支援 Scaling_Strategy=Baseline, got %s", s.cfg.ScalingStrategy)
 	}
 
-	// 更新最新 TWSE 資料；失敗時記錄錯誤但繼續使用既有 DB 資料。
+	// 更新最新 TWSE 資料；失敗時記錄錯誤與資料源失敗指標,但繼續使用既有 DB 資料。
 	if err := s.market.UpdateDatabase(ctx); err != nil {
-		s.log.Error("UpdateDatabase 錯誤 (不致命,沿用既有 DB):", err)
+		metrics.IncMarketDataError()
+		s.log.WithError(err).Error("UpdateDatabase 錯誤 (不致命,沿用既有 DB)")
 	}
 
 	// 載入所有追蹤股票的價格序列。
@@ -133,7 +135,7 @@ func (s *TradingService) loadSeries(ctx context.Context) (map[string]*trading.St
 	// 對缺少歷史資料的追蹤股票記錄警告。
 	for _, stockID := range s.cfg.TrackStocks {
 		if _, ok := series[stockID]; !ok {
-			s.log.Warn("無歷史資料 stockID=", stockID)
+			s.log.WithField("stock_id", stockID).Warn("無歷史資料")
 		}
 	}
 	return series, nil
@@ -150,9 +152,9 @@ func (s *TradingService) SeedFromDB(ctx context.Context) error {
 	}
 	if hasCash {
 		s.engine.SeedCash(cash)
-		s.log.Infof("從 BotState 還原現金: %.2f", cash)
+		s.log.WithField("cash", cash).Info("從 BotState 還原現金")
 	} else {
-		s.log.Infof("BotState 無現金紀錄,使用 cfg.InitialCash=%.2f", s.cfg.InitialCash)
+		s.log.WithField("initial_cash", s.cfg.InitialCash).Info("BotState 無現金紀錄,使用 cfg.InitialCash")
 	}
 
 	// 從 UnrealizedGainsLosses 讀取所有持倉，還原引擎持倉狀態。
@@ -165,13 +167,13 @@ func (s *TradingService) SeedFromDB(ctx context.Context) error {
 		if perr != nil {
 			date, perr = time.Parse(datetimeLayout, r.TransactionDate)
 			if perr != nil {
-				s.log.Warnf("跳過無法解析的 lot date=%q: %v", r.TransactionDate, perr)
+				s.log.WithError(perr).WithField("date", r.TransactionDate).Warn("跳過無法解析的 lot date")
 				continue
 			}
 		}
 		s.engine.SeedPosition(r.StockID, date, r.Shares, r.TransactionPrice)
 	}
-	s.log.Infof("從 UnrealizedGainsLosses 還原 %d 筆持倉", len(lots))
+	s.log.WithField("lots", len(lots)).Info("從 UnrealizedGainsLosses 還原持倉")
 
 	// 還原各股最後買入日（冷卻計算的時間錨點）。
 	for _, stockID := range s.cfg.TrackStocks {
@@ -186,7 +188,7 @@ func (s *TradingService) SeedFromDB(ctx context.Context) error {
 		if perr != nil {
 			lb, perr = time.Parse(datetimeLayout, raw)
 			if perr != nil {
-				s.log.Warnf("跳過無法解析的 last-buy date=%q for %s: %v", raw, stockID, perr)
+				s.log.WithError(perr).WithFields(logrus.Fields{"date": raw, "stock_id": stockID}).Warn("跳過無法解析的 last-buy date")
 				continue
 			}
 		}
@@ -220,7 +222,7 @@ func (s *TradingService) CatchUp(ctx context.Context, series map[string]*trading
 		}
 		lo := sort.Search(len(allDates), func(i int) bool { return !allDates[i].Before(startFloor) })
 		catchupDates = allDates[lo:]
-		s.log.Infof("首次啟動,從 common issuance %s catch-up", startFloor.Format(dateLayout))
+		s.log.WithField("start", startFloor.Format(dateLayout)).Info("首次啟動,從 common issuance catch-up")
 	} else {
 		idx := sort.Search(len(allDates), func(i int) bool {
 			return allDates[i].After(watermark)
@@ -232,10 +234,11 @@ func (s *TradingService) CatchUp(ctx context.Context, series map[string]*trading
 		return nil
 	}
 
-	s.log.Infof("catch-up %d 天 (%s ~ %s),靜默回放中...",
-		len(catchupDates),
-		catchupDates[0].Format(dateLayout),
-		catchupDates[len(catchupDates)-1].Format(dateLayout))
+	s.log.WithFields(logrus.Fields{
+		"days": len(catchupDates),
+		"from": catchupDates[0].Format(dateLayout),
+		"to":   catchupDates[len(catchupDates)-1].Format(dateLayout),
+	}).Info("catch-up 靜默回放中...")
 
 	// 使用靜默 executor 回放（寫入 DB 但不發 Discord 通知）;每月第一個交易日先注入定額資金。
 	// 注資排程以 backtest.ContributionDue 為單一事實來源,prev 起始為水位線 (首次啟動為零值,故起始日不注資),
@@ -259,19 +262,23 @@ func (s *TradingService) CatchUp(ctx context.Context, series map[string]*trading
 	// 持久化回放後的水位線、現金與本次新增的累計注資。
 	newWatermark := catchupDates[len(catchupDates)-1]
 	if err := s.saveWatermark(ctx, newWatermark); err != nil {
-		s.log.Warn("saveWatermark 失敗 (不致命):", err)
+		s.log.WithError(err).Warn("saveWatermark 失敗 (不致命)")
 	}
 	if err := s.saveCash(ctx, s.engine.Cash()); err != nil {
-		s.log.Warn("saveCash 失敗 (不致命):", err)
+		s.log.WithError(err).Warn("saveCash 失敗 (不致命)")
 	}
 	if runContrib > 0 {
 		if err := s.addTotalContributed(ctx, runContrib); err != nil {
-			s.log.Warn("addTotalContributed 失敗 (不致命):", err)
+			s.log.WithError(err).Warn("addTotalContributed 失敗 (不致命)")
 		}
 	}
 	stats := s.engine.Stats()
-	s.log.Infof("catch-up 完成: cash=%.2f, buys=%d, sells=%d, skipped=%d",
-		s.engine.Cash(), stats.TotalBuys, stats.TotalSells, stats.SkippedBuys)
+	s.log.WithFields(logrus.Fields{
+		"cash":    s.engine.Cash(),
+		"buys":    stats.TotalBuys,
+		"sells":   stats.TotalSells,
+		"skipped": stats.SkippedBuys,
+	}).Info("catch-up 完成")
 	return nil
 }
 
@@ -307,11 +314,11 @@ func (s *TradingService) runDailyLoop(ctx context.Context) error {
 				time.Sleep(60 * time.Second)
 				continue
 			}
-			s.log.Info("開盤決策時段,現在時間:", now)
+			s.log.WithField("now", now.Format(time.RFC3339)).Info("開盤決策時段")
 			// 09:29 起即使未全部就緒也以現有開盤價決策 (逾時 fallback,避免無限等待)。
 			force := now.Minute() >= openWindowForceFromM
 			if err := s.runOneDayAtOpen(ctx, noisy, today, force); err != nil {
-				s.log.Error("runOneDayAtOpen 錯誤:", err)
+				s.log.WithError(err).Error("runOneDayAtOpen 錯誤")
 			}
 		}
 		time.Sleep(60 * time.Second)
@@ -336,8 +343,9 @@ func (s *TradingService) processedToday(ctx context.Context, today time.Time) bo
 // 全部就緒 (或 force 逾時) 才以 ProcessOpenDecision 決策,並持久化水位線與現金。
 // 未就緒時不前進水位線 → 下一分鐘於時段內重試;逾時仍無任何開盤價則記錄錯誤、今日略過。
 func (s *TradingService) runOneDayAtOpen(ctx context.Context, exec trading.Executor, today time.Time, force bool) error {
-	// 回補 TWSE 月資料,確保 DB 收盤序列補到前一交易日 (T-1)。
+	// 回補 TWSE 月資料,確保 DB 收盤序列補到前一交易日 (T-1);失敗計入資料源失敗指標。
 	if err := s.market.UpdateDatabase(ctx); err != nil {
+		metrics.IncMarketDataError()
 		return fmt.Errorf("UpdateDatabase: %w", err)
 	}
 	series, err := s.loadSeries(ctx)
@@ -359,7 +367,7 @@ func (s *TradingService) runOneDayAtOpen(ctx context.Context, exec trading.Execu
 		}
 	}
 	if len(opens) < needed && !force {
-		s.log.Infof("開盤價尚未全部就緒 (%d/%d),時段內稍後重試", len(opens), needed)
+		s.log.WithFields(logrus.Fields{"ready": len(opens), "needed": needed}).Info("開盤價尚未全部就緒,時段內稍後重試")
 		return nil // 不前進水位線,下一分鐘再試
 	}
 	// 開盤價完全未就緒:今日不前進水位線、不注資 → 下次成功處理時 prev 仍停在上月,注資自然遞延補上。
@@ -369,7 +377,7 @@ func (s *TradingService) runOneDayAtOpen(ctx context.Context, exec trading.Execu
 		return nil
 	}
 	if len(opens) < needed {
-		s.log.Warnf("逾時僅 %d/%d 檔開盤價就緒,以現有開盤價決策 (缺漏股今日不交易)", len(opens), needed)
+		s.log.WithFields(logrus.Fields{"ready": len(opens), "needed": needed}).Warn("逾時僅部分開盤價就緒,以現有開盤價決策 (缺漏股今日不交易)")
 	}
 
 	// 每月第一個交易日 (相對前一個已處理交易日跨月) 先注入定額資金,注資後當日即可動用;
@@ -377,7 +385,7 @@ func (s *TradingService) runOneDayAtOpen(ctx context.Context, exec trading.Execu
 	// loadWatermark 失敗時 prev 為零值 → 本日不注資 (遞延至下次),記錄警告以利察覺。
 	prev, err := s.loadWatermark(ctx)
 	if err != nil {
-		s.log.Warn("loadWatermark (注資判定) 失敗 (不致命,本日不注資):", err)
+		s.log.WithError(err).Warn("loadWatermark (注資判定) 失敗 (不致命,本日不注資)")
 	}
 	contrib := backtest.ContributionDue(prev, today, s.cfg.MonthlyContribution)
 	if contrib > 0 {
@@ -389,14 +397,14 @@ func (s *TradingService) runOneDayAtOpen(ctx context.Context, exec trading.Execu
 		return fmt.Errorf("ProcessOpenDecision: %w", err)
 	}
 	if err := s.saveWatermark(ctx, today); err != nil {
-		s.log.Warn("saveWatermark 失敗 (不致命):", err)
+		s.log.WithError(err).Warn("saveWatermark 失敗 (不致命)")
 	}
 	if err := s.saveCash(ctx, s.engine.Cash()); err != nil {
-		s.log.Warn("saveCash 失敗 (不致命):", err)
+		s.log.WithError(err).Warn("saveCash 失敗 (不致命)")
 	}
 	if contrib > 0 {
 		if err := s.addTotalContributed(ctx, contrib); err != nil {
-			s.log.Warn("addTotalContributed 失敗 (不致命):", err)
+			s.log.WithError(err).Warn("addTotalContributed 失敗 (不致命)")
 		}
 	}
 	// 記錄當日權益快照 (供前端歷史權益折線圖);當日收盤未進 DB,以最近收盤估值。
@@ -448,16 +456,21 @@ func (s *TradingService) saveCash(ctx context.Context, cash float64) error {
 func (s *TradingService) recordEquitySnapshot(ctx context.Context, day time.Time, series map[string]*trading.StockSeries) {
 	cash := s.engine.Cash()
 	holding := s.engine.HoldingValueAsOf(series, day)
+	costBasis := s.engine.CostBasis()
 	snap := entity.EquitySnapshot{
 		Date:         day.Format(dateLayout),
 		Cash:         cash,
 		HoldingValue: holding,
 		TotalEquity:  cash + holding,
-		CostBasis:    s.engine.CostBasis(),
+		CostBasis:    costBasis,
 	}
 	if err := s.equity.RecordEquity(ctx, snap); err != nil {
-		s.log.Warn("RecordEquity 失敗 (不致命):", err)
+		s.log.WithError(err).Warn("RecordEquity 失敗 (不致命)")
 	}
+
+	// 同步更新 Prometheus 業務指標 (投資組合狀態 + 水位線),供 Grafana 即時觀測。
+	metrics.SetPortfolioSnapshot(cash, holding, cash+holding, costBasis)
+	metrics.SetLastProcessedDate(day)
 }
 
 // loadTotalContributed 讀取 BotState 的 total_contributed (除期初現金外、累計從外部注入的定額資金);
@@ -519,12 +532,13 @@ func (e *tradingExecutor) OnBuyApplied(stockID string, day time.Time, shares int
 	if err := e.svc.portfolio.BuyShares(e.context(), stockID, dateStr, shares, price); err != nil {
 		return fmt.Errorf("BuyShares: %w", err)
 	}
-	// 以結構化欄位記錄本筆買入及其決策理由 (每筆交易理由皆進 log)。
+	// 以結構化欄位記錄本筆買入及其決策理由 (每筆交易理由皆進 log),並累計成交指標。
 	e.logTrade("買入成交", stockID, dateStr, reason)
+	metrics.IncTrade("buy")
 	// 通知模式下發送美化的 Discord 買入嵌入訊息 (附交易理由);失敗僅記錄,不影響成交。
 	if e.notify {
 		if err := e.svc.notify.SendTradeEmbed(buildTradeNotification("🟥 買入成交", buyColor, stockID, dateStr, reason)); err != nil {
-			e.svc.log.Error("發送 Discord 訊息失敗:", err)
+			e.svc.log.WithError(err).Error("發送 Discord 訊息失敗")
 		}
 	}
 	return nil
@@ -537,12 +551,13 @@ func (e *tradingExecutor) OnSellApplied(stockID string, day time.Time, shares in
 	if err := e.svc.portfolio.SellShares(e.context(), stockID, dateStr, shares, price); err != nil {
 		return fmt.Errorf("SellShares: %w", err)
 	}
-	// 以結構化欄位記錄本筆賣出及其決策理由 (每筆交易理由皆進 log)。
+	// 以結構化欄位記錄本筆賣出及其決策理由 (每筆交易理由皆進 log),並累計成交指標。
 	e.logTrade("賣出成交", stockID, dateStr, reason)
+	metrics.IncTrade("sell")
 	// 通知模式下發送美化的 Discord 賣出嵌入訊息 (附交易理由);失敗僅記錄,不影響成交。
 	if e.notify {
 		if err := e.svc.notify.SendTradeEmbed(buildTradeNotification("🟩 賣出成交", sellColor, stockID, dateStr, reason)); err != nil {
-			e.svc.log.Error("發送 Discord 訊息失敗:", err)
+			e.svc.log.WithError(err).Error("發送 Discord 訊息失敗")
 		}
 	}
 	return nil

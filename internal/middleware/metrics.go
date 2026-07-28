@@ -32,6 +32,14 @@ var (
 		},
 		[]string{"method", "path"},
 	)
+
+	// HttpRequestsInFlight 記錄當前正在處理中的 HTTP request 數 (壅塞觀測用 Gauge)
+	HttpRequestsInFlight = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "http_requests_in_flight",
+			Help: "Number of HTTP requests currently being served",
+		},
+	)
 )
 
 // NewMetricsMiddleware 回傳 Prometheus metrics 收集用的 Echo middleware
@@ -45,7 +53,9 @@ func NewMetricsMiddleware() echo.MiddlewareFunc {
 				return next(c)
 			}
 
-			// 執行後續 handler 並量測總耗時。
+			// 執行後續 handler 並量測總耗時;處理期間計入 in-flight gauge。
+			HttpRequestsInFlight.Inc()
+			defer HttpRequestsInFlight.Dec()
 			start := time.Now()
 			err := next(c)
 			duration := time.Since(start).Seconds()

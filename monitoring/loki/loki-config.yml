@@ -1,0 +1,43 @@
+# monitoring/loki/loki-config.yml Loki 單機模式設定:filesystem 儲存、31 天保留、關閉遙測。
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9096
+
+# 單機部署共用設定:所有元件走同一個 filesystem 儲存與 in-memory ring。
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+# 索引 schema:TSDB + filesystem (Loki 3.x 建議組合)。
+schema_config:
+  configs:
+    - from: 2024-01-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+# log 保留 31 天,由 compactor 定期清除過期資料 (控制小型 VM 的磁碟用量)。
+limits_config:
+  retention_period: 744h
+
+compactor:
+  working_directory: /loki/compactor
+  retention_enabled: true
+  delete_request_store: filesystem
+
+# 關閉匿名使用統計回報。
+analytics:
+  reporting_enabled: false

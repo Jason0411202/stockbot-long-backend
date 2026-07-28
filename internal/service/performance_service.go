@@ -139,7 +139,7 @@ func (s *PerformanceService) Summary(ctx context.Context) (dto.PerformanceSummar
 func (s *PerformanceService) backtestPerformance(ctx context.Context) *dto.BacktestPerformance {
 	series, err := LoadTradingSeries(ctx, s.series, s.cfg.TrackStocks)
 	if err != nil {
-		s.log.Error("回測載入序列失敗 (略過回測區塊):", err)
+		s.log.WithError(err).Error("回測載入序列失敗 (略過回測區塊)")
 		return nil
 	}
 	if len(series) == 0 {
@@ -150,7 +150,7 @@ func (s *PerformanceService) backtestPerformance(ctx context.Context) *dto.Backt
 	// 全期連續回測 (策略 vs B&H vs Blend,含每月注資)。
 	full, err := backtest.EvaluateFullSpan(s.cfg, series)
 	if err != nil {
-		s.log.Error("全期回測失敗 (略過回測區塊):", err)
+		s.log.WithError(err).Error("全期回測失敗 (略過回測區塊)")
 		return nil
 	}
 
@@ -158,7 +158,7 @@ func (s *PerformanceService) backtestPerformance(ctx context.Context) *dto.Backt
 	wfp := backtest.WalkForwardParams{WindowMonths: 24, StepMonths: 3, MinTradeDays: 200}
 	_, agg, err := backtest.EvaluateWalkForward(s.cfg, series, wfp)
 	if err != nil {
-		s.log.Error("walk-forward 評估失敗 (略過回測區塊):", err)
+		s.log.WithError(err).Error("walk-forward 評估失敗 (略過回測區塊)")
 		return nil
 	}
 

@@ -7,7 +7,8 @@
 
 `stockbot-long-backend` 是以 Go 撰寫的台股 ETF 長線與波段交易後端。它回補 TWSE 歷史價量、
 執行牛熊 regime 感知的現金比例加減碼策略、保存投資組合狀態，並提供 REST API 與 Prometheus metrics。
-預設追蹤 `00631L`（2x 槓桿）與 `00830`。部署為 Go app + MariaDB + Caddy 的 Docker Compose。
+預設追蹤 `00631L`（2x 槓桿）與 `00830`。部署為 Go app + MariaDB + Caddy + 監控棧
+（Grafana/Loki/Alloy/Prometheus，設定在 `monitoring/`，Grafana 經 Caddy `/grafana` 子路徑對外）的 Docker Compose。
 
 ## 常用命令
 
@@ -49,7 +50,20 @@ cmd/*            程式進入點（server 與各 CLI 工具）
 
 支援套件：`internal/config`（讀 `config.yaml` 與 per-stock override）、`internal/dto`（API 回應型別）、
 `internal/entity`（DB 實體）、`internal/handler`（health/ready）、`internal/middleware`（log/metrics）、
-`internal/logging`（logrus）、`helper`（小工具）。
+`internal/logging`（logrus）、`internal/metrics`（stockbot_* 業務 Prometheus 指標）、`helper`（小工具）。
+
+### Log 與監控慣例
+
+- app log 由 `internal/logging.InitLogger` 建立：`LOG_FORMAT=json` 輸出結構化 JSON（生產,compose 已設）,
+  預設輸出彩色文字（本機）；`LOG_LEVEL` 控制等級（預設 info）。新 log 一律用 `WithFields`/`WithError`
+  帶結構化欄位,不要把資料插進訊息字串。
+- HTTP access log 為獨立的 JSON middleware（`internal/middleware/logging.go`）,附 `request_id`
+  （Echo RequestID middleware 產生）與 `error` 欄位;handler 錯誤由該 middleware 轉交 `c.Error` 處理。
+- 業務指標集中在 `internal/metrics`（`stockbot_portfolio_*`、`stockbot_trades_total`、
+  `stockbot_last_processed_date_seconds`、`stockbot_market_data_errors_total`）,由 TradingService
+  （imperative shell）更新;交易引擎 `internal/service/trading` 維持零 I/O,不得 import metrics。
+- 指標名稱與 label 是 Grafana dashboard（`monitoring/grafana/dashboards/stockbot-overview.json`）
+  的查詢契約,更名時需同步改 dashboard。
 
 依賴注入一律用 constructor wiring（`NewXxx(...)`），介面定義在使用端（`internal/service/ports.go`）。
 
@@ -164,7 +178,7 @@ gopkg.in/yaml.v3（config）、DATA-DOG/go-sqlmock（測試）。Module 宣告 `
 | [docs/strategy.md](docs/strategy.md) | 交易演算法、參數語意、資金安全規則 |
 | [docs/backtest.md](docs/backtest.md) | 回測方法、重現指令、績效結果 |
 | [docs/database-schema.md](docs/database-schema.md) | MariaDB schema 與寫入路徑 |
-| [docs/deployment.md](docs/deployment.md) | Docker Compose、本機/正式機部署 |
+| [docs/deployment.md](docs/deployment.md) | Docker Compose、本機/正式機部署、監控棧 (Grafana/Loki) |
 | [docs/cicd-k8s.md](docs/cicd-k8s.md) | GitHub Actions 與 Kubernetes Secret |
 | [docs/optimization/BEST-STRATEGY.md](docs/optimization/BEST-STRATEGY.md) | 策略最佳化研究紀錄 |
 
