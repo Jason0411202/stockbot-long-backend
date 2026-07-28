@@ -1,0 +1,11 @@
+# monitoring/grafana/provisioning/dashboards/provider.yml 從固定路徑載入內建 dashboard。
+apiVersion: 1
+
+providers:
+  - name: stockbot
+    folder: Stockbot
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 60
+    options:
+      path: /var/lib/grafana/dashboards

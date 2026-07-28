@@ -2,7 +2,7 @@
 
 台股 ETF 長線與波段交易後端。系統會回補 TWSE 歷史價量、執行牛熊 regime 感知的加減碼策略，並提供 REST API 與 Prometheus metrics 給前端與監控使用。
 
-目前追蹤標的預設為 `00631L` 與 `00830`。正式機以 Docker Compose 拉取 GHCR 上的 app image 部署（Go app + MariaDB + Caddy）；本機開發則直接 `go run`，不需 Compose（見 [docs/development.md](docs/development.md)）。
+目前追蹤標的預設為 `00631L` 與 `00830`。正式機以 Docker Compose 拉取 GHCR 上的 app image 部署（Go app + MariaDB + Caddy + 內建監控棧 Grafana / Loki / Alloy / Prometheus）；本機開發則直接 `go run`，不需 Compose（見 [docs/development.md](docs/development.md)）。
 
 ## 快速啟動
 
@@ -46,6 +46,9 @@ ACME_EMAIL=you@example.com
 # 對外 HTTP / HTTPS port（可選修改）
 CADDY_HTTP_PORT=80
 CADDY_HTTPS_PORT=443
+
+# Grafana 監控後台的登入密碼（強烈建議修改）
+GRAFANA_ADMIN_PASSWORD=change-me-grafana
 ```
 
 **3. 手動觸發一次部署**：到 repo 的 **Actions → CI/CD → Run workflow** 執行一次（等價於 push 到 main；全新 server 直接架起、已架好則滾動更新）。之後每次 push 到 main 也會自動部署。
@@ -60,6 +63,22 @@ curl http://stockbot.example.com/health     # 換成你的 server 位址或網�
 curl http://stockbot.example.com/ready
 curl http://stockbot.example.com/metrics
 ```
+
+### 監控後台（Grafana）
+
+部署完成後不需要再 SSH 進 server —— 打開瀏覽器即可掌控一切：
+
+```
+https://stockbot.example.com/grafana        # 帳號 admin，密碼為 .env 的 GRAFANA_ADMIN_PASSWORD
+```
+
+內建「Stockbot 總覽」dashboard（Dashboards → Stockbot），單頁涵蓋：
+
+- **交易機器人狀態**：總權益 / 現金 / 持股市值走勢、買賣成交數、水位線（最後處理交易日）、TWSE 回補失敗數
+- **HTTP API**：請求速率、p50/p95/p99 延遲、4xx/5xx 錯誤率
+- **主機資源**：CPU、記憶體、磁碟、網路（server 本身的健康度）
+- **容器資源**：每個容器的 CPU 與記憶體
+- **集中式 log**：app 結構化 log、全容器 error/warning、主機 systemd journal，皆可用 Loki 查詢語法過濾
 
 > 完整部署、維運命令與 HTTPS 細節見 [docs/deployment.md](docs/deployment.md)。
 

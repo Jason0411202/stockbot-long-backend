@@ -63,7 +63,7 @@ func dateToYearMonth(date string) (string, error) {
 func (s *MarketDataService) UpdateDatabase(ctx context.Context) error {
 	now := time.Now()
 	currentDate := now.Format("20060102")
-	s.log.Info("currentDate: ", currentDate)
+	s.log.WithField("current_date", currentDate).Info("開始每日資料更新")
 
 	// 取得回補月數設定，最低不得為負值。
 	maxBackMonths := s.cfg.MaxBackMonths
@@ -72,7 +72,7 @@ func (s *MarketDataService) UpdateDatabase(ctx context.Context) error {
 	}
 
 	dates := monthlyBackfillDates(currentDate, maxBackMonths)
-	s.log.Info("Dates: ", dates)
+	s.log.WithField("dates", dates).Info("每日更新回補月份清單")
 
 	currentMonth := now.Format("2006-01")
 
@@ -81,12 +81,12 @@ func (s *MarketDataService) UpdateDatabase(ctx context.Context) error {
 		for _, date := range dates {
 			ym, err := dateToYearMonth(date)
 			if err != nil {
-				s.log.Error("dateToYearMonth 錯誤: ", err)
+				s.log.WithError(err).WithField("date", date).Error("dateToYearMonth 錯誤")
 				continue
 			}
 			// 每日 daily 一律重抓 (currentMonth 必抓;previous month 也允許覆蓋)。
 			if err := s.fetchAndInsertMonth(ctx, stockID, date, ym, currentMonth); err != nil {
-				s.log.Error("fetchAndInsertMonth 錯誤: ", err)
+				s.log.WithError(err).WithFields(logrus.Fields{"stock_id": stockID, "month": ym}).Error("fetchAndInsertMonth 錯誤")
 				break
 			}
 			time.Sleep(fetchSleep)
@@ -101,7 +101,7 @@ func (s *MarketDataService) UpdateDatabase(ctx context.Context) error {
 func (s *MarketDataService) BackfillMonths(ctx context.Context, months int) error {
 	currentDate := time.Now().Format("20060102")
 	dates := monthlyBackfillDates(currentDate, months)
-	s.log.Info("Init Dates: ", dates)
+	s.log.WithField("dates", dates).Info("初始回補月份清單")
 
 	currentMonth := time.Now().Format("2006-01")
 
@@ -115,17 +115,17 @@ func (s *MarketDataService) BackfillMonths(ctx context.Context, months int) erro
 		for _, date := range dates {
 			ym, err := dateToYearMonth(date)
 			if err != nil {
-				s.log.Error("dateToYearMonth 錯誤: ", err)
+				s.log.WithError(err).WithField("date", date).Error("dateToYearMonth 錯誤")
 				continue
 			}
 			// 已完成且非當月的月份直接跳過，避免重複呼叫 TWSE API。
 			if ym != currentMonth && completedMonths[ym] {
-				s.log.Infof("%s 月份 %s 已標記完成,跳過 TWSE API 呼叫", stockID, ym)
+				s.log.WithFields(logrus.Fields{"stock_id": stockID, "month": ym}).Info("月份已標記完成,跳過 TWSE API 呼叫")
 				continue
 			}
 
 			if err := s.fetchAndInsertMonth(ctx, stockID, date, ym, currentMonth); err != nil {
-				s.log.Error("fetchAndInsertMonth 錯誤: ", err)
+				s.log.WithError(err).WithFields(logrus.Fields{"stock_id": stockID, "month": ym}).Error("fetchAndInsertMonth 錯誤")
 				break // 該股票後續月份直接停止,避免持續打 API 失敗
 			}
 			time.Sleep(fetchSleep)
@@ -152,7 +152,7 @@ func (s *MarketDataService) fetchAndInsertMonth(ctx context.Context, stockID, da
 	// 整月成功才標記;當月不標,因為當月仍有未到的交易日。
 	if ym != currentMonth {
 		if err := s.backfill.MarkComplete(ctx, stockID, ym); err != nil {
-			s.log.Warn("MarkComplete 失敗 (不致命,下次會重抓): ", err)
+			s.log.WithError(err).WithFields(logrus.Fields{"stock_id": stockID, "month": ym}).Warn("MarkComplete 失敗 (不致命,下次會重抓)")
 		}
 	}
 	return nil

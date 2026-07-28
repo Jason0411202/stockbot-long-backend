@@ -120,10 +120,26 @@ jobs:
               sudo systemctl enable --now docker || true
             fi
 
-            # 取得 / 更新部署檔到 home 下固定目錄（compose 一律同步 main 最新版）
+            # 小記憶體 VM（如 1 GiB 的 Azure B2ats v2）跑監控棧需要 swap 保底；
+            # 無任何 swap 時自動建立 2G swapfile 並寫入 fstab（已有 swap 則略過，idempotent）
+            if [ -z "$(swapon --noheadings 2>/dev/null)" ]; then
+              sudo fallocate -l 2G /swapfile
+              sudo chmod 600 /swapfile
+              sudo mkswap /swapfile
+              sudo swapon /swapfile
+              grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+            fi
+
+            # 取得 / 更新部署檔到 home 下固定目錄（一律同步 main 最新版）：
+            # docker-compose.yml + monitoring/（Grafana/Loki/Alloy/Prometheus 設定）以 repo tarball 一次取得
             APP_DIR="$HOME/stockbot-long-backend"
+            REPO_NAME="${{ github.event.repository.name }}"
             mkdir -p "$APP_DIR" && cd "$APP_DIR"
-            curl -fsSLO "https://raw.githubusercontent.com/${{ github.repository }}/main/docker-compose.yml"
+            curl -fsSL "https://codeload.github.com/${{ github.repository }}/tar.gz/refs/heads/main" -o /tmp/stockbot-src.tgz
+            rm -rf monitoring
+            tar -xzf /tmp/stockbot-src.tgz --strip-components=1 \
+              "$REPO_NAME-main/docker-compose.yml" "$REPO_NAME-main/monitoring"
+            rm -f /tmp/stockbot-src.tgz
 
             # .env 以 GitHub 的 STOCKBOT_LONG_ENV_FILE 為單一來源，每次覆蓋寫入
             printf '%s\n' "$DEPLOY_ENV_FILE" > .env

@@ -1,10 +1,20 @@
-# docker-compose.yml 以 GHCR app image 在正式機部署 MariaDB + app + Caddy。
-# Caddyfile、init.sql 以 inline configs 內嵌,config.yaml 已烤進 image;正式機只需本檔 + .env。
+# docker-compose.yml 以 GHCR app image 在正式機部署 MariaDB + app + Caddy + 監控棧 (Grafana/Loki/Alloy/Prometheus)。
+# Caddyfile、init.sql 以 inline configs 內嵌,config.yaml 已烤進 image;監控棧設定掛載 ./monitoring 目錄
+# (CD 部署時與本檔一併從 repo 取得)。正式機只需本檔 + .env + monitoring/。
+
+# 所有服務共用的容器 log rotation 設定 (每檔 10MB、保留 3 檔,防止 json-file log 吃滿磁碟)。
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   mariadb:
     image: mariadb:11.4
     container_name: stockbot-mariadb
     restart: unless-stopped
+    logging: *default-logging
     environment:
       MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:-rootpassword}
       MARIADB_DATABASE: ${MARIADB_DATABASE:-StockLongData}
@@ -28,6 +38,7 @@ services:
     image: ${APP_IMAGE:-ghcr.io/jason0411202/stockbot-long-backend:latest}
     container_name: stockbot-app
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       mariadb:
         condition: service_healthy
@@ -35,6 +46,9 @@ services:
       DB_DSN: ${MARIADB_USER:-exampleuser}:${MARIADB_PASSWORD:-examplepassword}@tcp(mariadb:3306)/?multiStatements=true
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
       DISCORD_BOT_CHANNELID: ${DISCORD_BOT_CHANNELID:-}
+      # 生產環境輸出結構化 JSON log (供 Alloy → Loki 做欄位查詢);等級可由 .env 覆寫。
+      LOG_FORMAT: json
+      LOG_LEVEL: ${LOG_LEVEL:-info}
     expose:
       - "8080"
     networks:
@@ -44,6 +58,7 @@ services:
     image: caddy:2-alpine
     container_name: stockbot-caddy
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       - app
     ports:
@@ -58,8 +73,113 @@ services:
     networks:
       - stockbot
 
+  # ---- 監控棧:log 儲存 (Loki) ----
+  loki:
+    image: grafana/loki:3.4.1
+    container_name: stockbot-loki
+    restart: unless-stopped
+    logging: *default-logging
+    command: -config.file=/etc/loki/loki-config.yml
+    volumes:
+      - ./monitoring/loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - loki_data:/loki
+    expose:
+      - "3100"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    networks:
+      - stockbot
+
+  # ---- 監控棧:收集器 (Alloy = 容器 log + systemd journal + node exporter + cAdvisor) ----
+  alloy:
+    image: grafana/alloy:v1.8.1
+    container_name: stockbot-alloy
+    restart: unless-stopped
+    logging: *default-logging
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    privileged: true
+    volumes:
+      - ./monitoring/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - alloy_data:/var/lib/alloy/data
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host/root:ro
+      - /var/lib/docker:/var/lib/docker:ro
+      - /var/log/journal:/var/log/journal:ro
+      - /etc/machine-id:/etc/machine-id:ro
+    depends_on:
+      - loki
+      - prometheus
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    networks:
+      - stockbot
+
+  # ---- 監控棧:指標儲存 (Prometheus,15 天保留 + 接收 Alloy remote_write) ----
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    container_name: stockbot-prometheus
+    restart: unless-stopped
+    logging: *default-logging
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-remote-write-receiver
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    expose:
+      - "9090"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    networks:
+      - stockbot
+
+  # ---- 監控棧:視覺化 (Grafana,經 Caddy 以 /grafana 子路徑對外) ----
+  grafana:
+    image: grafana/grafana:11.6.0
+    container_name: stockbot-grafana
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_SERVER_ROOT_URL: "%(protocol)s://%(domain)s/grafana/"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - loki
+      - prometheus
+    expose:
+      - "3000"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    networks:
+      - stockbot
+
 configs:
   # Caddy 設定;SITE_ADDRESS=:80 為純 HTTP,設網域則自動 HTTPS (值由 compose 從 .env 代入)。
+  # /grafana 子路徑反代至 Grafana (自帶登入頁),其餘路徑反代至 app。
   caddyfile:
     content: |
       {
@@ -67,8 +187,16 @@ configs:
       }
 
       ${SITE_ADDRESS:-:80} {
-          reverse_proxy app:8080
           encode gzip
+
+          handle /grafana* {
+              reverse_proxy grafana:3000
+          }
+
+          handle {
+              reverse_proxy app:8080
+          }
+
           log {
               output stdout
               format console
@@ -84,6 +212,10 @@ volumes:
   mariadb_data:
   caddy_data:
   caddy_config:
+  loki_data:
+  alloy_data:
+  prometheus_data:
+  grafana_data:
 
 networks:
   stockbot:

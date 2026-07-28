@@ -43,7 +43,7 @@ func main() {
 
 	cfg, err := config.Load(config.Path())
 	if err != nil {
-		log.Fatal("載入 config 錯誤:", err)
+		log.WithError(err).Fatal("載入 config 錯誤")
 	}
 
 	ctx := context.Background()
@@ -51,13 +51,13 @@ func main() {
 	// --- 連線池 (取代舊 sqls.ConnectToMariadb;DSN 自動補上 StockLongData) ---
 	db, err := mariadb.OpenPool(os.Getenv("DB_DSN"))
 	if err != nil {
-		log.Fatal("初始化資料庫錯誤:", err)
+		log.WithError(err).Fatal("初始化資料庫錯誤")
 	}
 	defer db.Close()
 
 	// --- schema 建立 (取代舊 sqls.InitDatabase 的 SQLcommend.sql + USE) ---
 	if err := mariadb.InitSchema(ctx, db); err != nil {
-		log.Fatal("初始化資料庫錯誤:", err)
+		log.WithError(err).Fatal("初始化資料庫錯誤")
 	}
 	log.Info("資料庫與對應 table 建立完成")
 
@@ -73,7 +73,7 @@ func main() {
 	realtimeClient := twse.NewRealtimeClient() // 盤中即時開盤價 (MIS),供開盤即時決策
 	discordClient, err := discord.NewClient(os.Getenv("DISCORD_BOT_TOKEN"), os.Getenv("DISCORD_BOT_CHANNELID"), log)
 	if err != nil {
-		log.Error("初始化 Discord 錯誤:", err) // 非致命:沿用舊 InitDiscord 的「Error 後繼續」行為
+		log.WithError(err).Error("初始化 Discord 錯誤") // 非致命:沿用舊 InitDiscord 的「Error 後繼續」行為
 	}
 
 	// --- services (商業邏輯) ---
@@ -90,18 +90,18 @@ func main() {
 	// --- 初始 DB 回補 (取代舊 sqls.InitDatabase 的回補邏輯) ---
 	if cfg.InitDBBackMonths > cfg.MaxBackMonths {
 		if err := marketSvc.BackfillMonths(ctx, cfg.InitDBBackMonths); err != nil {
-			log.Fatal("initial BackfillMonths 錯誤:", err)
+			log.WithError(err).Fatal("initial BackfillMonths 錯誤")
 		}
 	} else {
 		if err := marketSvc.UpdateDatabase(ctx); err != nil {
-			log.Fatal("UpdateDatabase 錯誤:", err)
+			log.WithError(err).Fatal("UpdateDatabase 錯誤")
 		}
 	}
 
 	// --- 啟動通知 (非致命,沿用舊行為) ---
 	if discordClient != nil {
 		if err := discordClient.SendEmbed("📢 SYSTEM", "長線股票模擬交易系統 Discord bot 順利啟動", 0x00ff00); err != nil {
-			log.Error("發送 Discord 訊息失敗:", err)
+			log.WithError(err).Error("發送 Discord 訊息失敗")
 		}
 	}
 
@@ -111,6 +111,6 @@ func main() {
 
 	// --- 上線交易 loop (阻塞,取代舊 kernals.DailyCheck) ---
 	if err := tradingSvc.DailyCheck(ctx); err != nil {
-		log.Fatal("上線交易錯誤:", err)
+		log.WithError(err).Fatal("上線交易錯誤")
 	}
 }

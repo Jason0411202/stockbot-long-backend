@@ -1,0 +1,25 @@
+# monitoring/prometheus/prometheus.yml Prometheus 抓取設定:app 業務/HTTP 指標與監控棧自身指標。
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+
+scrape_configs:
+  # 交易後端 app:HTTP 指標 + stockbot_* 業務指標 (現金 / 權益 / 成交 / 水位線)。
+  - job_name: stockbot-app
+    static_configs:
+      - targets: ["app:8080"]
+
+  # Prometheus 自身健康度。
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # Loki 健康度 (ingest 速率 / 錯誤)。
+  - job_name: loki
+    static_configs:
+      - targets: ["loki:3100"]
+
+  # Grafana 健康度。
+  - job_name: grafana
+    static_configs:
+      - targets: ["grafana:3000"]
