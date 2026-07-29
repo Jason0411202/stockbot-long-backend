@@ -151,4 +151,9 @@ jobs:
             # 拉新 image 並滾動更新（全新與既有 server 皆 idempotent）
             sudo APP_IMAGE="$IMAGE" docker compose pull
             sudo APP_IMAGE="$IMAGE" docker compose up -d
+
+            # monitoring/ 是以「刪除後重解壓」更新,既有容器 bind mount 仍指向舊 inode;
+            # 強制重建監控容器以掛載最新設定檔,並讓 Loki/Alloy/Prometheus 重讀設定
+            # （監控資料存於 named volume,重建不遺失）
+            sudo APP_IMAGE="$IMAGE" docker compose up -d --force-recreate loki alloy prometheus grafana
             sudo docker image prune -f
