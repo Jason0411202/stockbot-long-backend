@@ -94,10 +94,13 @@ loki.process "journal" {
 }
 
 // ---- VictoriaLogs 寫入端點 (Loki 相容 push API) ----
+// disable_message_parsing=1:整行 log (含 JSON) 原樣存入 _msg,由查詢端以 unpack_json 拆欄位;
+// 不加此參數時 VictoriaLogs 會在 ingest 時自動拆 JSON,導致 _msg 缺失 (missing _msg field)、
+// 全文搜尋與 dashboard 的 _msg 過濾失效。
 
 loki.write "default" {
   endpoint {
-    url = "http://victorialogs:9428/insert/loki/api/v1/push"
+    url = "http://victorialogs:9428/insert/loki/api/v1/push?disable_message_parsing=1"
   }
 }
 
