@@ -1,7 +1,7 @@
 {
   "uid": "stockbot-overview",
   "title": "Stockbot 總覽",
-  "description": "HTTP API、主機與容器資源、App log 分類檢視與集中式 log 的單頁總覽",
+  "description": "HTTP API、主機與容器資源、App log 分類檢視與集中式 log 的單頁總覽 (log 儲存為 VictoriaLogs / LogsQL)",
   "timezone": "Asia/Taipei",
   "schemaVersion": 39,
   "refresh": "1m",
@@ -118,67 +118,69 @@
     },
     {
       "type": "logs", "title": "App log (依上方 level / 關鍵字篩選)", "id": 17,
-      "description": "頂部變數即時過濾:level 下拉選等級、search 輸入 regex 關鍵字;JSON 解析失敗的行 (如 panic) 一律保留顯示",
-      "datasource": { "type": "loki", "uid": "loki" },
+      "description": "頂部變數即時過濾:level 下拉選等級、search 輸入 regex 關鍵字;無 level 欄位的行 (如 panic) 一律保留顯示",
+      "datasource": { "type": "victoriametrics-logs-datasource", "uid": "victorialogs" },
       "gridPos": { "h": 9, "w": 16, "x": 0, "y": 25 },
-      "targets": [{ "expr": "{service=\"app\"} |~ \"$search\" | json | level=~\"$level\" or __error__!=\"\"", "refId": "A" }],
+      "targets": [{ "expr": "{service=\"app\"} _msg:~\"${search}\" (level:~\"${level:pipe}\" or level:\"\") | unpack_json", "refId": "A", "maxLines": 1000 }],
       "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending", "enableLogDetails": true }
     },
     {
       "type": "timeseries", "title": "Log 量 (依等級)", "id": 20,
-      "datasource": { "type": "loki", "uid": "loki" },
+      "datasource": { "type": "victoriametrics-logs-datasource", "uid": "victorialogs" },
       "gridPos": { "h": 9, "w": 8, "x": 16, "y": 25 },
-      "targets": [{ "expr": "sum by (level) (count_over_time({service=\"app\"} | json [$__interval]))", "legendFormat": "{{level}}", "refId": "A" }],
+      "targets": [{ "expr": "{service=\"app\"} *", "queryType": "hits", "fields": ["level"], "refId": "A" }],
       "fieldConfig": {
         "defaults": {
           "unit": "short",
           "custom": { "drawStyle": "bars", "fillOpacity": 60, "stacking": { "mode": "normal" } }
         },
         "overrides": [
-          { "matcher": { "id": "byName", "options": "error" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] },
-          { "matcher": { "id": "byName", "options": "warning" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }] },
-          { "matcher": { "id": "byName", "options": "info" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }] }
+          { "matcher": { "id": "byRegexp", "options": ".*error.*" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] },
+          { "matcher": { "id": "byRegexp", "options": ".*warning.*" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }] },
+          { "matcher": { "id": "byRegexp", "options": ".*info.*" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }] }
         ]
       }
     },
     {
       "type": "logs", "title": "交易成交 (買入 / 賣出 + 決策理由)", "id": 21,
-      "description": "每筆成交的結構化紀錄:stock_id、trigger、regime、股數、價金與理由摘要",
-      "datasource": { "type": "loki", "uid": "loki" },
+      "description": "每筆成交的結構化紀錄:stock_id、trigger、regime、股數、價金與理由摘要。此面板固定回看 1 年 (交易頻率低,不受上方時間範圍影響)",
+      "datasource": { "type": "victoriametrics-logs-datasource", "uid": "victorialogs" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 34 },
-      "targets": [{ "expr": "{service=\"app\"} | json | msg=~\"買入成交|賣出成交\"", "refId": "A" }],
+      "timeFrom": "1y",
+      "hideTimeOverride": false,
+      "targets": [{ "expr": "{service=\"app\"} \"成交\" | unpack_json | filter msg:~\"買入成交|賣出成交\"", "refId": "A", "maxLines": 1000 }],
       "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending", "enableLogDetails": true }
     },
     {
       "type": "logs", "title": "開盤決策迴圈 / 狀態還原", "id": 22,
       "description": "開盤時段決策、開盤價就緒狀態、catch-up 回放與 BotState / 持倉還原",
-      "datasource": { "type": "loki", "uid": "loki" },
+      "datasource": { "type": "victoriametrics-logs-datasource", "uid": "victorialogs" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 34 },
-      "targets": [{ "expr": "{service=\"app\"} |~ \"開盤|catch-up|首次啟動|還原|水位線|注資\"", "refId": "A" }],
+      "targets": [{ "expr": "{service=\"app\"} ~\"開盤|catch-up|首次啟動|還原|水位線|注資\"", "refId": "A" }],
       "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending", "enableLogDetails": true }
     },
     {
       "type": "logs", "title": "TWSE 資料回補", "id": 23,
       "description": "初始回補與每日更新:回補月份清單、逐月抓取結果與完成標記",
-      "datasource": { "type": "loki", "uid": "loki" },
+      "datasource": { "type": "victoriametrics-logs-datasource", "uid": "victorialogs" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 42 },
-      "targets": [{ "expr": "{service=\"app\"} |~ \"回補|每日資料更新|fetchAndInsertMonth|月份已標記完成|MarkComplete\"", "refId": "A" }],
+      "targets": [{ "expr": "{service=\"app\"} ~\"回補|每日資料更新|fetchAndInsertMonth|月份已標記完成|MarkComplete\"", "refId": "A" }],
       "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending", "enableLogDetails": true }
     },
     {
       "type": "logs", "title": "錯誤與警告 (app)", "id": 24,
-      "description": "warning / error / fatal 等級,以及 JSON 解析失敗的原始輸出 (如 panic stack trace)",
-      "datasource": { "type": "loki", "uid": "loki" },
+      "description": "warning / error / fatal 等級,以及無 level 欄位的原始輸出 (如 panic stack trace)",
+      "datasource": { "type": "victoriametrics-logs-datasource", "uid": "victorialogs" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 42 },
-      "targets": [{ "expr": "{service=\"app\"} | json | level=~\"warning|error|fatal\" or __error__!=\"\"", "refId": "A" }],
+      "targets": [{ "expr": "{service=\"app\"} (level:~\"warning|error|fatal\" or level:\"\")", "refId": "A" }],
       "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending", "enableLogDetails": true }
     },
     {
       "type": "logs", "title": "HTTP access log", "id": 25,
       "description": "每個 HTTP request 一行:method、path、status、latency_ms、request_id",
-      "datasource": { "type": "loki", "uid": "loki" },
+      "datasource": { "type": "victoriametrics-logs-datasource", "uid": "victorialogs" },
       "gridPos": { "h": 7, "w": 24, "x": 0, "y": 50 },
-      "targets": [{ "expr": "{service=\"app\"} | json | method!=\"\"", "refId": "A" }],
+      "targets": [{ "expr": "{service=\"app\"} \"method\" | unpack_json | filter method:*", "refId": "A" }],
       "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending", "enableLogDetails": true }
     },
     {
@@ -186,16 +188,16 @@
     },
     {
       "type": "logs", "title": "全容器 error / warning", "id": 18,
-      "datasource": { "type": "loki", "uid": "loki" },
+      "datasource": { "type": "victoriametrics-logs-datasource", "uid": "victorialogs" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 58 },
-      "targets": [{ "expr": "{job=\"docker\"} | json | level=~\"error|warning|fatal\"", "refId": "A" }],
+      "targets": [{ "expr": "{job=\"docker\"} level:~\"error|warning|fatal\"", "refId": "A" }],
       "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending", "enableLogDetails": true }
     },
     {
       "type": "logs", "title": "系統 log (systemd journal)", "id": 19,
-      "datasource": { "type": "loki", "uid": "loki" },
+      "datasource": { "type": "victoriametrics-logs-datasource", "uid": "victorialogs" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 58 },
-      "targets": [{ "expr": "{job=\"systemd-journal\"}", "refId": "A" }],
+      "targets": [{ "expr": "{job=\"systemd-journal\"} *", "refId": "A" }],
       "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending", "enableLogDetails": true }
     }
   ]

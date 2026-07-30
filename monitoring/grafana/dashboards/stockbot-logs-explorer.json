@@ -1,0 +1,134 @@
+{
+  "uid": "stockbot-logs-explorer",
+  "title": "Log Explorer (Kibana 式)",
+  "description": "模擬 Kibana Discover 的 log 探索介面:上方搜尋列 (LogsQL) + 等級/容器過濾 + 直方圖 + 欄位 facet + 表格式結果 + 可展開的原始 log",
+  "timezone": "Asia/Taipei",
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "query",
+        "label": "🔍 查詢 (LogsQL)",
+        "description": "如 Kibana 搜尋列。範例:錯誤 → error;片語 → \"連線失敗\";欄位 → level:=error 或 status:=500;regex → ~\"買入|賣出\";組合 → error and not twse",
+        "type": "textbox",
+        "query": "*",
+        "options": [],
+        "current": { "text": "*", "value": "*" }
+      },
+      {
+        "name": "container",
+        "label": "容器",
+        "type": "custom",
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".+",
+        "query": "stockbot-app,stockbot-mariadb,stockbot-caddy,stockbot-grafana,stockbot-prometheus,stockbot-alloy,stockbot-victorialogs",
+        "options": [],
+        "current": { "text": ["All"], "value": ["$__all"] }
+      },
+      {
+        "name": "level",
+        "label": "等級",
+        "type": "custom",
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".+",
+        "query": "error,warning,info,debug",
+        "options": [],
+        "current": { "text": ["All"], "value": ["$__all"] }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "text", "title": "", "id": 1,
+      "gridPos": { "h": 4, "w": 18, "x": 0, "y": 0 },
+      "options": {
+        "mode": "markdown",
+        "content": "### 用法 (LogsQL 速查)\n上方 **查詢** 欄即 Kibana 搜尋列,輸入後按 Enter。`*`=全部;AND=空白或 `and`;OR=`or`;NOT=`not`。\n\n| 目的 | 寫法 | 目的 | 寫法 |\n|---|---|---|---|\n| 全文關鍵字 | `逾時` 或 `error` | 精確片語 | `\"發送 Discord 訊息失敗\"` |\n| 欄位等於 | `level:=error`、`stock_id:=00631L` | 欄位含字 | `msg:成交` |\n| Regex | `~\"買入\\|賣出\"`、`path:~\"/api/.+\"` | 排除 | `error and not twse` |\n\n表格欄位來自 JSON log 自動展開;點下方「原始 log」的任一行可展開全部欄位 (= Kibana 文件展開)。"
+      }
+    },
+    {
+      "type": "stat", "title": "命中筆數", "id": 2,
+      "datasource": { "type": "victoriametrics-logs-datasource", "uid": "victorialogs" },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "targets": [{ "expr": "{container=~\"${container:pipe}\"} ${query} (level:~\"${level:pipe}\" or level:\"\") | stats count() hits", "queryType": "stats", "refId": "A" }],
+      "options": { "colorMode": "value", "graphMode": "none", "textMode": "value" },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "blue" } }, "overrides": [] }
+    },
+    {
+      "type": "timeseries", "title": "Log 直方圖 (依等級)", "id": 3,
+      "description": "同 Kibana Discover 上方的時間直方圖;分色 = level",
+      "datasource": { "type": "victoriametrics-logs-datasource", "uid": "victorialogs" },
+      "gridPos": { "h": 6, "w": 18, "x": 0, "y": 4 },
+      "targets": [{ "expr": "{container=~\"${container:pipe}\"} ${query} (level:~\"${level:pipe}\" or level:\"\")", "queryType": "hits", "fields": ["level"], "refId": "A" }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "drawStyle": "bars", "fillOpacity": 70, "stacking": { "mode": "normal" } }
+        },
+        "overrides": [
+          { "matcher": { "id": "byRegexp", "options": ".*error.*" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] },
+          { "matcher": { "id": "byRegexp", "options": ".*warning.*" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }] },
+          { "matcher": { "id": "byRegexp", "options": ".*info.*" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }] },
+          { "matcher": { "id": "byRegexp", "options": ".*debug.*" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "blue" } }] }
+        ]
+      }
+    },
+    {
+      "type": "bargauge", "title": "等級分布", "id": 4,
+      "description": "如 Kibana 左側欄位 facet:目前查詢結果的 level 分布",
+      "datasource": { "type": "victoriametrics-logs-datasource", "uid": "victorialogs" },
+      "gridPos": { "h": 6, "w": 3, "x": 18, "y": 4 },
+      "targets": [{ "expr": "{container=~\"${container:pipe}\"} ${query} | stats by (level) count() hits", "queryType": "stats", "refId": "A" }],
+      "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "type": "bargauge", "title": "容器分布", "id": 5,
+      "description": "如 Kibana 左側欄位 facet:目前查詢結果的容器分布",
+      "datasource": { "type": "victoriametrics-logs-datasource", "uid": "victorialogs" },
+      "gridPos": { "h": 6, "w": 3, "x": 21, "y": 4 },
+      "targets": [{ "expr": "{container=~\"${container:pipe}\"} ${query} (level:~\"${level:pipe}\" or level:\"\") | stats by (container) count() hits", "queryType": "stats", "refId": "A" }],
+      "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "type": "table", "title": "結果表格 (Discover)", "id": 6,
+      "description": "表格式 log 檢視:JSON 欄位自動展開為欄。可點欄位標題排序、於欄位標題輸入框內過濾",
+      "datasource": { "type": "victoriametrics-logs-datasource", "uid": "victorialogs" },
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 10 },
+      "targets": [{ "expr": "{container=~\"${container:pipe}\"} ${query} (level:~\"${level:pipe}\" or level:\"\") | unpack_json", "refId": "A", "maxLines": 1000 }],
+      "transformations": [
+        { "id": "extractFields", "options": { "source": "labels", "format": "json", "replace": false } },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": { "labels": true, "tsNs": true, "id": true, "job": true, "service": true },
+            "indexByName": { "Time": 0, "level": 1, "container": 2, "msg": 3, "Line": 4 },
+            "renameByName": { "Line": "原始行", "msg": "訊息", "container": "容器", "level": "等級" }
+          }
+        }
+      ],
+      "options": { "showHeader": true, "sortBy": [{ "displayName": "Time", "desc": true }], "footer": { "show": false } },
+      "fieldConfig": {
+        "defaults": { "custom": { "filterable": true } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Time" }, "properties": [{ "id": "custom.width", "value": 180 }] },
+          { "matcher": { "id": "byName", "options": "等級" }, "properties": [{ "id": "custom.width", "value": 90 }] },
+          { "matcher": { "id": "byName", "options": "容器" }, "properties": [{ "id": "custom.width", "value": 150 }] }
+        ]
+      }
+    },
+    {
+      "type": "logs", "title": "原始 log (點行展開全部欄位)", "id": 7,
+      "description": "同 Kibana 的文件展開檢視:點任一行可看到該筆 log 的所有欄位,並可依欄位值快速加入過濾",
+      "datasource": { "type": "victoriametrics-logs-datasource", "uid": "victorialogs" },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 22 },
+      "targets": [{ "expr": "{container=~\"${container:pipe}\"} ${query} (level:~\"${level:pipe}\" or level:\"\") | unpack_json", "refId": "A", "maxLines": 1000 }],
+      "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending", "enableLogDetails": true, "dedupStrategy": "none" }
+    }
+  ]
+}

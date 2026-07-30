@@ -1,4 +1,4 @@
-# docker-compose.yml 以 GHCR app image 在正式機部署 MariaDB + app + Caddy + 監控棧 (Grafana/Loki/Alloy/Prometheus)。
+# docker-compose.yml 以 GHCR app image 在正式機部署 MariaDB + app + Caddy + 監控棧 (Grafana/VictoriaLogs/Alloy/Prometheus)。
 # Caddyfile、init.sql 以 inline configs 內嵌,config.yaml 已烤進 image;監控棧設定掛載 ./monitoring 目錄
 # (CD 部署時與本檔一併從 repo 取得)。正式機只需本檔 + .env + monitoring/。
 
@@ -46,7 +46,9 @@ services:
       DB_DSN: ${MARIADB_USER:-exampleuser}:${MARIADB_PASSWORD:-examplepassword}@tcp(mariadb:3306)/?multiStatements=true
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
       DISCORD_BOT_CHANNELID: ${DISCORD_BOT_CHANNELID:-}
-      # 生產環境輸出結構化 JSON log (供 Alloy → Loki 做欄位查詢);等級可由 .env 覆寫。
+      LINE_CHANNEL_ACCESS_TOKEN: ${LINE_CHANNEL_ACCESS_TOKEN:-}
+      LINE_NOTIFY_TO: ${LINE_NOTIFY_TO:-}
+      # 生產環境輸出結構化 JSON log (供 Alloy → VictoriaLogs 做欄位查詢);等級可由 .env 覆寫。
       LOG_FORMAT: json
       LOG_LEVEL: ${LOG_LEVEL:-info}
     expose:
@@ -73,26 +75,28 @@ services:
     networks:
       - stockbot
 
-  # ---- 監控棧:log 儲存 (Loki) ----
-  loki:
-    image: grafana/loki:3.4.1
-    container_name: stockbot-loki
+  # ---- 監控棧:log 儲存 (VictoriaLogs,Loki 相容寫入端點 + LogsQL 查詢) ----
+  victorialogs:
+    image: victoriametrics/victoria-logs:v1.52.0
+    container_name: stockbot-victorialogs
     restart: unless-stopped
     logging: *default-logging
-    command: -config.file=/etc/loki/loki-config.yml
+    command:
+      - -storageDataPath=/victoria-logs-data
+      - -retentionPeriod=31d
     volumes:
-      - ./monitoring/loki/loki-config.yml:/etc/loki/loki-config.yml:ro
-      - loki_data:/loki
+      - victorialogs_data:/victoria-logs-data
     expose:
-      - "3100"
+      - "9428"
     deploy:
       resources:
         limits:
-          memory: 256M
+          memory: 192M
     networks:
       - stockbot
 
   # ---- 監控棧:收集器 (Alloy = 容器 log + systemd journal + node exporter + cAdvisor) ----
+  # cAdvisor 需以主機 cgroup namespace 執行並直接掛載 /sys 與 rootfs,才看得到其他容器的資源用量。
   alloy:
     image: grafana/alloy:v1.8.1
     container_name: stockbot-alloy
@@ -104,18 +108,22 @@ services:
       - --storage.path=/var/lib/alloy/data
       - /etc/alloy/config.alloy
     privileged: true
+    cgroup: host
     volumes:
       - ./monitoring/alloy/config.alloy:/etc/alloy/config.alloy:ro
       - alloy_data:/var/lib/alloy/data
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
+      - /sys:/sys:ro
       - /:/host/root:ro
+      - /:/rootfs:ro
+      - /dev/disk:/dev/disk:ro
       - /var/lib/docker:/var/lib/docker:ro
       - /var/log/journal:/var/log/journal:ro
       - /etc/machine-id:/etc/machine-id:ro
     depends_on:
-      - loki
+      - victorialogs
       - prometheus
     deploy:
       resources:
@@ -161,12 +169,14 @@ services:
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_ANALYTICS_REPORTING_ENABLED: "false"
       GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      # 啟動時自動安裝 VictoriaLogs 資料源 plugin (LogsQL 查詢用)。
+      GF_INSTALL_PLUGINS: victoriametrics-logs-datasource
     volumes:
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana_data:/var/lib/grafana
     depends_on:
-      - loki
+      - victorialogs
       - prometheus
     expose:
       - "3000"
@@ -212,7 +222,7 @@ volumes:
   mariadb_data:
   caddy_data:
   caddy_config:
-  loki_data:
+  victorialogs_data:
   alloy_data:
   prometheus_data:
   grafana_data:

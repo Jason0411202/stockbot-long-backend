@@ -33,7 +33,7 @@ func BuildEcho(log *logrus.Logger, db *sql.DB, ctl *controller.Controller) *echo
 	// --- 生產環境 middleware ---
 	e.Use(echoMw.RequestID()) // 為每個 request 產生 X-Request-ID (access log 與問題追蹤的關聯鍵)
 	if os.Getenv("LOG_FORMAT") == "json" {
-		e.Use(middleware.NewRequestLogger()) // JSON 結構化 access log（log 收集器 → Loki / ELK）
+		e.Use(middleware.NewRequestLogger()) // JSON 結構化 access log（log 收集器 → VictoriaLogs / ELK）
 	}
 	e.Use(middleware.NewMetricsMiddleware()) // Prometheus metrics 收集
 
