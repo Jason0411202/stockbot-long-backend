@@ -34,7 +34,7 @@ type TradingService struct {
 	notify    Notifier
 	realtime  RealtimeFetcher
 	cfg       *config.Config
-	log       *logrus.Logger
+	log       *logrus.Entry
 }
 
 // BotState 鍵值常數，對應跨重啟持久化的水位線、現金與累計注資欄位。
@@ -76,7 +76,7 @@ func NewTradingService(
 		notify:    notify,
 		realtime:  realtime,
 		cfg:       cfg,
-		log:       log,
+		log:       log.WithField("component", "trading"),
 	}
 }
 
@@ -564,9 +564,16 @@ func (e *tradingExecutor) OnSellApplied(stockID string, day time.Time, shares in
 }
 
 // logTrade 以結構化欄位 (logrus.Fields) 記錄一筆成交的方向、標的、價量與決策理由摘要。
+// mode 欄位標示這筆是開盤即時決策 (live) 或重啟後的靜默回放補寫 (catchup)。
 // 確保 log 完整保留「每筆交易為什麼成交」,供日後稽核與重現。
 func (e *tradingExecutor) logTrade(action, stockID, dateStr string, reason trading.TradeReason) {
+	// 依 executor 的通知旗標判別即時決策或回放補寫。
+	mode := "catchup"
+	if e.notify {
+		mode = "live"
+	}
 	e.svc.log.WithFields(logrus.Fields{
+		"mode":       mode,
 		"stock_id":   stockID,
 		"date":       dateStr,
 		"trigger":    reason.Trigger,

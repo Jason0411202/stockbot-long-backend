@@ -20,12 +20,12 @@ type equityHistoryReader interface {
 // 長序列以等距取樣壓縮 (與回測 equity_curve 同上限),控制回應大小;資料隨上線運行逐日累積。
 type EquityHistoryService struct {
 	equity equityHistoryReader
-	log    *logrus.Logger
+	log    *logrus.Entry
 }
 
 // NewEquityHistoryService 建立並回傳一個已完成依賴注入的 EquityHistoryService。
 func NewEquityHistoryService(equity equityHistoryReader, log *logrus.Logger) *EquityHistoryService {
-	return &EquityHistoryService{equity: equity, log: log}
+	return &EquityHistoryService{equity: equity, log: log.WithField("component", "equity_history")}
 }
 
 // EquityHistory 回傳升冪的每日權益曲線 (等距取樣後);無資料時回傳空切片。

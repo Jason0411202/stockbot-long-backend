@@ -14,12 +14,12 @@ import (
 // 並轉換為 dto.StockHistoryPoint 回傳。
 type StockHistoryService struct {
 	stock StockStore
-	log   *logrus.Logger
+	log   *logrus.Entry
 }
 
 // NewStockHistoryService 建立並回傳一個已完成依賴注入的 StockHistoryService。
 func NewStockHistoryService(stock StockStore, log *logrus.Logger) *StockHistoryService {
-	return &StockHistoryService{stock: stock, log: log}
+	return &StockHistoryService{stock: stock, log: log.WithField("component", "stock_history")}
 }
 
 // StockHistoryData 回傳指定股票由舊到新排列的收盤價序列。

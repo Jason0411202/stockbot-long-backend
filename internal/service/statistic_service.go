@@ -20,12 +20,12 @@ const noPointSentinel = 36500
 type StatisticService struct {
 	stock StockStore
 	cfg   *config.Config
-	log   *logrus.Logger
+	log   *logrus.Entry
 }
 
 // NewStatisticService 建立並回傳一個已完成依賴注入的 StatisticService。
 func NewStatisticService(stock StockStore, cfg *config.Config, log *logrus.Logger) *StatisticService {
-	return &StatisticService{stock: stock, cfg: cfg, log: log}
+	return &StatisticService{stock: stock, cfg: cfg, log: log.WithField("component", "statistic")}
 }
 
 // lowerPointDays 回傳從今日往前數，第一個收盤價嚴格低於今日收盤的天數距離。

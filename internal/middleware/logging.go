@@ -14,6 +14,7 @@ import (
 type requestLog struct {
 	Timestamp string `json:"timestamp"`
 	Level     string `json:"level"`
+	Component string `json:"component"`
 	Method    string `json:"method"`
 	Path      string `json:"path"`
 	Query     string `json:"query,omitempty"`
@@ -51,6 +52,7 @@ func NewRequestLogger() echo.MiddlewareFunc {
 			entry := requestLog{
 				Timestamp: start.Format(time.RFC3339),
 				Level:     levelForStatus(status),
+				Component: "http_access",
 				Method:    c.Request().Method,
 				Path:      c.Request().URL.Path,
 				Query:     c.Request().URL.RawQuery,

@@ -3,6 +3,8 @@ package logging
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,10 +15,12 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// 環境變數鍵名:LOG_FORMAT 控制輸出格式 (json / text),LOG_LEVEL 控制最低輸出等級。
+// 環境變數鍵名:LOG_FORMAT 控制輸出格式 (json / text),LOG_LEVEL 控制最低輸出等級,
+// APP_COMMIT 為 build 時注入的 git commit (log 的 version 欄位)。
 const (
 	envLogFormat = "LOG_FORMAT"
 	envLogLevel  = "LOG_LEVEL"
+	envAppCommit = "APP_COMMIT"
 )
 
 // MyFormatter 將 logrus entry 格式化成固定的可讀文字輸出 (本機開發用,帶 ANSI 顏色)。
@@ -120,20 +124,63 @@ func newFormatter(format string) logrus.Formatter {
 	return &MyFormatter{}
 }
 
-// shortCaller 將 caller 縮短為 "檔名:行號" (捨棄完整路徑與函式名),降低 JSON log 體積。
+// shortCaller 將 caller 縮短為「repo 相對路徑:行號」的 file 欄位與「套件.函式」的 func 欄位,
+// 供 log 直接定位出處 (例 file="internal/service/trading_service.go:579"、
+// func="service.(*tradingExecutor).logTrade"),同時避免洩漏編譯機的絕對路徑。
 func shortCaller(f *runtime.Frame) (function string, file string) {
-	return "", fmt.Sprintf("%s:%d", filepath.Base(f.File), f.Line)
+	// 函式名只保留最後一段 (捨棄完整 module 路徑前綴)。
+	fn := f.Function
+	if i := strings.LastIndex(fn, "/"); i >= 0 {
+		fn = fn[i+1:]
+	}
+
+	// 檔案路徑只保留最後三段 (涵蓋 internal/<套件>/<檔名> 的層級)。
+	parts := strings.Split(filepath.ToSlash(f.File), "/")
+	if len(parts) > 3 {
+		parts = parts[len(parts)-3:]
+	}
+	return fn, fmt.Sprintf("%s:%d", strings.Join(parts, "/"), f.Line)
+}
+
+// globalFieldsHook 將整個 process 共用的欄位 (boot_id / version) 附掛到每一筆 log entry,
+// 供依「哪一次啟動 / 哪個部署版本」切分 log;entry 已有同名欄位時不覆蓋。
+type globalFieldsHook struct {
+	fields logrus.Fields
+}
+
+// Levels 回報 hook 套用到所有 log 等級。
+func (h *globalFieldsHook) Levels() []logrus.Level { return logrus.AllLevels }
+
+// Fire 將共用欄位補進單筆 entry 的結構化欄位。
+func (h *globalFieldsHook) Fire(e *logrus.Entry) error {
+	for k, v := range h.fields {
+		if _, ok := e.Data[k]; !ok {
+			e.Data[k] = v
+		}
+	}
+	return nil
+}
+
+// newBootID 產生本次啟動的短隨機識別碼 (8 碼 hex),同一 process 的所有 log 共用。
+func newBootID() string {
+	buf := make([]byte, 4)
+	if _, err := rand.Read(buf); err != nil {
+		return "unknown"
+	}
+	return hex.EncodeToString(buf)
 }
 
 // InitLogger 建立並回傳專案預設 logger:
 // 輸出格式由 LOG_FORMAT 決定 (json / text,預設 text)、最低等級由 LOG_LEVEL 決定 (預設 info)、
-// 一律輸出至 stderr 並附帶呼叫者檔名行號。
+// 一律輸出至 stderr 並附帶呼叫者檔案路徑行號與函式名;
+// JSON 模式 (生產) 另掛 boot_id (本次啟動識別碼) 與 version (APP_COMMIT) 兩個全域欄位。
 func InitLogger() *logrus.Logger {
 	// 創建一個新的 logrus 實例
 	logger := logrus.New()
 
 	// 依環境變數設定輸出格式與最低輸出等級。
-	logger.SetFormatter(newFormatter(os.Getenv(envLogFormat)))
+	format := os.Getenv(envLogFormat)
+	logger.SetFormatter(newFormatter(format))
 	logger.SetLevel(parseLevel(os.Getenv(envLogLevel)))
 
 	// 設定 logrus 輸出位置為 os.Stderr (終端輸出)
@@ -141,6 +188,18 @@ func InitLogger() *logrus.Logger {
 
 	// 設定報告呼叫函式的行數
 	logger.SetReportCaller(true)
+
+	// JSON 模式掛上全域欄位:boot_id 供依啟動切分、version 供對照部署版本 (未注入時為 dev)。
+	if strings.EqualFold(format, "json") {
+		version := os.Getenv(envAppCommit)
+		if version == "" {
+			version = "dev"
+		}
+		logger.AddHook(&globalFieldsHook{fields: logrus.Fields{
+			"boot_id": newBootID(),
+			"version": version,
+		}})
+	}
 
 	return logger
 }

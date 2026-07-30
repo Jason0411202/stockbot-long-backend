@@ -18,6 +18,11 @@ func testLog() *logrus.Logger {
 	return log
 }
 
+// testEntry 建立一個將輸出丟棄的 logrus.Entry，供直接組裝 Client 結構的測試使用。
+func testEntry() *logrus.Entry {
+	return logrus.NewEntry(testLog())
+}
+
 // TestNewClient_MissingToken 驗證 token 為空字串時 NewClient 回傳錯誤且不發起網路連線。
 func TestNewClient_MissingToken(t *testing.T) {
 	// Arrange + Act — 空 token 應在打網路前回錯。
@@ -44,7 +49,7 @@ func TestSendEmbed_NilClient(t *testing.T) {
 // TestSendEmbed_NilSession 驗證 session 尚未初始化 (nil) 時 SendEmbed 回傳錯誤。
 func TestSendEmbed_NilSession(t *testing.T) {
 	// Arrange — zero-value client，session == nil。
-	c := &Client{log: testLog()}
+	c := &Client{log: testEntry()}
 	// Act + Assert
 	if err := c.SendEmbed("t", "m", 0x00ff00); err == nil {
 		t.Fatalf("expected error when session is nil")
@@ -54,7 +59,7 @@ func TestSendEmbed_NilSession(t *testing.T) {
 // TestSendEmbed_MissingChannelID 驗證 channel id 為空時 SendEmbed 在發起網路請求前即回傳錯誤。
 func TestSendEmbed_MissingChannelID(t *testing.T) {
 	// Arrange — session 已設,但缺 channel id。
-	c := &Client{session: &discordgo.Session{}, log: testLog()}
+	c := &Client{session: &discordgo.Session{}, log: testEntry()}
 	// Act + Assert — 在打網路前就因缺 channel id 而回錯。
 	if err := c.SendEmbed("t", "m", 0x00ff00); err == nil {
 		t.Fatalf("expected error when channel id missing")
@@ -74,7 +79,7 @@ func TestClose_NilClient(t *testing.T) {
 // TestClose_NilSession 驗證 session 為 nil 時 Close 回傳 nil 而非 panic。
 func TestClose_NilSession(t *testing.T) {
 	// Arrange — zero-value client，session == nil。
-	c := &Client{log: testLog()}
+	c := &Client{log: testEntry()}
 	// Act + Assert
 	if err := c.Close(); err != nil {
 		t.Fatalf("expected nil error closing client with nil session, got %v", err)

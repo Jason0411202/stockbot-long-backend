@@ -15,6 +15,10 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o server ./cmd/server
 # ─── Runtime Stage ───
 FROM alpine:3.19
 
+# CI 傳入的 git commit SHA,經 APP_COMMIT 環境變數注入 log 的 version 欄位 (本機 build 為 dev)。
+ARG GIT_SHA=dev
+ENV APP_COMMIT=$GIT_SHA
+
 # 安裝 HTTPS 與時區資料，供 TWSE API 與 time.LoadLocation 使用。
 RUN apk add --no-cache ca-certificates tzdata
 
