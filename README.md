@@ -2,7 +2,7 @@
 
 台股 ETF 長線與波段交易後端。系統會回補 TWSE 歷史價量、執行牛熊 regime 感知的加減碼策略，並提供 REST API 與 Prometheus metrics 給前端與監控使用。
 
-目前追蹤標的預設為 `00631L` 與 `00830`。正式機以 Docker Compose 拉取 GHCR 上的 app image 部署（Go app + MariaDB + Caddy + 內建監控棧 Grafana / Loki / Alloy / Prometheus）；本機開發則直接 `go run`，不需 Compose（見 [docs/development.md](docs/development.md)）。
+目前追蹤標的預設為 `00631L` 與 `00830`。正式機以 Docker Compose 拉取 GHCR 上的 app image 部署（Go app + MariaDB + Caddy + 內建監控棧 Grafana / VictoriaLogs / Alloy / Prometheus）；本機開發則直接 `go run`，不需 Compose（見 [docs/development.md](docs/development.md)）。交易通知支援 **Discord 與 LINE**（皆為可選，可同時啟用；設定教學見文件導覽）。
 
 ## 快速啟動
 
@@ -31,11 +31,12 @@ MARIADB_PASSWORD=change-me-app
 # 資料庫名稱（可選修改）
 MARIADB_DATABASE=StockLongData
 
-# Discord 通知 bot 的 token（必改）
+# Discord 通知 bot 的 token 與頻道 ID（可選；留空不使用。教學見 docs/discord-bot-setup.md）
 DISCORD_BOT_TOKEN=MTA5xxxxxxxxxxxxxxxxxxxx.Gxxxxx.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-
-# Discord 通知頻道 ID（必改）
 DISCORD_BOT_CHANNELID=1234567890123456789
+
+# LINE 通知 bot 的 token（可選；留空不使用。群發給所有加好友的人。教學見 docs/line-bot-setup.md）
+LINE_CHANNEL_ACCESS_TOKEN=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
 # 網域。供 Caddy 自動申請 HTTPS 用（必改）
 SITE_ADDRESS=stockbot.example.com
@@ -72,13 +73,20 @@ curl http://stockbot.example.com/metrics
 https://stockbot.example.com/grafana        # 帳號 admin，密碼為 .env 的 GRAFANA_ADMIN_PASSWORD
 ```
 
-內建「Stockbot 總覽」dashboard（Dashboards → Stockbot），單頁涵蓋：
+內建兩個 dashboard（Dashboards → Stockbot）：
 
-- **交易機器人狀態**：總權益 / 現金 / 持股市值走勢、買賣成交數、水位線（最後處理交易日）、TWSE 回補失敗數
+**「Stockbot 總覽」**，單頁涵蓋：
+
 - **HTTP API**：請求速率、p50/p95/p99 延遲、4xx/5xx 錯誤率
 - **主機資源**：CPU、記憶體、磁碟、網路（server 本身的健康度）
 - **容器資源**：每個容器的 CPU 與記憶體
-- **集中式 log**：app 結構化 log、全容器 error/warning、主機 systemd journal，皆可用 Loki 查詢語法過濾
+- **App Log 分類檢視**：交易成交（含決策理由，固定回看 1 年）、開盤決策迴圈、TWSE 回補、錯誤與警告、HTTP access log 等預寫查詢面板
+- **集中式 log**：全容器 error/warning、主機 systemd journal
+
+**「Log Explorer (Kibana 式)」**：模擬 Kibana Discover 的 log 探索介面 ——
+上方搜尋列（LogsQL 全文 / 欄位 / regex 查詢）＋ 等級與容器過濾 ＋ 時間直方圖 ＋
+表格式結果（JSON 欄位自動展開為欄）＋ 可逐行展開全部欄位的原始 log 檢視。
+log 儲存為 VictoriaLogs（低記憶體、快速全文搜尋），debug 等級在收集端即丟棄以節省空間。
 
 > 完整部署、維運命令與 HTTPS 細節見 [docs/deployment.md](docs/deployment.md)。
 
@@ -94,6 +102,8 @@ https://stockbot.example.com/grafana        # 帳號 admin，密碼為 .env 的 
 | [docs/database-schema.md](docs/database-schema.md) | MariaDB schema、資料表欄位與寫入路徑 |
 | [docs/deployment.md](docs/deployment.md) | Docker Compose、本機與正式機部署 |
 | [docs/cicd-k8s.md](docs/cicd-k8s.md) | GitHub Actions 與 Kubernetes Secret 維護 |
+| [docs/discord-bot-setup.md](docs/discord-bot-setup.md) | Discord 通知 bot 設定懶人包（可選） |
+| [docs/line-bot-setup.md](docs/line-bot-setup.md) | LINE 通知 bot 設定懶人包（可選） |
 
 ## 前端
 

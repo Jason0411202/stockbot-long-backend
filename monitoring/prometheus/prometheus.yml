@@ -14,10 +14,10 @@ scrape_configs:
     static_configs:
       - targets: ["localhost:9090"]
 
-  # Loki 健康度 (ingest 速率 / 錯誤)。
-  - job_name: loki
+  # VictoriaLogs 健康度 (ingest 速率 / 錯誤)。
+  - job_name: victorialogs
     static_configs:
-      - targets: ["loki:3100"]
+      - targets: ["victorialogs:9428"]
 
   # Grafana 健康度。
   - job_name: grafana

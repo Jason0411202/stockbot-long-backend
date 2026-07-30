@@ -1,7 +1,7 @@
 // monitoring/alloy/config.alloy Grafana Alloy 收集器設定:
 // 收集 (1) 所有 Docker 容器 stdout/stderr log、(2) 主機 systemd journal、
 // (3) 主機指標 (內嵌 node exporter)、(4) 容器指標 (內嵌 cAdvisor),
-// log 送往 Loki、指標以 remote_write 送往 Prometheus。
+// log 送往 VictoriaLogs (Loki 相容端點)、指標以 remote_write 送往 Prometheus。
 
 // ---- Docker 容器 log ----
 
@@ -10,7 +10,7 @@ discovery.docker "containers" {
   host = "unix:///var/run/docker.sock"
 }
 
-// 將容器名稱與 compose service 名稱轉為 Loki label,方便依服務過濾 log。
+// 將容器名稱與 compose service 名稱轉為 stream label,方便依服務過濾 log。
 discovery.relabel "containers" {
   targets = discovery.docker.containers.targets
 
@@ -26,18 +26,40 @@ discovery.relabel "containers" {
   }
 }
 
-// 逐容器讀取 stdout/stderr 並送往 Loki (job=docker)。
+// 逐容器讀取 stdout/stderr,經 level 處理管線後送往 VictoriaLogs (job=docker)。
 loki.source.docker "containers" {
   host          = "unix:///var/run/docker.sock"
   targets       = discovery.docker.containers.targets
   relabel_rules = discovery.relabel.containers.rules
   labels        = { job = "docker" }
-  forward_to    = [loki.write.default.receiver]
+  forward_to    = [loki.process.docker.receiver]
+}
+
+// 容器 log 的等級處理管線:
+//  1. 解析 JSON 行的 level 欄位 (非 JSON 行安全略過,不影響輸出)。
+//  2. 丟棄 debug 等級 (依等級縮減儲存的 log 量)。
+//  3. 將 level 以 structured metadata 附掛,VictoriaLogs 存為可查詢欄位
+//     (供 level:=error 過濾與依等級直方圖)。
+loki.process "docker" {
+  forward_to = [loki.write.default.receiver]
+
+  stage.json {
+    expressions = { level = "level" }
+  }
+
+  stage.drop {
+    source = "level"
+    value  = "debug"
+  }
+
+  stage.structured_metadata {
+    values = { level = "" }
+  }
 }
 
 // ---- 主機 systemd journal (系統 log) ----
 
-// 將 systemd unit 名稱轉為 Loki label。
+// 將 systemd unit 名稱與 journal priority 轉為 stream label。
 loki.relabel "journal" {
   forward_to = []
 
@@ -45,22 +67,37 @@ loki.relabel "journal" {
     source_labels = ["__journal__systemd_unit"]
     target_label  = "unit"
   }
+
+  rule {
+    source_labels = ["__journal_priority"]
+    target_label  = "priority"
+  }
 }
 
-// 讀取主機 journal 並送往 Loki (job=systemd-journal)。
+// 讀取主機 journal,丟棄 debug (priority=7) 後送往 VictoriaLogs (job=systemd-journal)。
 loki.source.journal "system" {
   max_age       = "12h"
   path          = "/var/log/journal"
   relabel_rules = loki.relabel.journal.rules
   labels        = { job = "systemd-journal" }
-  forward_to    = [loki.write.default.receiver]
+  forward_to    = [loki.process.journal.receiver]
 }
 
-// ---- Loki 寫入端點 ----
+// journal 的等級過濾管線:priority=7 (debug) 直接丟棄,縮減儲存的 log 量。
+loki.process "journal" {
+  forward_to = [loki.write.default.receiver]
+
+  stage.match {
+    selector = "{priority=\"7\"}"
+    action   = "drop"
+  }
+}
+
+// ---- VictoriaLogs 寫入端點 (Loki 相容 push API) ----
 
 loki.write "default" {
   endpoint {
-    url = "http://loki:3100/loki/api/v1/push"
+    url = "http://victorialogs:9428/insert/loki/api/v1/push"
   }
 }
 

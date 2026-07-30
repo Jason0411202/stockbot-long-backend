@@ -8,7 +8,8 @@
 `stockbot-long-backend` 是以 Go 撰寫的台股 ETF 長線與波段交易後端。它回補 TWSE 歷史價量、
 執行牛熊 regime 感知的現金比例加減碼策略、保存投資組合狀態，並提供 REST API 與 Prometheus metrics。
 預設追蹤 `00631L`（2x 槓桿）與 `00830`。部署為 Go app + MariaDB + Caddy + 監控棧
-（Grafana/Loki/Alloy/Prometheus，設定在 `monitoring/`，Grafana 經 Caddy `/grafana` 子路徑對外）的 Docker Compose。
+（Grafana/VictoriaLogs/Alloy/Prometheus，設定在 `monitoring/`，Grafana 經 Caddy `/grafana` 子路徑對外）的 Docker Compose。
+交易通知經 `internal/notify.Fanout` 同步發送到 Discord 與 LINE（皆可選,由 .env 憑證是否齊全決定啟用）。
 
 ## 常用命令
 
@@ -44,7 +45,9 @@ cmd/*            程式進入點（server 與各 CLI 工具）
                  ├─ internal/service/backtest    回測、walk-forward、績效指標、CSV 載入
                  ├─ internal/repository          MariaDB CRUD/查詢
                  ├─ internal/client/twse         TWSE 行情 client
-                 └─ internal/client/discord      Discord 通知 client
+                 ├─ internal/client/discord      Discord 通知 client
+                 ├─ internal/client/line         LINE Messaging API 推播 client (net/http,無額外相依)
+                 └─ internal/notify              通知聚合 (Fanout 同步發送 Discord/LINE;實作 service.Notifier)
                       └─ internal/platform/mariadb   連線池與 schema 初始化
 ```
 
@@ -57,6 +60,10 @@ cmd/*            程式進入點（server 與各 CLI 工具）
 - app log 由 `internal/logging.InitLogger` 建立：`LOG_FORMAT=json` 輸出結構化 JSON（生產,compose 已設）,
   預設輸出彩色文字（本機）；`LOG_LEVEL` 控制等級（預設 info）。新 log 一律用 `WithFields`/`WithError`
   帶結構化欄位,不要把資料插進訊息字串。
+- log 儲存為 **VictoriaLogs**（取代舊 Loki）:Alloy 經 Loki 相容端點寫入,收集端丟棄 debug 等級並把
+  JSON 的 `level` 以 structured metadata 附掛為可查詢欄位;Grafana 以 `victoriametrics-logs-datasource`
+  plugin（uid `victorialogs`）用 LogsQL 查詢。dashboard 有兩個:`stockbot-overview`（總覽 + App Log 預寫查詢）
+  與 `stockbot-logs-explorer`（Kibana 式 log 探索）。
 - HTTP access log 為獨立的 JSON middleware（`internal/middleware/logging.go`）,附 `request_id`
   （Echo RequestID middleware 產生）與 `error` 欄位;handler 錯誤由該 middleware 轉交 `c.Error` 處理。
 - 業務指標集中在 `internal/metrics`（`stockbot_portfolio_*`、`stockbot_trades_total`、
@@ -158,7 +165,9 @@ common issuance 起 catch-up，其現金軌跡與帳本與回測全期完全一�
 ## 設定與機密
 
 - `config.yaml`：非機密策略與回補參數，可 commit。
-- `.env`：機密（`DB_DSN`、`DISCORD_BOT_TOKEN`、`DISCORD_BOT_CHANNELID`），不可 commit；範本見 `.env.example`。
+- `.env`：機密（`DB_DSN`、`DISCORD_BOT_TOKEN`、`DISCORD_BOT_CHANNELID`、`LINE_CHANNEL_ACCESS_TOKEN`），
+  不可 commit；範本見 `.env.example`。正式機 `.env` 的單一來源是 GitHub secret
+  `STOCKBOT_LONG_ENV_FILE`（部署時整份覆寫）。LINE 通知為 broadcast（群發給所有加官方帳號好友的人）。
 - 不得硬編任何密鑰；啟動時驗證必要設定存在。
 
 ## 主要相依套件
@@ -178,8 +187,10 @@ gopkg.in/yaml.v3（config）、DATA-DOG/go-sqlmock（測試）。Module 宣告 `
 | [docs/strategy.md](docs/strategy.md) | 交易演算法、參數語意、資金安全規則 |
 | [docs/backtest.md](docs/backtest.md) | 回測方法、重現指令、績效結果 |
 | [docs/database-schema.md](docs/database-schema.md) | MariaDB schema 與寫入路徑 |
-| [docs/deployment.md](docs/deployment.md) | Docker Compose、本機/正式機部署、監控棧 (Grafana/Loki) |
+| [docs/deployment.md](docs/deployment.md) | Docker Compose、本機/正式機部署、監控棧 (Grafana/VictoriaLogs) |
 | [docs/cicd-k8s.md](docs/cicd-k8s.md) | GitHub Actions 與 Kubernetes Secret |
+| [docs/discord-bot-setup.md](docs/discord-bot-setup.md) | Discord 通知 bot 設定懶人包 (可選) |
+| [docs/line-bot-setup.md](docs/line-bot-setup.md) | LINE 通知 bot 設定懶人包 (可選) |
 | [docs/optimization/BEST-STRATEGY.md](docs/optimization/BEST-STRATEGY.md) | 策略最佳化研究紀錄 |
 
 ## 環境注意事項

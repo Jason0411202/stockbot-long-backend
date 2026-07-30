@@ -1,6 +1,6 @@
 # 部署指南
 
-本專案以發佈到 GHCR 的 app image 部署：MariaDB、Go app、Caddy reverse proxy，以及內建監控棧（Grafana + Loki + Alloy + Prometheus）。Caddy 可在本機提供 HTTP，也可在正式網域自動申請 HTTPS。
+本專案以發佈到 GHCR 的 app image 部署：MariaDB、Go app、Caddy reverse proxy，以及內建監控棧（Grafana + VictoriaLogs + Alloy + Prometheus）。Caddy 可在本機提供 HTTP，也可在正式網域自動申請 HTTPS。
 
 app image 由 GitHub Actions 自動 build 並推送到 GHCR，`config.yaml` 已烤進 image；Caddyfile 與 MariaDB 初始化 SQL 以 inline configs 內嵌於 `docker-compose.yml`，監控棧設定放在 `monitoring/` 目錄。因此**正式機只需要 `docker-compose.yml`、`.env` 與 `monitoring/` 目錄**，不需要完整原始碼。
 
@@ -72,28 +72,32 @@ curl http://localhost:8080/metrics
 curl http://localhost/health
 ```
 
-## 監控（Grafana + Loki + Alloy + Prometheus）
+## 監控（Grafana + VictoriaLogs + Alloy + Prometheus）
 
 啟動後即內建完整可觀測性，日常維運不需要 SSH 進 server：
 
 | 元件 | 角色 |
 | --- | --- |
-| **Grafana** | 視覺化入口，經 Caddy 以 `https://<你的網域>/grafana` 對外（自帶登入頁） |
-| **Loki** | log 儲存與查詢（保留 31 天，filesystem 儲存） |
-| **Alloy** | 收集器：所有容器 stdout/stderr log、主機 systemd journal、主機指標（內嵌 node exporter）、容器指標（內嵌 cAdvisor） |
+| **Grafana** | 視覺化入口，經 Caddy 以 `https://<你的網域>/grafana` 對外（自帶登入頁）；啟動時自動安裝 `victoriametrics-logs-datasource` plugin |
+| **VictoriaLogs** | log 儲存與查詢（保留 31 天；低記憶體、快速全文搜尋，查詢語言為 LogsQL）。Alloy 經 Loki 相容端點寫入 |
+| **Alloy** | 收集器：所有容器 stdout/stderr log、主機 systemd journal、主機指標（內嵌 node exporter）、容器指標（內嵌 cAdvisor）。收集端即丟棄 debug 等級 log 以節省儲存 |
 | **Prometheus** | 指標儲存（保留 15 天），抓取 app 的 `/metrics` 與監控棧自身，並接收 Alloy 的 remote_write |
 
-登入 Grafana（帳密見 `.env` 的 `GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD`）後，開啟內建的「Stockbot 總覽」dashboard（Dashboards → Stockbot 資料夾），涵蓋：交易機器人狀態（權益 / 現金 / 成交 / 水位線 / TWSE 回補失敗）、HTTP API（速率 / 延遲分位數 / 錯誤率）、主機資源（CPU / RAM / 磁碟 / 網路）、各容器資源、與三個集中式 log 面板（app 結構化 log、全容器 error/warning、systemd journal）。
+登入 Grafana（帳密見 `.env` 的 `GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD`）後，內建兩個 dashboard（Dashboards → Stockbot 資料夾）：
 
-log 皆為結構化 JSON（app 由 `LOG_FORMAT=json` 輸出；access log 附 `request_id`），在 Grafana 的 Loki 查詢中可用欄位過濾，例如：
+- **Stockbot 總覽**：HTTP API（速率 / 延遲分位數 / 錯誤率）、主機資源（CPU / RAM / 磁碟 / 網路）、各容器資源、App Log 分類檢視（交易成交含決策理由、開盤決策迴圈、TWSE 回補、錯誤與警告、access log）、全容器 error/warning 與 systemd journal。
+- **Log Explorer (Kibana 式)**：模擬 Kibana Discover —— 上方 LogsQL 搜尋列 + 等級/容器過濾 + 時間直方圖 + 表格式結果（JSON 欄位自動展開為欄）+ 可逐行展開全部欄位的原始 log。
+
+log 皆為結構化 JSON（app 由 `LOG_FORMAT=json` 輸出；access log 附 `request_id`），LogsQL 查詢範例：
 
 ```
-{service="app"} | json | level="error"
-{service="app"} | json | stock_id="00631L"
-{job="systemd-journal"} |= "docker"
+{service="app"} level:=error
+{service="app"} | unpack_json | filter stock_id:=00631L
+{job="systemd-journal"} docker
+{service="app"} ~"買入成交|賣出成交"
 ```
 
-Prometheus 與 Loki 不對外開放 port，只能經 Grafana 查詢；Grafana 本身有登入保護。
+Prometheus 與 VictoriaLogs 不對外開放 port，只能經 Grafana 查詢；Grafana 本身有登入保護。
 
 ### 小記憶體 VM（1 GiB）注意事項
 
@@ -148,7 +152,7 @@ docker compose up -d
 | 命令 | 用途 |
 | --- | --- |
 | `docker compose ps` | 查看容器狀態 |
-| `docker compose logs -f app` | 查看 app log（日常建議直接用 Grafana 的 Loki 面板查） |
+| `docker compose logs -f app` | 查看 app log（日常建議直接用 Grafana 的 Log Explorer 查） |
 | `docker compose logs -f caddy` | 查看 Caddy 與憑證 log |
 | `docker compose logs -f mariadb` | 查看 DB log |
 | `docker compose logs -f alloy` | 查看收集器 log（監控資料沒進來時先看這裡） |
@@ -162,7 +166,7 @@ docker compose up -d
 - `mariadb_data` 保存 MariaDB 資料。
 - `caddy_data` 保存 Let's Encrypt 憑證。
 - `caddy_config` 保存 Caddy runtime 設定。
-- `loki_data` 保存 log 歷史（31 天保留）。
+- `victorialogs_data` 保存 log 歷史（31 天保留）。
 - `prometheus_data` 保存指標歷史（15 天保留）。
 - `grafana_data` 保存 Grafana 使用者設定與自建 dashboard。
 - `alloy_data` 保存收集器讀取進度（避免重啟後重複收 log）。

@@ -9,7 +9,7 @@
 //  2. config.Load                  — 失敗 Fatal
 //  3. mariadb.OpenPool + InitSchema — 失敗 Fatal (對應舊 sqls.InitDatabase 的 schema 建立)
 //  4. 初始 DB 回補 (BackfillMonths/UpdateDatabase) — 失敗 Fatal (對應舊 InitDatabase 的回補)
-//  5. discord.NewClient + SendEmbed boot notice — 失敗僅 Error (非致命,沿用舊 InitDiscord)
+//  5. 通知管道 (Discord + LINE) 初始化與 boot notice — 失敗僅 Error/Info (非致命)
 //  6. go server.Run                — 背景啟動 Echo HTTP server
 //  7. tradingSvc.DailyCheck        — 阻塞的上線交易 loop (對應舊 kernals.DailyCheck)
 package main
@@ -22,10 +22,12 @@ import (
 	"github.com/joho/godotenv"
 
 	"github.com/Jason0411202/stockbot-long-backend/internal/client/discord"
+	"github.com/Jason0411202/stockbot-long-backend/internal/client/line"
 	"github.com/Jason0411202/stockbot-long-backend/internal/client/twse"
 	"github.com/Jason0411202/stockbot-long-backend/internal/config"
 	"github.com/Jason0411202/stockbot-long-backend/internal/controller"
 	"github.com/Jason0411202/stockbot-long-backend/internal/logging"
+	"github.com/Jason0411202/stockbot-long-backend/internal/notify"
 	"github.com/Jason0411202/stockbot-long-backend/internal/platform/mariadb"
 	"github.com/Jason0411202/stockbot-long-backend/internal/repository"
 	"github.com/Jason0411202/stockbot-long-backend/internal/server"
@@ -75,6 +77,20 @@ func main() {
 	if err != nil {
 		log.WithError(err).Error("初始化 Discord 錯誤") // 非致命:沿用舊 InitDiscord 的「Error 後繼續」行為
 	}
+	lineClient, err := line.NewClient(os.Getenv("LINE_CHANNEL_ACCESS_TOKEN"), log)
+	if err != nil {
+		log.WithError(err).Info("LINE 通知未啟用 (LINE_CHANNEL_ACCESS_TOKEN 未設定)") // 非致命:LINE 為可選管道
+	}
+
+	// --- 通知聚合:同一則通知同步發送到所有已設定的管道 (Discord / LINE) ---
+	var channels []notify.Channel
+	if discordClient != nil {
+		channels = append(channels, discordClient)
+	}
+	if lineClient != nil {
+		channels = append(channels, notify.NewLine(lineClient))
+	}
+	notifier := notify.NewFanout(channels...)
 
 	// --- services (商業邏輯) ---
 	marketSvc := service.NewMarketDataService(twseClient, stockRepo, backfillRepo, cfg, log)
@@ -85,7 +101,7 @@ func main() {
 	equitySvc := service.NewEquityHistoryService(equityRepo, log)
 	perfHistSvc := service.NewPerformanceHistoryService(cfg, stockRepo, equityRepo, log)
 	engine := trading.NewEngine(cfg)
-	tradingSvc := service.NewTradingService(engine, portfolioSvc, marketSvc, stockRepo, ledgerRepo, stateRepo, equityRepo, discordClient, realtimeClient, cfg, log)
+	tradingSvc := service.NewTradingService(engine, portfolioSvc, marketSvc, stockRepo, ledgerRepo, stateRepo, equityRepo, notifier, realtimeClient, cfg, log)
 
 	// --- 初始 DB 回補 (取代舊 sqls.InitDatabase 的回補邏輯) ---
 	if cfg.InitDBBackMonths > cfg.MaxBackMonths {
@@ -98,11 +114,9 @@ func main() {
 		}
 	}
 
-	// --- 啟動通知 (非致命,沿用舊行為) ---
-	if discordClient != nil {
-		if err := discordClient.SendEmbed("📢 SYSTEM", "長線股票模擬交易系統 Discord bot 順利啟動", 0x00ff00); err != nil {
-			log.WithError(err).Error("發送 Discord 訊息失敗")
-		}
+	// --- 啟動通知 (非致命,經聚合器同步發送到所有已設定管道) ---
+	if err := notifier.SendEmbed("📢 SYSTEM", "長線股票模擬交易系統通知 bot 順利啟動", 0x00ff00); err != nil {
+		log.WithError(err).Error("發送啟動通知失敗")
 	}
 
 	// --- controller + echo (HTTP transport) ---

@@ -79,10 +79,10 @@ type EquityStore interface {
 	ListEquityAsc(ctx context.Context) ([]entity.EquitySnapshot, error)
 }
 
-// Notifier 是對外通知 port，TradingService 使用它發送開機通知與每筆成交的 Discord embed，
-// 由 *client/discord.Client 實作。
-//   - SendEmbed:單行描述 embed (開機 / 系統通知用)。
-//   - SendTradeEmbed:多欄位 embed (買賣成交專用,附交易理由與美化排版)。
+// Notifier 是對外通知 port，TradingService 使用它發送開機通知與每筆成交通知，
+// 由 *notify.Fanout 實作 (聚合 Discord / LINE 等已設定管道;*client/discord.Client 亦直接滿足本介面)。
+//   - SendEmbed:單行描述通知 (開機 / 系統通知用)。
+//   - SendTradeEmbed:多欄位成交通知 (買賣成交專用,附交易理由;Discord 渲染為 embed、LINE 渲染為多行文字)。
 type Notifier interface {
 	SendEmbed(title, message string, color int) error
 	SendTradeEmbed(n discord.TradeNotification) error

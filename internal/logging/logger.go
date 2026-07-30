@@ -101,7 +101,7 @@ func parseLevel(raw string) logrus.Level {
 }
 
 // newFormatter 依 LOG_FORMAT 環境變數選擇 formatter:
-// "json" 回傳結構化 JSON (供 Loki / Elasticsearch 等 log 系統做欄位查詢,無 ANSI 碼),
+// "json" 回傳結構化 JSON (供 VictoriaLogs / Elasticsearch 等 log 系統做欄位查詢,無 ANSI 碼),
 // 其餘值回傳彩色文字 (本機開發終端)。
 func newFormatter(format string) logrus.Formatter {
 	// json 模式:欄位名稱固定為 timestamp / level / message / caller,時間採 RFC3339。

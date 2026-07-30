@@ -10,7 +10,7 @@ import (
 )
 
 // requestLog 定義 JSON access log 的結構,每個 HTTP request 輸出一行,
-// 由 log 收集器 (Alloy / Fluent Bit) 從 stdout 讀取後送往 Loki / Elasticsearch。
+// 由 log 收集器 (Alloy / Fluent Bit) 從 stdout 讀取後送往 VictoriaLogs / Elasticsearch。
 type requestLog struct {
 	Timestamp string `json:"timestamp"`
 	Level     string `json:"level"`

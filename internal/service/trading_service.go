@@ -21,7 +21,7 @@ import (
 // TradingService 是線上交易模式的命令式外殼（imperative shell）。
 // 它將純交易引擎、投資組合／市場資料服務，以及 repository／notifier port 組合在一起，
 // 負責從 DB 載入價格序列、於啟動時還原引擎狀態、持久化水位線與現金，
-// 並將成交事件路由至 portfolio service 與 Discord。
+// 並將成交事件路由至 portfolio service 與通知管道 (Discord / LINE)。
 // 純決策邏輯保留在 *trading.Engine 中，TradingService 本身只處理 I/O 協調。
 type TradingService struct {
 	engine    *trading.Engine
@@ -198,7 +198,7 @@ func (s *TradingService) SeedFromDB(ctx context.Context) error {
 }
 
 // CatchUp 以靜默 executor 回放 [水位線+1, 序列最新日] 區間的歷史決策，
-// 寫入 DB 但不發送 Discord 通知，回放完成後更新水位線與現金。
+// 寫入 DB 但不發送通知，回放完成後更新水位線與現金。
 func (s *TradingService) CatchUp(ctx context.Context, series map[string]*trading.StockSeries) error {
 	watermark, err := s.loadWatermark(ctx)
 	if err != nil {
@@ -296,7 +296,7 @@ func inOpenDecisionWindow(now time.Time) bool {
 	return now.Hour() == openDecisionHour && now.Minute() >= openWindowStartMin && now.Minute() < openWindowEndMin
 }
 
-// runDailyLoop 是線上模式的主迴圈：每天台灣時間開盤時段抓即時開盤價、即時決策並發送 Discord 通知。
+// runDailyLoop 是線上模式的主迴圈：每天台灣時間開盤時段抓即時開盤價、即時決策並發送通知 (Discord / LINE)。
 // 每分鐘檢查一次;當日尚未處理且落在開盤時段才嘗試決策,成功後以水位線去重避免重跑。
 func (s *TradingService) runDailyLoop(ctx context.Context) error {
 	taiwanTimeZone, err := time.LoadLocation("Asia/Taipei")
@@ -503,7 +503,7 @@ func (s *TradingService) addTotalContributed(ctx context.Context, amount float64
 
 // tradingExecutor 是線上模式的 trading.Executor 實作：
 // 將引擎套用後的買進／賣出成交路由至 PortfolioService（寫入 UnrealizedGainsLosses / RealizedGainsLosses），
-// 並在 notify=true 時發送 Discord 嵌入訊息。notify=false 用於 catch-up 靜默回放。
+// 並在 notify=true 時經 Notifier 發送通知 (Discord embed / LINE 文字)。notify=false 用於 catch-up 靜默回放。
 // orchestration 的 context 保存於 executor 上，使 portfolio 寫入能參與取消機制。
 type tradingExecutor struct {
 	svc    *TradingService
@@ -535,10 +535,10 @@ func (e *tradingExecutor) OnBuyApplied(stockID string, day time.Time, shares int
 	// 以結構化欄位記錄本筆買入及其決策理由 (每筆交易理由皆進 log),並累計成交指標。
 	e.logTrade("買入成交", stockID, dateStr, reason)
 	metrics.IncTrade("buy")
-	// 通知模式下發送美化的 Discord 買入嵌入訊息 (附交易理由);失敗僅記錄,不影響成交。
+	// 通知模式下經 Notifier 發送美化的買入通知 (附交易理由);失敗僅記錄,不影響成交。
 	if e.notify {
 		if err := e.svc.notify.SendTradeEmbed(buildTradeNotification("🟥 買入成交", buyColor, stockID, dateStr, reason)); err != nil {
-			e.svc.log.WithError(err).Error("發送 Discord 訊息失敗")
+			e.svc.log.WithError(err).Error("發送成交通知失敗")
 		}
 	}
 	return nil
@@ -554,10 +554,10 @@ func (e *tradingExecutor) OnSellApplied(stockID string, day time.Time, shares in
 	// 以結構化欄位記錄本筆賣出及其決策理由 (每筆交易理由皆進 log),並累計成交指標。
 	e.logTrade("賣出成交", stockID, dateStr, reason)
 	metrics.IncTrade("sell")
-	// 通知模式下發送美化的 Discord 賣出嵌入訊息 (附交易理由);失敗僅記錄,不影響成交。
+	// 通知模式下經 Notifier 發送美化的賣出通知 (附交易理由);失敗僅記錄,不影響成交。
 	if e.notify {
 		if err := e.svc.notify.SendTradeEmbed(buildTradeNotification("🟩 賣出成交", sellColor, stockID, dateStr, reason)); err != nil {
-			e.svc.log.WithError(err).Error("發送 Discord 訊息失敗")
+			e.svc.log.WithError(err).Error("發送成交通知失敗")
 		}
 	}
 	return nil
@@ -579,7 +579,7 @@ func (e *tradingExecutor) logTrade(action, stockID, dateStr string, reason tradi
 	}).Info(action)
 }
 
-// buildTradeNotification 由交易理由組裝一則多欄位、附理由的 Discord 成交通知。
+// buildTradeNotification 由交易理由組裝一則多欄位、附理由的成交通知 (Discord 渲染為 embed、LINE 渲染為多行文字)。
 func buildTradeNotification(title string, color int, stockID, dateStr string, reason trading.TradeReason) discord.TradeNotification {
 	return discord.TradeNotification{
 		Title: fmt.Sprintf("%s — %s", title, stockID),
