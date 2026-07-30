@@ -18,7 +18,7 @@ import (
 type Client struct {
 	session   *discordgo.Session
 	channelID string
-	log       *logrus.Logger
+	log       *logrus.Entry
 }
 
 // NewClient builds a Discord client from a bot token and target channel ID.
@@ -29,11 +29,17 @@ type Client struct {
 // parameter so callers pass os.Getenv("DISCORD_BOT_CHANNELID") themselves,
 // keeping this package independent of the environment.
 func NewClient(token, channelID string, log *logrus.Logger) (*Client, error) {
+	// 以 component 欄位標記本 client 的所有 log;呼叫端未提供 logger 時維持 nil。
+	var entry *logrus.Entry
+	if log != nil {
+		entry = log.WithField("component", "discord")
+	}
+
 	// token 為空時立即回傳錯誤,避免以空字串建立無效 session。
 	if token == "" {
 		err := fmt.Errorf("NewClient() 失敗, 缺少 Discord bot token, 請確認環境變數設定無誤")
-		if log != nil {
-			log.Error(err)
+		if entry != nil {
+			entry.Error(err)
 		}
 		return nil, err
 	}
@@ -42,8 +48,8 @@ func NewClient(token, channelID string, log *logrus.Logger) (*Client, error) {
 	session, err := discordgo.New("Bot " + token)
 	if err != nil {
 		wrapped := fmt.Errorf("NewClient() 失敗, 建立 Discord session 失敗: %w", err)
-		if log != nil {
-			log.Error(wrapped)
+		if entry != nil {
+			entry.Error(wrapped)
 		}
 		return nil, wrapped
 	}
@@ -51,21 +57,21 @@ func NewClient(token, channelID string, log *logrus.Logger) (*Client, error) {
 	// 開啟 WebSocket 連線;連線失敗時回傳包裝錯誤。
 	if err := session.Open(); err != nil {
 		wrapped := fmt.Errorf("NewClient() 失敗, 無法連線至 Discord: %w", err)
-		if log != nil {
-			log.Error(wrapped)
+		if entry != nil {
+			entry.Error(wrapped)
 		}
 		return nil, wrapped
 	}
 
 	// 連線成功後記錄 Info 訊息並回傳已初始化的 Client。
-	if log != nil {
-		log.Info("成功連線至 Discord")
+	if entry != nil {
+		entry.Info("成功連線至 Discord")
 	}
 
 	return &Client{
 		session:   session,
 		channelID: channelID,
-		log:       log,
+		log:       entry,
 	}, nil
 }
 

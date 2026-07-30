@@ -26,12 +26,12 @@ type PerformanceHistoryService struct {
 	cfg    *config.Config
 	series SeriesLoader
 	equity equityHistoryReader
-	log    *logrus.Logger
+	log    *logrus.Entry
 }
 
 // NewPerformanceHistoryService 建立並回傳一個已完成依賴注入的 PerformanceHistoryService。
 func NewPerformanceHistoryService(cfg *config.Config, series SeriesLoader, equity equityHistoryReader, log *logrus.Logger) *PerformanceHistoryService {
-	return &PerformanceHistoryService{cfg: cfg, series: series, equity: equity, log: log}
+	return &PerformanceHistoryService{cfg: cfg, series: series, equity: equity, log: log.WithField("component", "performance_history")}
 }
 
 // History 跑全期回測取得逐日權益曲線、讀取實盤快照,組裝成統一日期軸序列 (等距取樣 <=400 點)。

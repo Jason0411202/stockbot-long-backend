@@ -26,7 +26,7 @@ const maxTextLen = 5000
 type Client struct {
 	token string
 	httpc *http.Client
-	log   *logrus.Logger
+	log   *logrus.Entry
 }
 
 // NewClient 以 channel access token 建立 LINE client。
@@ -37,10 +37,16 @@ func NewClient(token string, log *logrus.Logger) (*Client, error) {
 		return nil, fmt.Errorf("NewClient() 失敗, 缺少 LINE channel access token, 請確認環境變數設定無誤")
 	}
 
+	// 以 component 欄位標記本 client 的所有 log;呼叫端未提供 logger 時維持 nil。
+	var entry *logrus.Entry
+	if log != nil {
+		entry = log.WithField("component", "line")
+	}
+
 	return &Client{
 		token: token,
 		httpc: &http.Client{Timeout: 10 * time.Second},
-		log:   log,
+		log:   entry,
 	}, nil
 }
 

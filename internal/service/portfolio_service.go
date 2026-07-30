@@ -19,12 +19,12 @@ import (
 type PortfolioService struct {
 	ledger LedgerStore
 	stock  StockStore
-	log    *logrus.Logger
+	log    *logrus.Entry
 }
 
 // NewPortfolioService 建立並回傳一個已完成依賴注入的 PortfolioService。
 func NewPortfolioService(ledger LedgerStore, stock StockStore, log *logrus.Logger) *PortfolioService {
-	return &PortfolioService{ledger: ledger, stock: stock, log: log}
+	return &PortfolioService{ledger: ledger, stock: stock, log: log.WithField("component", "portfolio")}
 }
 
 // round2 將浮點數四捨五入至小數點後兩位，與原始 sqls.go 的呈現捨入邏輯一致。

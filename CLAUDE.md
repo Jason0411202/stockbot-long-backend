@@ -59,7 +59,11 @@ cmd/*            程式進入點（server 與各 CLI 工具）
 
 - app log 由 `internal/logging.InitLogger` 建立：`LOG_FORMAT=json` 輸出結構化 JSON（生產,compose 已設）,
   預設輸出彩色文字（本機）；`LOG_LEVEL` 控制等級（預設 info）。新 log 一律用 `WithFields`/`WithError`
-  帶結構化欄位,不要把資料插進訊息字串。
+  帶結構化欄位,不要把資料插進訊息字串。JSON 欄位鍵名為 `timestamp`/`level`/`message`（FieldMap 改名,
+  **不是** logrus 預設的 time/msg,dashboard 查詢依此）,並固定附掛:`file`/`func`（呼叫出處,repo 相對路徑）、
+  `boot_id`（本次啟動識別碼）、`version`（build 注入的 APP_COMMIT git SHA）、`component`（子系統,
+  各 service/client constructor 以 `WithField` 注入）;成交 log 另有 `mode`（live 即時 / catchup 回放）,
+  controller log 附 `request_id`（與 access log 同鍵,跨 log 關聯同一請求）。
 - log 儲存為 **VictoriaLogs**（取代舊 Loki）:Alloy 經 Loki 相容端點寫入,收集端丟棄 debug 等級並把
   JSON 的 `level` 以 structured metadata 附掛為可查詢欄位;Grafana 以 `victoriametrics-logs-datasource`
   plugin（uid `victorialogs`）用 LogsQL 查詢。dashboard 有兩個:`stockbot-overview`（總覽 + App Log 預寫查詢）

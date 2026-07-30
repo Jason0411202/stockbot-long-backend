@@ -33,12 +33,12 @@ type PerformanceService struct {
 	portfolio portfolioReader
 	state     StateStore
 	series    SeriesLoader
-	log       *logrus.Logger
+	log       *logrus.Entry
 }
 
 // NewPerformanceService 建立並回傳一個已完成依賴注入的 PerformanceService。
 func NewPerformanceService(cfg *config.Config, portfolio portfolioReader, state StateStore, series SeriesLoader, log *logrus.Logger) *PerformanceService {
-	return &PerformanceService{cfg: cfg, portfolio: portfolio, state: state, series: series, log: log}
+	return &PerformanceService{cfg: cfg, portfolio: portfolio, state: state, series: series, log: log.WithField("component", "performance")}
 }
 
 // round4 將浮點數四捨五入至小數點後四位 (供報酬率 / 回撤 / 比率使用);NaN/Inf 原樣通過 (交由 JSONFloat 降級為 null)。

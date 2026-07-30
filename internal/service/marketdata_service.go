@@ -22,12 +22,12 @@ type MarketDataService struct {
 	stock    StockStore
 	backfill BackfillStore
 	cfg      *config.Config
-	log      *logrus.Logger
+	log      *logrus.Entry
 }
 
 // NewMarketDataService 建立並回傳一個已完成依賴注入的 MarketDataService。
 func NewMarketDataService(twse MarketFetcher, stock StockStore, backfill BackfillStore, cfg *config.Config, log *logrus.Logger) *MarketDataService {
-	return &MarketDataService{twse: twse, stock: stock, backfill: backfill, cfg: cfg, log: log}
+	return &MarketDataService{twse: twse, stock: stock, backfill: backfill, cfg: cfg, log: log.WithField("component", "market_data")}
 }
 
 // monthlyBackfillDates 以 currentDate（"YYYYMMDD"）為起點，往前推算 months 個月的日期清單，

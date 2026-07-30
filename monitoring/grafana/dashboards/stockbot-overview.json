@@ -148,7 +148,7 @@
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 34 },
       "timeFrom": "1y",
       "hideTimeOverride": false,
-      "targets": [{ "expr": "{service=\"app\"} \"成交\" | unpack_json | filter msg:~\"買入成交|賣出成交\"", "refId": "A", "maxLines": 1000 }],
+      "targets": [{ "expr": "{service=\"app\"} \"成交\" | unpack_json | filter message:~\"買入成交|賣出成交\"", "refId": "A", "maxLines": 1000 }],
       "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending", "enableLogDetails": true }
     },
     {

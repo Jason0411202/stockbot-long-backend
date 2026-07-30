@@ -50,6 +50,8 @@ jobs:
         with:
           context: .
           push: true
+          build-args: |
+            GIT_SHA=${{ github.sha }}
           tags: |
             ${{ env.IMAGE_LC }}:${{ github.sha }}
             ${{ env.IMAGE_LC }}:latest

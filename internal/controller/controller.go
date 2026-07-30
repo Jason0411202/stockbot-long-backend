@@ -56,7 +56,7 @@ type PerformanceHistoryReporter interface {
 // methods. Dependencies are constructor-injected so handlers stay unit-testable
 // with fakes (no DB, no server).
 type Controller struct {
-	log         *logrus.Logger
+	log         *logrus.Entry
 	portfolio   PortfolioService
 	statistic   StatisticService
 	history     StockHistoryService
@@ -67,7 +67,17 @@ type Controller struct {
 
 // New constructs a Controller from its logger and the six business services.
 func New(log *logrus.Logger, p PortfolioService, s StatisticService, h StockHistoryService, perf PerformanceReporter, eq EquityHistoryReporter, ph PerformanceHistoryReporter) *Controller {
-	return &Controller{log: log, portfolio: p, statistic: s, history: h, performance: perf, equity: eq, perfHistory: ph}
+	return &Controller{log: log.WithField("component", "controller"), portfolio: p, statistic: s, history: h, performance: perf, equity: eq, perfHistory: ph}
+}
+
+// reqLog 回傳附掛本次 request 之 request_id 的 log entry (與 access log 同鍵),
+// 使同一 request 的 controller log 與 access log 可用 request_id 互相關聯。
+func (ctl *Controller) reqLog(c echo.Context) *logrus.Entry {
+	// 取 Echo RequestID middleware 設定的回應標頭;無值時退回原 entry。
+	if id := c.Response().Header().Get(echo.HeaderXRequestID); id != "" {
+		return ctl.log.WithField("request_id", id)
+	}
+	return ctl.log
 }
 
 // Home replies with the static landing string (always 200).
@@ -79,11 +89,12 @@ func (ctl *Controller) Home(c echo.Context) error {
 // On service error it logs and returns 200 + an empty typed slice (error
 // swallowed, not surfaced), preserving the original handler behavior.
 func (ctl *Controller) UnrealizedGainsLosses(c echo.Context) error {
-	ctl.log.Info("GET /api/get_unrealized_gains_losses")
+	log := ctl.reqLog(c)
+	log.Info("GET /api/get_unrealized_gains_losses")
 	// 呼叫 service 取得未實現損益列表;發生錯誤時回傳空陣列維持原有行為。
 	rows, err := ctl.portfolio.UnrealizedGainsLosses(c.Request().Context())
 	if err != nil {
-		ctl.log.WithError(err).Error("GetAllUnrealizedGainsLosses 發生錯誤")
+		log.WithError(err).Error("GetAllUnrealizedGainsLosses 發生錯誤")
 		return c.JSONPretty(http.StatusOK, []dto.UnrealizedGainLoss{}, "  ")
 	}
 	return c.JSONPretty(http.StatusOK, rows, "  ")
@@ -92,11 +103,12 @@ func (ctl *Controller) UnrealizedGainsLosses(c echo.Context) error {
 // RealizedGainsLosses returns the realized P&L rows. On service error it logs
 // and returns 200 + an empty typed slice.
 func (ctl *Controller) RealizedGainsLosses(c echo.Context) error {
-	ctl.log.Info("GET /api/get_realized_gains_losses")
+	log := ctl.reqLog(c)
+	log.Info("GET /api/get_realized_gains_losses")
 	// 呼叫 service 取得已實現損益列表;發生錯誤時回傳空陣列維持原有行為。
 	rows, err := ctl.portfolio.RealizedGainsLosses(c.Request().Context())
 	if err != nil {
-		ctl.log.WithError(err).Error("GetAllRealizedGainsLosses 發生錯誤")
+		log.WithError(err).Error("GetAllRealizedGainsLosses 發生錯誤")
 		return c.JSONPretty(http.StatusOK, []dto.RealizedGainLoss{}, "  ")
 	}
 	return c.JSONPretty(http.StatusOK, rows, "  ")
@@ -105,11 +117,12 @@ func (ctl *Controller) RealizedGainsLosses(c echo.Context) error {
 // StockStatisticData returns per-tracked-stock display data. On service error
 // it logs and returns 200 + an empty typed slice.
 func (ctl *Controller) StockStatisticData(c echo.Context) error {
-	ctl.log.Info("GET /api/get_stock_statistic_data")
+	log := ctl.reqLog(c)
+	log.Info("GET /api/get_stock_statistic_data")
 	// 呼叫 service 取得各追蹤股票的顯示資料;發生錯誤時回傳空陣列維持原有行為。
 	rows, err := ctl.statistic.StockStatisticData(c.Request().Context())
 	if err != nil {
-		ctl.log.WithError(err).Error("GetStockStatisticData 發生錯誤")
+		log.WithError(err).Error("GetStockStatisticData 發生錯誤")
 		return c.JSONPretty(http.StatusOK, []dto.StockStatistic{}, "  ")
 	}
 	return c.JSONPretty(http.StatusOK, rows, "  ")
@@ -120,11 +133,12 @@ func (ctl *Controller) StockStatisticData(c echo.Context) error {
 // and returns 200 + an empty typed object (error swallowed), matching the other
 // handlers' lenient contract.
 func (ctl *Controller) PerformanceSummary(c echo.Context) error {
-	ctl.log.Info("GET /api/get_performance_summary")
+	log := ctl.reqLog(c)
+	log.Info("GET /api/get_performance_summary")
 	// 呼叫 service 取得績效摘要;發生錯誤時回傳空物件維持前端寬鬆契約。
 	summary, err := ctl.performance.Summary(c.Request().Context())
 	if err != nil {
-		ctl.log.WithError(err).Error("PerformanceSummary 發生錯誤")
+		log.WithError(err).Error("PerformanceSummary 發生錯誤")
 		return c.JSONPretty(http.StatusOK, dto.PerformanceSummary{}, "  ")
 	}
 	return c.JSONPretty(http.StatusOK, summary, "  ")
@@ -135,11 +149,12 @@ func (ctl *Controller) PerformanceSummary(c echo.Context) error {
 // logs and returns 200 + an empty typed slice, matching the other handlers'
 // lenient contract.
 func (ctl *Controller) EquityHistory(c echo.Context) error {
-	ctl.log.Info("GET /api/get_equity_history")
+	log := ctl.reqLog(c)
+	log.Info("GET /api/get_equity_history")
 	// 呼叫 service 取得每日權益歷史;發生錯誤時回傳空陣列維持前端寬鬆契約。
 	rows, err := ctl.equity.EquityHistory(c.Request().Context())
 	if err != nil {
-		ctl.log.WithError(err).Error("EquityHistory 發生錯誤")
+		log.WithError(err).Error("EquityHistory 發生錯誤")
 		return c.JSONPretty(http.StatusOK, []dto.LiveEquityPoint{}, "  ")
 	}
 	return c.JSONPretty(http.StatusOK, rows, "  ")
@@ -150,11 +165,12 @@ func (ctl *Controller) EquityHistory(c echo.Context) error {
 // On service error it logs and returns 200 + an empty typed slice, matching the
 // other handlers' lenient contract.
 func (ctl *Controller) PerformanceHistory(c echo.Context) error {
-	ctl.log.Info("GET /api/get_performance_history")
+	log := ctl.reqLog(c)
+	log.Info("GET /api/get_performance_history")
 	// 呼叫 service 取得統一日期軸績效歷史;發生錯誤時回傳空陣列維持前端寬鬆契約。
 	rows, err := ctl.perfHistory.History(c.Request().Context())
 	if err != nil {
-		ctl.log.WithError(err).Error("PerformanceHistory 發生錯誤")
+		log.WithError(err).Error("PerformanceHistory 發生錯誤")
 		return c.JSONPretty(http.StatusOK, []dto.PerformanceHistoryPoint{}, "  ")
 	}
 	return c.JSONPretty(http.StatusOK, rows, "  ")
@@ -169,11 +185,12 @@ func (ctl *Controller) StockHistoryData(c echo.Context) error {
 	if stockID == "" {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "stockId 參數是必要的"})
 	}
-	ctl.log.WithField("stock_id", stockID).Info("GET /api/get_stock_history_data")
+	log := ctl.reqLog(c)
+	log.WithField("stock_id", stockID).Info("GET /api/get_stock_history_data")
 	// 呼叫 service 取得收盤價歷史序列;發生錯誤時回傳空陣列維持原有行為。
 	rows, err := ctl.history.StockHistoryData(c.Request().Context(), stockID)
 	if err != nil {
-		ctl.log.WithError(err).Error("GetStockHistoryData 發生錯誤")
+		log.WithError(err).Error("GetStockHistoryData 發生錯誤")
 		return c.JSONPretty(http.StatusOK, []dto.StockHistoryPoint{}, "  ")
 	}
 	return c.JSONPretty(http.StatusOK, rows, "  ")
