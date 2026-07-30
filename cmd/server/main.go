@@ -77,9 +77,9 @@ func main() {
 	if err != nil {
 		log.WithError(err).Error("初始化 Discord 錯誤") // 非致命:沿用舊 InitDiscord 的「Error 後繼續」行為
 	}
-	lineClient, err := line.NewClient(os.Getenv("LINE_CHANNEL_ACCESS_TOKEN"), os.Getenv("LINE_NOTIFY_TO"), log)
+	lineClient, err := line.NewClient(os.Getenv("LINE_CHANNEL_ACCESS_TOKEN"), log)
 	if err != nil {
-		log.WithError(err).Info("LINE 通知未啟用 (LINE_CHANNEL_ACCESS_TOKEN / LINE_NOTIFY_TO 未設定)") // 非致命:LINE 為可選管道
+		log.WithError(err).Info("LINE 通知未啟用 (LINE_CHANNEL_ACCESS_TOKEN 未設定)") // 非致命:LINE 為可選管道
 	}
 
 	// --- 通知聚合:同一則通知同步發送到所有已設定的管道 (Discord / LINE) ---

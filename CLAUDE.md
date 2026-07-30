@@ -165,9 +165,9 @@ common issuance 起 catch-up，其現金軌跡與帳本與回測全期完全一�
 ## 設定與機密
 
 - `config.yaml`：非機密策略與回補參數，可 commit。
-- `.env`：機密（`DB_DSN`、`DISCORD_BOT_TOKEN`、`DISCORD_BOT_CHANNELID`、`LINE_CHANNEL_ACCESS_TOKEN`、
-  `LINE_NOTIFY_TO`），不可 commit；範本見 `.env.example`。正式機 `.env` 的單一來源是 GitHub secret
-  `STOCKBOT_LONG_ENV_FILE`（部署時整份覆寫）。
+- `.env`：機密（`DB_DSN`、`DISCORD_BOT_TOKEN`、`DISCORD_BOT_CHANNELID`、`LINE_CHANNEL_ACCESS_TOKEN`），
+  不可 commit；範本見 `.env.example`。正式機 `.env` 的單一來源是 GitHub secret
+  `STOCKBOT_LONG_ENV_FILE`（部署時整份覆寫）。LINE 通知為 broadcast（群發給所有加官方帳號好友的人）。
 - 不得硬編任何密鑰；啟動時驗證必要設定存在。
 
 ## 主要相依套件

@@ -28,14 +28,14 @@ func (f *fakeChannel) SendTradeEmbed(n discord.TradeNotification) error {
 	return f.err
 }
 
-// fakePusher 記錄推播文字並可注入錯誤,供 Line 管道測試使用。
+// fakePusher 記錄群發文字並可注入錯誤,供 Line 管道測試使用。
 type fakePusher struct {
 	texts []string
 	err   error
 }
 
-// PushText 記錄一次推播呼叫並回傳注入的錯誤。
-func (f *fakePusher) PushText(text string) error {
+// BroadcastText 記錄一次群發呼叫並回傳注入的錯誤。
+func (f *fakePusher) BroadcastText(text string) error {
 	f.texts = append(f.texts, text)
 	return f.err
 }

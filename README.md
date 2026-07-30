@@ -35,9 +35,8 @@ MARIADB_DATABASE=StockLongData
 DISCORD_BOT_TOKEN=MTA5xxxxxxxxxxxxxxxxxxxx.Gxxxxx.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 DISCORD_BOT_CHANNELID=1234567890123456789
 
-# LINE 通知 bot 的 token 與收件者 user ID（可選；留空不使用。教學見 docs/line-bot-setup.md）
+# LINE 通知 bot 的 token（可選；留空不使用。群發給所有加好友的人。教學見 docs/line-bot-setup.md）
 LINE_CHANNEL_ACCESS_TOKEN=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-LINE_NOTIFY_TO=Uxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
 # 網域。供 Caddy 自動申請 HTTPS 用（必改）
 SITE_ADDRESS=stockbot.example.com

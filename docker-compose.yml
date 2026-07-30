@@ -47,7 +47,6 @@ services:
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
       DISCORD_BOT_CHANNELID: ${DISCORD_BOT_CHANNELID:-}
       LINE_CHANNEL_ACCESS_TOKEN: ${LINE_CHANNEL_ACCESS_TOKEN:-}
-      LINE_NOTIFY_TO: ${LINE_NOTIFY_TO:-}
       # 生產環境輸出結構化 JSON log (供 Alloy → VictoriaLogs 做欄位查詢);等級可由 .env 覆寫。
       LOG_FORMAT: json
       LOG_LEVEL: ${LOG_LEVEL:-info}
