@@ -1,114 +1,30 @@
 {
   "uid": "stockbot-logs-explorer",
   "title": "Log Explorer (Kibana 式)",
-  "description": "模擬 Kibana Discover 的 log 探索介面:上方搜尋列 (LogsQL) + 等級/容器過濾 + 關鍵查詢速查 + 直方圖 + 欄位 facet + 表格式結果 + 可展開的原始 log",
+  "description": "多張預寫過濾條件的表格式 log 檢視:每張表以程式寫入的核心訊息 (message) 為主欄,JSON 欄位展開為欄;自由查詢請用左側 Explore (LogsQL)",
   "timezone": "Asia/Taipei",
   "schemaVersion": 39,
-  "refresh": "30s",
-  "time": { "from": "now-6h", "to": "now" },
-  "templating": {
-    "list": [
-      {
-        "name": "query",
-        "label": "🔍 查詢 (LogsQL)",
-        "description": "如 Kibana 搜尋列。範例:錯誤 → error;片語 → \"連線失敗\";欄位 → level:=error;regex → ~\"買入|賣出\";組合 → error and not twse",
-        "type": "textbox",
-        "query": "*",
-        "options": [],
-        "current": { "text": "*", "value": "*" }
-      },
-      {
-        "name": "container",
-        "label": "容器",
-        "type": "custom",
-        "multi": true,
-        "includeAll": true,
-        "allValue": ".+",
-        "query": "stockbot-app,stockbot-mariadb,stockbot-caddy,stockbot-grafana,stockbot-prometheus,stockbot-alloy,stockbot-victorialogs",
-        "options": [],
-        "current": { "text": ["All"], "value": ["$__all"] }
-      },
-      {
-        "name": "level",
-        "label": "等級",
-        "type": "custom",
-        "multi": true,
-        "includeAll": true,
-        "allValue": ".+",
-        "query": "error,warning,info,debug",
-        "options": [],
-        "current": { "text": ["All"], "value": ["$__all"] }
-      }
-    ]
-  },
+  "refresh": "1m",
+  "time": { "from": "now-24h", "to": "now" },
+  "templating": { "list": [] },
   "panels": [
     {
-      "type": "text", "title": "⚡ 關鍵查詢 (複製貼進上方查詢欄或 Explore)", "id": 8,
+      "type": "table", "title": "🟥🟩 交易成交 (買入 / 賣出 + 決策理由) — 固定回看 1 年", "id": 1,
+      "description": "每筆成交一列:模式 (live 即時 / catchup 回放)、標的、市況、股數、價金與完整決策理由",
+      "datasource": { "type": "victoriametrics-logs-datasource", "uid": "victorialogs" },
       "gridPos": { "h": 9, "w": 24, "x": 0, "y": 0 },
-      "options": {
-        "mode": "markdown",
-        "content": "掌握程式行為的常用查詢 —— log 欄位:`message`(訊息)、`level`、`component`(子系統)、`mode`(live 即時 / catchup 回放)、`boot_id`(哪次啟動)、`version`(部署版本)、`file`/`func`(程式出處)、`request_id`(HTTP 請求關聯)。\n\n| 想知道什麼 | 查詢 (LogsQL) |\n|---|---|\n| 一年內所有成交 + 決策理由 (時間範圍切到 1y) | `{service=\"app\"} \"成交\" \\| unpack_json \\| filter message:~\"買入成交\\|賣出成交\"` |\n| 動用「打破冷卻」額度的買入 | `{service=\"app\"} ~\"打破冷卻\"` |\n| 只看開盤即時決策的成交 (排除重啟回放補寫) | `{service=\"app\"} \"成交\" \\| unpack_json \\| filter message:~\"買入成交\\|賣出成交\" mode:=live` |\n| 重啟歷史:每次啟動各寫了多少 log | `{service=\"app\"} \\| unpack_json \\| stats by (boot_id) count() logs` |\n| 某一次啟動的完整時間線 (貼上 boot_id) | `{service=\"app\"} \\| unpack_json \\| filter boot_id:=xxxxxxxx` |\n| 錯誤/警告依子系統分布 (先找哪裡最常出事) | `{service=\"app\"} level:~\"error\\|warning\" \\| unpack_json \\| stats by (component) count() errs` |\n| TWSE 資料回補的錯誤與警告 | `{service=\"app\"} level:~\"error\\|warning\" \\| unpack_json \\| filter component:=market_data` |\n| 追蹤單一 HTTP 請求的因果鏈 (貼上 request_id) | `{service=\"app\"} \"xxxxxxxx-xxxx\"` |\n| 開盤決策當日流程總覽 | `{service=\"app\"} ~\"開盤決策時段\\|開盤價\\|catch-up\\|成交\"` |\n| 部署版本對照 (行為從哪版開始變) | `{service=\"app\"} \\| unpack_json \\| stats by (version) count() logs` |\n\n**語法速查**:`*`=全部;AND=空白或 `and`;OR=`or`;NOT=`not`。全文關鍵字 `逾時`;精確片語 `\"發送啟動通知失敗\"`;欄位等於 `level:=error`、`stock_id:=00631L`;欄位含字 `message:成交`;regex `~\"買入\\|賣出\"`、`path:~\"/api/.+\"`。JSON 欄位過濾前先接 `\\| unpack_json`。"
-      }
-    },
-    {
-      "type": "timeseries", "title": "Log 直方圖 (依等級)", "id": 3,
-      "description": "同 Kibana Discover 上方的時間直方圖;分色 = level",
-      "datasource": { "type": "victoriametrics-logs-datasource", "uid": "victorialogs" },
-      "gridPos": { "h": 6, "w": 15, "x": 0, "y": 9 },
-      "targets": [{ "expr": "{container=~\"${container:pipe}\"} ${query} (level:~\"${level:pipe}\" or level:\"\")", "queryType": "hits", "fields": ["level"], "refId": "A" }],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": { "drawStyle": "bars", "fillOpacity": 70, "stacking": { "mode": "normal" } }
-        },
-        "overrides": [
-          { "matcher": { "id": "byRegexp", "options": ".*error.*" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] },
-          { "matcher": { "id": "byRegexp", "options": ".*warning.*" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }] },
-          { "matcher": { "id": "byRegexp", "options": ".*info.*" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }] },
-          { "matcher": { "id": "byRegexp", "options": ".*debug.*" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "blue" } }] }
-        ]
-      }
-    },
-    {
-      "type": "stat", "title": "命中筆數", "id": 2,
-      "datasource": { "type": "victoriametrics-logs-datasource", "uid": "victorialogs" },
-      "gridPos": { "h": 6, "w": 3, "x": 15, "y": 9 },
-      "targets": [{ "expr": "{container=~\"${container:pipe}\"} ${query} (level:~\"${level:pipe}\" or level:\"\") | stats count() hits", "queryType": "stats", "refId": "A" }],
-      "options": { "colorMode": "value", "graphMode": "none", "textMode": "value" },
-      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "blue" } }, "overrides": [] }
-    },
-    {
-      "type": "bargauge", "title": "等級分布", "id": 4,
-      "description": "如 Kibana 左側欄位 facet:目前查詢結果的 level 分布",
-      "datasource": { "type": "victoriametrics-logs-datasource", "uid": "victorialogs" },
-      "gridPos": { "h": 6, "w": 3, "x": 18, "y": 9 },
-      "targets": [{ "expr": "{container=~\"${container:pipe}\"} ${query} | stats by (level) count() hits", "queryType": "stats", "refId": "A" }],
-      "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } },
-      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
-    },
-    {
-      "type": "bargauge", "title": "容器分布", "id": 5,
-      "description": "如 Kibana 左側欄位 facet:目前查詢結果的容器分布",
-      "datasource": { "type": "victoriametrics-logs-datasource", "uid": "victorialogs" },
-      "gridPos": { "h": 6, "w": 3, "x": 21, "y": 9 },
-      "targets": [{ "expr": "{container=~\"${container:pipe}\"} ${query} (level:~\"${level:pipe}\" or level:\"\") | stats by (container) count() hits", "queryType": "stats", "refId": "A" }],
-      "options": { "displayMode": "gradient", "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] } },
-      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
-    },
-    {
-      "type": "table", "title": "結果表格 (Discover)", "id": 6,
-      "description": "表格式 log 檢視:JSON 欄位自動展開為欄。可點欄位標題排序、於欄位標題輸入框內過濾",
-      "datasource": { "type": "victoriametrics-logs-datasource", "uid": "victorialogs" },
-      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 15 },
-      "targets": [{ "expr": "{container=~\"${container:pipe}\"} ${query} (level:~\"${level:pipe}\" or level:\"\") | unpack_json", "refId": "A", "maxLines": 1000 }],
+      "timeFrom": "1y",
+      "hideTimeOverride": false,
+      "targets": [{ "expr": "{service=\"app\"} \"成交\" | unpack_json | filter message:~\"買入成交|賣出成交\"", "refId": "A", "maxLines": 1000 }],
       "transformations": [
         { "id": "extractFields", "options": { "source": "labels", "format": "json", "replace": false } },
+        { "id": "filterFieldsByName", "options": { "include": { "names": ["Time", "message", "mode", "stock_id", "regime", "trigger", "shares", "price", "amount", "cash_after", "reason"] } } },
         {
           "id": "organize",
           "options": {
-            "excludeByName": { "labels": true, "tsNs": true, "id": true, "job": true, "service": true },
-            "indexByName": { "Time": 0, "level": 1, "container": 2, "component": 3, "message": 4, "Line": 5 },
-            "renameByName": { "Line": "原始行", "message": "訊息", "container": "容器", "level": "等級", "component": "子系統" }
+            "excludeByName": {},
+            "indexByName": { "Time": 0, "message": 1, "mode": 2, "stock_id": 3, "regime": 4, "trigger": 5, "shares": 6, "price": 7, "amount": 8, "cash_after": 9, "reason": 10 },
+            "renameByName": { "message": "訊息", "mode": "模式", "stock_id": "股票", "regime": "市況", "trigger": "觸發", "shares": "股數", "price": "成交價", "amount": "金額", "cash_after": "剩餘現金", "reason": "決策理由" }
           }
         }
       ],
@@ -116,20 +32,180 @@
       "fieldConfig": {
         "defaults": { "custom": { "filterable": true } },
         "overrides": [
-          { "matcher": { "id": "byName", "options": "Time" }, "properties": [{ "id": "custom.width", "value": 180 }] },
-          { "matcher": { "id": "byName", "options": "等級" }, "properties": [{ "id": "custom.width", "value": 90 }] },
-          { "matcher": { "id": "byName", "options": "子系統" }, "properties": [{ "id": "custom.width", "value": 130 }] },
-          { "matcher": { "id": "byName", "options": "容器" }, "properties": [{ "id": "custom.width", "value": 150 }] }
+          { "matcher": { "id": "byName", "options": "Time" }, "properties": [{ "id": "custom.width", "value": 170 }] },
+          { "matcher": { "id": "byName", "options": "訊息" }, "properties": [{ "id": "custom.width", "value": 110 }] },
+          { "matcher": { "id": "byName", "options": "模式" }, "properties": [{ "id": "custom.width", "value": 90 }] },
+          { "matcher": { "id": "byName", "options": "決策理由" }, "properties": [{ "id": "custom.minWidth", "value": 320 }] }
         ]
       }
     },
     {
-      "type": "logs", "title": "原始 log (點行展開全部欄位)", "id": 7,
-      "description": "同 Kibana 的文件展開檢視:點任一行可看到該筆 log 的所有欄位,並可依欄位值快速加入過濾",
+      "type": "table", "title": "⚙️ 開盤決策迴圈 / 回放 / 狀態還原 — 固定回看 7 天", "id": 2,
+      "description": "開盤時段決策、catch-up 回放區間、BotState / 持倉還原;boot_id 可辨識是哪一次啟動",
+      "datasource": { "type": "victoriametrics-logs-datasource", "uid": "victorialogs" },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 9 },
+      "timeFrom": "7d",
+      "hideTimeOverride": false,
+      "targets": [{ "expr": "{service=\"app\"} ~\"開盤|catch-up|首次啟動|還原|水位線|注資\" | unpack_json", "refId": "A", "maxLines": 1000 }],
+      "transformations": [
+        { "id": "extractFields", "options": { "source": "labels", "format": "json", "replace": false } },
+        { "id": "filterFieldsByName", "options": { "include": { "names": ["Time", "level", "message", "boot_id", "file"] } } },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": { "Time": 0, "level": 1, "message": 2, "boot_id": 3, "file": 4 },
+            "renameByName": { "level": "等級", "message": "訊息", "file": "出處" }
+          }
+        }
+      ],
+      "options": { "showHeader": true, "sortBy": [{ "displayName": "Time", "desc": true }], "footer": { "show": false } },
+      "fieldConfig": {
+        "defaults": { "custom": { "filterable": true } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Time" }, "properties": [{ "id": "custom.width", "value": 170 }] },
+          { "matcher": { "id": "byName", "options": "等級" }, "properties": [{ "id": "custom.width", "value": 80 }] },
+          { "matcher": { "id": "byName", "options": "boot_id" }, "properties": [{ "id": "custom.width", "value": 100 }] }
+        ]
+      }
+    },
+    {
+      "type": "table", "title": "📈 TWSE 資料回補 — 固定回看 7 天", "id": 3,
+      "description": "初始回補與每日更新:回補月份、逐月抓取結果與完成標記",
+      "datasource": { "type": "victoriametrics-logs-datasource", "uid": "victorialogs" },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 9 },
+      "timeFrom": "7d",
+      "hideTimeOverride": false,
+      "targets": [{ "expr": "{service=\"app\"} ~\"回補|每日資料更新|fetchAndInsertMonth|月份已標記完成|MarkComplete\" | unpack_json", "refId": "A", "maxLines": 1000 }],
+      "transformations": [
+        { "id": "extractFields", "options": { "source": "labels", "format": "json", "replace": false } },
+        { "id": "filterFieldsByName", "options": { "include": { "names": ["Time", "level", "message", "stock_id", "file"] } } },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": { "Time": 0, "level": 1, "message": 2, "stock_id": 3, "file": 4 },
+            "renameByName": { "level": "等級", "message": "訊息", "stock_id": "股票", "file": "出處" }
+          }
+        }
+      ],
+      "options": { "showHeader": true, "sortBy": [{ "displayName": "Time", "desc": true }], "footer": { "show": false } },
+      "fieldConfig": {
+        "defaults": { "custom": { "filterable": true } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Time" }, "properties": [{ "id": "custom.width", "value": 170 }] },
+          { "matcher": { "id": "byName", "options": "等級" }, "properties": [{ "id": "custom.width", "value": 80 }] }
+        ]
+      }
+    },
+    {
+      "type": "table", "title": "🚨 錯誤與警告 — 固定回看 30 天", "id": 4,
+      "description": "warning / error / fatal 與無 level 欄位的原始輸出 (如 panic);error 欄為 WithError 帶入的錯誤內容",
+      "datasource": { "type": "victoriametrics-logs-datasource", "uid": "victorialogs" },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 18 },
+      "timeFrom": "30d",
+      "hideTimeOverride": false,
+      "targets": [{ "expr": "{service=\"app\"} (level:~\"warning|error|fatal\" or level:\"\") | unpack_json", "refId": "A", "maxLines": 1000 }],
+      "transformations": [
+        { "id": "extractFields", "options": { "source": "labels", "format": "json", "replace": false } },
+        { "id": "filterFieldsByName", "options": { "include": { "names": ["Time", "level", "component", "message", "error", "file", "func"] } } },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": { "Time": 0, "level": 1, "component": 2, "message": 3, "error": 4, "file": 5, "func": 6 },
+            "renameByName": { "level": "等級", "component": "子系統", "message": "訊息", "error": "錯誤內容", "file": "出處", "func": "函式" }
+          }
+        }
+      ],
+      "options": { "showHeader": true, "sortBy": [{ "displayName": "Time", "desc": true }], "footer": { "show": false } },
+      "fieldConfig": {
+        "defaults": { "custom": { "filterable": true } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Time" }, "properties": [{ "id": "custom.width", "value": 170 }] },
+          { "matcher": { "id": "byName", "options": "等級" }, "properties": [{ "id": "custom.width", "value": 80 }] },
+          { "matcher": { "id": "byName", "options": "子系統" }, "properties": [{ "id": "custom.width", "value": 110 }] }
+        ]
+      }
+    },
+    {
+      "type": "table", "title": "🌐 HTTP access log", "id": 5,
+      "description": "每個 HTTP request 一列;request_id 可對照 controller log 追同一請求",
+      "datasource": { "type": "victoriametrics-logs-datasource", "uid": "victorialogs" },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 18 },
+      "targets": [{ "expr": "{service=\"app\"} \"method\" | unpack_json | filter method:*", "refId": "A", "maxLines": 1000 }],
+      "transformations": [
+        { "id": "extractFields", "options": { "source": "labels", "format": "json", "replace": false } },
+        { "id": "filterFieldsByName", "options": { "include": { "names": ["Time", "method", "path", "status", "latency_ms", "request_id", "remote_ip"] } } },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": { "Time": 0, "method": 1, "path": 2, "status": 3, "latency_ms": 4, "request_id": 5, "remote_ip": 6 },
+            "renameByName": { "latency_ms": "延遲(ms)" }
+          }
+        }
+      ],
+      "options": { "showHeader": true, "sortBy": [{ "displayName": "Time", "desc": true }], "footer": { "show": false } },
+      "fieldConfig": {
+        "defaults": { "custom": { "filterable": true } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Time" }, "properties": [{ "id": "custom.width", "value": 170 }] },
+          { "matcher": { "id": "byName", "options": "method" }, "properties": [{ "id": "custom.width", "value": 80 }] },
+          { "matcher": { "id": "byName", "options": "status" }, "properties": [{ "id": "custom.width", "value": 80 }] }
+        ]
+      }
+    },
+    {
+      "type": "table", "title": "📜 全部 App log (Discover)", "id": 6,
+      "description": "依時間倒序的完整 app log;訊息欄即程式中實際寫入的核心訊息,可在欄位標題輸入框過濾任何欄位",
       "datasource": { "type": "victoriametrics-logs-datasource", "uid": "victorialogs" },
       "gridPos": { "h": 10, "w": 24, "x": 0, "y": 27 },
-      "targets": [{ "expr": "{container=~\"${container:pipe}\"} ${query} (level:~\"${level:pipe}\" or level:\"\") | unpack_json", "refId": "A", "maxLines": 1000 }],
+      "targets": [{ "expr": "{service=\"app\"} * | unpack_json", "refId": "A", "maxLines": 1000 }],
+      "transformations": [
+        { "id": "extractFields", "options": { "source": "labels", "format": "json", "replace": false } },
+        { "id": "filterFieldsByName", "options": { "include": { "names": ["Time", "level", "component", "message", "boot_id", "file", "func"] } } },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {},
+            "indexByName": { "Time": 0, "level": 1, "component": 2, "message": 3, "boot_id": 4, "file": 5, "func": 6 },
+            "renameByName": { "level": "等級", "component": "子系統", "message": "訊息", "file": "出處", "func": "函式" }
+          }
+        }
+      ],
+      "options": { "showHeader": true, "sortBy": [{ "displayName": "Time", "desc": true }], "footer": { "show": false } },
+      "fieldConfig": {
+        "defaults": { "custom": { "filterable": true } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Time" }, "properties": [{ "id": "custom.width", "value": 170 }] },
+          { "matcher": { "id": "byName", "options": "等級" }, "properties": [{ "id": "custom.width", "value": 80 }] },
+          { "matcher": { "id": "byName", "options": "子系統" }, "properties": [{ "id": "custom.width", "value": 110 }] },
+          { "matcher": { "id": "byName", "options": "boot_id" }, "properties": [{ "id": "custom.width", "value": 100 }] }
+        ]
+      }
+    },
+    {
+      "type": "logs", "title": "🔎 原始 log (點行展開全部欄位)", "id": 7,
+      "description": "需要看單筆 log 的完整欄位 (含 version / request_id / 完整 JSON) 時用這裡:點任一行展開",
+      "datasource": { "type": "victoriametrics-logs-datasource", "uid": "victorialogs" },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 37 },
+      "targets": [{ "expr": "{service=\"app\"} * | unpack_json", "refId": "A", "maxLines": 1000 }],
       "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending", "enableLogDetails": true, "dedupStrategy": "none" }
+    },
+    {
+      "type": "row", "title": "📖 自由查詢速查 (LogsQL,用於左側 Explore)", "collapsed": true,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 46 },
+      "panels": [
+        {
+          "type": "text", "title": "", "id": 9,
+          "gridPos": { "h": 10, "w": 24, "x": 0, "y": 47 },
+          "options": {
+            "mode": "markdown",
+            "content": "自由查詢請走 **左側選單 → Explore → 資料源選 VictoriaLogs**,貼上下列查詢。log 欄位:`message`(核心訊息)、`level`、`component`(子系統)、`mode`(live 即時 / catchup 回放)、`boot_id`(哪次啟動)、`version`(部署版本)、`file`/`func`(程式出處)、`request_id`(HTTP 請求關聯)。\n\n| 想知道什麼 | 查詢 (LogsQL) |\n|---|---|\n| 動用「打破冷卻」額度的買入 | `{service=\"app\"} ~\"打破冷卻\"` |\n| 只看開盤即時決策的成交 (排除回放補寫) | `{service=\"app\"} \"成交\" \\| unpack_json \\| filter message:~\"買入成交\\|賣出成交\" mode:=live` |\n| 重啟歷史:每次啟動各寫了多少 log | `{service=\"app\"} \\| unpack_json \\| stats by (boot_id) count() logs` |\n| 某一次啟動的完整時間線 (貼上 boot_id) | `{service=\"app\"} \\| unpack_json \\| filter boot_id:=xxxxxxxx` |\n| 錯誤/警告依子系統分布 | `{service=\"app\"} level:~\"error\\|warning\" \\| unpack_json \\| stats by (component) count() errs` |\n| 追蹤單一 HTTP 請求 (貼上 request_id) | `{service=\"app\"} \"xxxxxxxx\"` |\n| 部署版本對照 (行為從哪版開始變) | `{service=\"app\"} \\| unpack_json \\| stats by (version) count() logs` |\n\n**語法**:`*`=全部;AND=空白或 `and`;OR=`or`;NOT=`not`。全文關鍵字 `逾時`;精確片語 `\"發送啟動通知失敗\"`;欄位等於 `level:=error`、`stock_id:=00631L`;欄位含字 `message:成交`;regex `~\"買入\\|賣出\"`。JSON 欄位過濾前先接 `\\| unpack_json`。"
+          }
+        }
+      ]
     }
   ]
 }
