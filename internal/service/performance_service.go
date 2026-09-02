@@ -177,7 +177,7 @@ func buildBacktestDTO(full backtest.WindowReport, agg backtest.AggregateReport, 
 		Buys:        full.Buys,
 		Sells:       full.Sells,
 		TrailSells:  full.TrailSells,
-		ProfitSells: full.ProfitSells,
+		ProfitSells: 0, // 獲利了結路徑已移除;wire key 保留向後相容,恆為 0
 		Skipped:     full.Skipped,
 		FinalCash:   round2(full.StratFinalCash),
 		EquityCurve: equityCurveDTO(full.Dates, full.StratCurve, full.BHCurve),

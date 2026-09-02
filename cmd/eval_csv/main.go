@@ -142,8 +142,7 @@ func printHeadline(cfg *config.Config, r backtest.WindowReport) {
 	row("最大回撤(NAV)", pct(r.BH.MaxDD), pct(r.Strat.MaxDD))
 	row("Calmar(MWR/|DD|)", ratio(r.BH.Calmar), ratio(r.Strat.Calmar))
 	row("資金利用率", pct(r.BH.AvgExp), pct(r.Strat.AvgExp))
-	row("買/賣次數(停利/了結)", fmt.Sprintf("%d/0", r.BHBuys),
-		fmt.Sprintf("%d/%d(%d/%d)", r.Buys, r.TrailSells+r.ProfitSells, r.TrailSells, r.ProfitSells))
+	row("買/賣次數(賣皆為停利)", fmt.Sprintf("%d/0", r.BHBuys), fmt.Sprintf("%d/%d", r.Buys, r.Sells))
 	fmt.Println("══════════════════════════════════════════════════════════════")
 	fmt.Println()
 }

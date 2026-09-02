@@ -343,10 +343,10 @@ func TestEvaluateFullSpan(t *testing.T) {
 		t.Fatalf("EvaluateFullSpan: %v", err)
 	}
 
-	// Assert — 起點 = 共同有效起點 (含 MA 暖身),終點 = 最後資料日。
-	cs, _ := commonSupportStart(cfg, series)
-	if !rep.Start.Equal(cs) {
-		t.Fatalf("full-span start = %s, want commonSupportStart %s", rep.Start.Format("2006-01-02"), cs.Format("2006-01-02"))
+	// Assert — 起點 = common issuance (與上線首次 catch-up 相同),終點 = 最後資料日。
+	ci, _ := CommonIssuanceStart(cfg, series)
+	if !rep.Start.Equal(ci) {
+		t.Fatalf("full-span start = %s, want CommonIssuanceStart %s", rep.Start.Format("2006-01-02"), ci.Format("2006-01-02"))
 	}
 }
 

@@ -16,38 +16,34 @@ import (
 //
 // 它存在的唯一目的,是在「移除棄用演算法分支」的重構過程中,證明『目前交易演算法的行為完全不變』:
 // 任何會改動 live 決策路徑的修改,都會讓這些精確數字對不上 → 測試失敗。
-// 合成資料刻意製造兩段崩盤,確保牛熊翻轉、深跌加碼、移動停利、獲利了結、打破冷卻都被觸發。
+// 合成資料刻意製造兩段崩盤,確保牛熊翻轉、深跌加碼、移動停利都被觸發。
 
 // liveStrategyCfg 以程式碼鏡像 config.yaml 的定版策略 (含 00631L per-stock override)。
 // 這是「目前交易演算法」的唯一事實來源,golden 測試與重構後行為都以它為準。
 func liveStrategyCfg() *config.Config {
 	return &config.Config{
-		TrackStocks:             []string{"00631L", "00830"},
-		ScalingStrategy:         "Baseline",
-		DecisionPriceBasis:      "open", // 開盤價基準:當日開盤成交,指標只看到前一交易日收盤 (鏡像 config.yaml)
-		InitialCash:             100000,
-		MonthlyContribution:     0, // lump-sum:期初一次性本金,無外部注資 (鏡像 config.yaml)
-		MAWindow:                10,
-		RegimeMethod:            "ma_pos",
-		RegimeMAWindow:          85,
-		CooldownDays:            14,
-		BullCooldownDays:        14,
-		BullBuyBand:             0.08,
-		BuyFracBasis:            "cash",
-		BullBuyFrac:             0.20,
-		BearBuyFrac:             0.02,
-		CooldownBreakBudget:     3,
-		CooldownBreakWindowDays: 365,
-		BuyDepthBasis:           "peak",
-		BuyPeakLookback:         252,
-		BuyTierRatio:            2.5,
+		TrackStocks:         []string{"00631L", "00830"},
+		ScalingStrategy:     "Baseline",
+		DecisionPriceBasis:  "open", // 開盤價基準:當日開盤成交,指標只看到前一交易日收盤 (鏡像 config.yaml)
+		InitialCash:         100000,
+		MonthlyContribution: 0, // lump-sum:期初一次性本金,無外部注資 (鏡像 config.yaml)
+		MAWindow:            10,
+		RegimeMethod:        "ma_pos",
+		RegimeMAWindow:      85,
+		CooldownDays:        14,
+		BullCooldownDays:    14,
+		BullBuyBand:         0.08,
+		BuyFracBasis:        "cash",
+		BullBuyFrac:         0.20,
+		BearBuyFrac:         0.02,
+		BuyDepthBasis:       "peak",
+		BuyPeakLookback:     252,
+		BuyTierRatio:        2.5,
 		BaselineBuyTiers: []config.BaselineBuyTier{
 			{Above: -0.1}, {Above: -0.2}, {Above: -0.3}, {Above: -0.4},
 		},
-		BaselineSellThreshold: 1.0,
-		SellFracOfPosition:    0.33,
-		TrailStopBear:         0.08,
-		TrailMinGain:          0.10,
+		TrailStopBear: 0.08,
+		TrailMinGain:  0.10,
 		StockOverrides: map[string]config.StockParams{
 			"00631L": {RegimeMAWindow: iptr(60), TrailReentryCooldownDays: iptr(42)},
 		},
@@ -55,7 +51,7 @@ func liveStrategyCfg() *config.Config {
 }
 
 // charSeries 產生確定性 (固定 seed) 的幾何隨機漫步價格序列,並在兩個區間注入崩盤,
-// 確保牛熊翻轉 + 深跌加碼 + 移動停利 + 獲利了結都會被觸發。
+// 確保牛熊翻轉 + 深跌加碼 + 移動停利都會被觸發。
 func charSeries(seed int64, n int, startPx, drift, vol float64) *trading.StockSeries {
 	r := rand.New(rand.NewSource(seed))
 	prices := make([]float64, n)
@@ -102,7 +98,7 @@ func TestCharacterization_LiveStrategyFingerprint(t *testing.T) {
 		"00830":  charSeries(2, 700, 30, 0.0035, 0.014),
 	}
 
-	// Act — 以 common issuance 為起點跑完整引擎 (lump-sum:contribOnDay 全為 0;與 RunBacktestWindow 同路徑,額外取 trail/profit 拆解)。
+	// Act — 以 common issuance 為起點跑完整引擎 (lump-sum:contribOnDay 全為 0;與 RunBacktestWindow 同路徑,額外取 trail 次數)。
 	allDates := trading.CollectDateUnion(series)
 	start := allDates[0]
 	if ci, ok := CommonIssuanceStart(cfg, series); ok && ci.After(start) {
@@ -131,30 +127,30 @@ func TestCharacterization_LiveStrategyFingerprint(t *testing.T) {
 
 	// Assert — golden 指紋 (由首次跑出的真實值釘定;見下方常數)。
 	want := struct {
-		buys, sells, skipped, trail, profit int
-		finalCash, finalTotal               float64
+		buys, sells, skipped, trail int
+		finalCash, finalTotal       float64
 	}{
 		buys: goldenBuys, sells: goldenSells, skipped: goldenSkipped,
-		trail: goldenTrail, profit: goldenProfit,
+		trail:     goldenTrail,
 		finalCash: goldenFinalCash, finalTotal: goldenFinalTotal,
 	}
 
 	if want.buys < 0 { // 尚未釘定:印出實際值供首次填入。
-		t.Fatalf("CAPTURE golden: buys=%d sells=%d skipped=%d trail=%d profit=%d finalCash=%.0f finalTotal=%.0f",
-			stats.TotalBuys, stats.TotalSells, stats.SkippedBuys, stats.TrailSells, stats.ProfitSells, finalCash, finalTotal)
+		t.Fatalf("CAPTURE golden: buys=%d sells=%d skipped=%d trail=%d finalCash=%.0f finalTotal=%.0f",
+			stats.TotalBuys, stats.TotalSells, stats.SkippedBuys, stats.TrailSells, finalCash, finalTotal)
 	}
 
 	if stats.TotalBuys != want.buys || stats.TotalSells != want.sells || stats.SkippedBuys != want.skipped ||
-		stats.TrailSells != want.trail || stats.ProfitSells != want.profit ||
+		stats.TrailSells != want.trail ||
 		finalCash != want.finalCash || finalTotal != want.finalTotal {
-		t.Fatalf("live 策略指紋改變!\n got: buys=%d sells=%d skipped=%d trail=%d profit=%d finalCash=%.0f finalTotal=%.0f\nwant: buys=%d sells=%d skipped=%d trail=%d profit=%d finalCash=%.0f finalTotal=%.0f",
-			stats.TotalBuys, stats.TotalSells, stats.SkippedBuys, stats.TrailSells, stats.ProfitSells, finalCash, finalTotal,
-			want.buys, want.sells, want.skipped, want.trail, want.profit, want.finalCash, want.finalTotal)
+		t.Fatalf("live 策略指紋改變!\n got: buys=%d sells=%d skipped=%d trail=%d finalCash=%.0f finalTotal=%.0f\nwant: buys=%d sells=%d skipped=%d trail=%d finalCash=%.0f finalTotal=%.0f",
+			stats.TotalBuys, stats.TotalSells, stats.SkippedBuys, stats.TrailSells, finalCash, finalTotal,
+			want.buys, want.sells, want.skipped, want.trail, want.finalCash, want.finalTotal)
 	}
 
 	// 自我檢查:資料確實觸發了所有關鍵賣出路徑,指紋才有意義。
-	if stats.TrailSells == 0 || stats.ProfitSells == 0 {
-		t.Fatalf("characterization 資料未觸發 trail(%d)/profit(%d) 賣出,指紋覆蓋不足", stats.TrailSells, stats.ProfitSells)
+	if stats.TrailSells == 0 {
+		t.Fatalf("characterization 資料未觸發 trail 賣出,指紋覆蓋不足")
 	}
 }
 
@@ -179,13 +175,17 @@ func TestCharacterization_LiveStrategyFingerprint(t *testing.T) {
 //	cooldown_break_budget 2→3 (封閉資金池更需把握深跌買點)。其餘旋鈕與 00631L 覆寫經重掃確認不變仍最佳。
 //
 // 實測 (真實 CSV,$100,000 lump-sum):full Calmar 1.65→1.80、MWR +44.4%、回撤 -24.7%、wf 四關全過、OOS 保留 130%、最差折 1.96。
-// 合成資料指紋隨之更新 (注資歸零 + band/brk 調整:buys 88→91、profit 5→1、finalCash/finalTotal 改變);後續任何非刻意改動都應維持此數字。
+// 合成資料指紋隨之更新 (注資歸零 + band/brk 調整:buys 88→91、profit 5→1、finalCash/finalTotal 改變)。
+//
+// 2026-09 第四次刻意變更 (經使用者核可):策略簡化 —— 移除「打破冷卻額度」(消融實驗顯示貢獻在雜訊內且對額度值不單調,
+// 屬過擬合) 與「多頭獲利了結 (翻倍賣 33%)」(7 年僅觸發 12 次,關掉後回撤不變、MWR 差 0.6pp)。
+// 唯一賣出路徑為熊市移動停利,多頭持股續抱。實測 (真實 CSV,全期起點對齊 common issuance 2019-05-03):full Calmar 1.80、MWR +43.3%、回撤 -24.1%、wf 四關全過、OOS 保留 115%、最差折 2.11。
+// 合成資料指紋隨之重釘;後續任何非刻意改動都應維持此數字。
 const (
-	goldenBuys       = 91
-	goldenSells      = 69
+	goldenBuys       = 73
+	goldenSells      = 53
 	goldenSkipped    = 0
-	goldenTrail      = 10
-	goldenProfit     = 1
-	goldenFinalCash  = 10500
-	goldenFinalTotal = 228136
+	goldenTrail      = 9
+	goldenFinalCash  = 45
+	goldenFinalTotal = 291149
 )

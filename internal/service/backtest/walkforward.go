@@ -55,10 +55,10 @@ type WindowReport struct {
 	BH    SeriesMetrics // 立刻買滿的 Buy & Hold
 	Blend SeriesMetrics // 同曝險混合 (constant weight = Strat.AvgExp)
 
-	Buys, Sells, Skipped    int
-	BHBuys                  int     // B&H 等權買滿的次數 (期初 + 各注資日,參考)
-	TrailSells, ProfitSells int     // 策略賣出原因拆解 (移動停利 / 獲利了結)
-	StratFinalCash          float64 // 策略期末閒置現金 (現金尾巴)
+	Buys, Sells, Skipped int
+	BHBuys               int     // B&H 等權買滿的次數 (期初 + 各注資日,參考)
+	TrailSells           int     // 策略移動停利賣出次數 (唯一賣出路徑)
+	StratFinalCash       float64 // 策略期末閒置現金 (現金尾巴)
 
 	// 每日權益曲線 (與三者等長,逐日對齊;供前端折線圖 / 視覺化,評估指標不使用)。
 	Dates      []time.Time // 視窗內每個交易日
@@ -153,9 +153,10 @@ func EvaluateFullSpan(cfg *config.Config, series map[string]*trading.StockSeries
 	if len(allDates) == 0 {
 		return WindowReport{}, fmt.Errorf("無任何日期可供評估")
 	}
+	// 起點與上線首次啟動的 catch-up 相同 (common issuance),使全期回測與線上帳本逐日一致。
 	start := allDates[0]
-	if cs, ok := commonSupportStart(cfg, series); ok {
-		start = cs
+	if ci, ok := CommonIssuanceStart(cfg, series); ok && ci.After(start) {
+		start = ci
 	}
 	return evaluateWindow(cfg, series, allDates, start, allDates[len(allDates)-1])
 }
@@ -287,7 +288,7 @@ func evaluateWindow(cfg *config.Config, series map[string]*trading.StockSeries, 
 		Universe: len(tradable), TradeDays: len(windowDates), Years: years, TotalIn: stratArm.totalIn,
 		Strat: strat, BH: bh, Blend: blend,
 		Buys: stratArm.buys, Sells: stratArm.sells, Skipped: stratArm.skipped, BHBuys: bhArm.buys,
-		TrailSells: stratArm.trailSells, ProfitSells: stratArm.profitSells, StratFinalCash: stratArm.finalCash,
+		TrailSells: stratArm.trailSells, StratFinalCash: stratArm.finalCash,
 		Dates: windowDates, StratCurve: stratArm.curve, BHCurve: bhArm.curve,
 		CalmarBeatsBH: calmarBeatsBH, BeatsBlendBoth: beatsBlend, RetParticipation: part,
 	}, nil
@@ -333,7 +334,7 @@ func runStratArm(cfg *config.Config, series map[string]*trading.StockSeries, win
 		curve: curve, contribOnDay: contribOnDay, flows: flows,
 		avgExposure: safeMean(expSum, expN), finalEquity: finalEq, totalIn: totalIn, finalCash: finalCash,
 		buys: stats.TotalBuys, sells: stats.TotalSells, skipped: stats.SkippedBuys,
-		trailSells: stats.TrailSells, profitSells: stats.ProfitSells,
+		trailSells: stats.TrailSells,
 	}, nil
 }
 

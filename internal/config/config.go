@@ -20,15 +20,14 @@ type BaselineBuyTier struct {
 // 「牛熊 regime 感知逢低加碼」策略的旋鈕 (見 docs/optimization/BEST-STRATEGY.md)。
 // 每個旋鈕都經 walk-forward 掃描驗證採納;預設零值 = 原始 Baseline 行為,既有測試不受影響。
 type Config struct {
-	TrackStocks           []string          `yaml:"track_stocks"`
-	ScalingStrategy       string            `yaml:"scaling_strategy"`
-	MaxBackMonths         int               `yaml:"max_back_months"`
-	BackTestingMonths     int               `yaml:"back_testing_months"`
-	CooldownDays          int               `yaml:"cooldown_days"`
-	BaselineBuyTiers      []BaselineBuyTier `yaml:"baseline_buy_tiers"`
-	BaselineSellThreshold float64           `yaml:"baseline_sell_threshold"`
-	InitialCash           float64           `yaml:"initial_cash"`
-	InitDBBackMonths      int               `yaml:"init_db_back_months"`
+	TrackStocks       []string          `yaml:"track_stocks"`
+	ScalingStrategy   string            `yaml:"scaling_strategy"`
+	MaxBackMonths     int               `yaml:"max_back_months"`
+	BackTestingMonths int               `yaml:"back_testing_months"`
+	CooldownDays      int               `yaml:"cooldown_days"`
+	BaselineBuyTiers  []BaselineBuyTier `yaml:"baseline_buy_tiers"`
+	InitialCash       float64           `yaml:"initial_cash"`
+	InitDBBackMonths  int               `yaml:"init_db_back_months"`
 
 	// ── 問題設定 (problem setting):外部注資排程 ──
 	// MonthlyContribution = 期初 InitialCash 之外,「每個日曆月第一個交易日」再注入的新可動用資金 (起始月不注入)。
@@ -71,31 +70,23 @@ type Config struct {
 	// BuyTierRatio:熊市加碼幾何權重底數,深度權重 = ratio^命中 tier 索引 (跌越深買越大比例)。
 	BuyTierRatio float64 `yaml:"buy_tier_ratio"`
 
-	// 賣出:獲利了結 (分批) + 熊市移動停利。
-	//   SellFracOfPosition:獲利了結賣「當前持股的此比例」(分批出場)。
+	// 賣出:唯一賣出路徑為熊市移動停利 (多頭不賣出、持股續抱)。
 	//   TrailStopBear>0   :熊市移動停利 — 價 <= 持倉期間峰值×(1-trail) 時全數出場。
 	//   TrailMinGain      :移動停利僅在 (峰值/最低成本-1) >= 此值後才武裝 (不停損逢低買進)。
-	SellFracOfPosition float64 `yaml:"sell_frac_of_position"`
-	TrailStopBear      float64 `yaml:"trail_stop_bear"`
-	TrailMinGain       float64 `yaml:"trail_min_gain"`
+	TrailStopBear float64 `yaml:"trail_stop_bear"`
+	TrailMinGain  float64 `yaml:"trail_min_gain"`
 
 	// TrailReentryCooldownDays>0:移動停利出場後,該檔在此日曆日內暫停逢低買入,打斷空頭「停損→隔日又逢低買→再停損」
 	//   的 whipsaw 循環 (跨過「反彈→再跌」那一段震盪再進場)。<=0 (預設) = 不暫停,行為與舊版一致。
-	//   ⚠️ 與 peakSinceHold 同屬引擎記憶體狀態、未持久化;上線重啟靠 catch-up 回放重建,故 init_db_back_months 須夠長。
+	//   上線重啟時由 RealizedGainsLosses 的最後賣出日還原 (SeedLastTrailSell),與連續回放一致。
 	TrailReentryCooldownDays int `yaml:"trail_reentry_cooldown_days"`
 
-	// ── 部位大小:買入「現金 / 權益基準的固定比例」(像獲利了結賣固定比例那樣) ──
+	// ── 部位大小:買入「現金 / 權益基準的固定比例」──
 	//   BuyFracBasis: "cash" = 比例基準為現金 (定版);"equity" = 比例基準為總權益。
 	//   BullBuyFrac:牛市買入金額 = BuyFracBasis 基準 × BullBuyFrac。
 	//   此「現金比例」會隨現金遞減而自然減速,是把回撤壓在預算內的關鍵煞車。
 	BuyFracBasis string  `yaml:"buy_frac_basis"`
 	BullBuyFrac  float64 `yaml:"bull_buy_frac"`
-
-	// ── Idea 2 (採納):打破冷卻額度 (滾動視窗) ──
-	//   每檔在「近 CooldownBreakWindowDays 日曆日」內,最多可動用 CooldownBreakBudget 次「無視冷卻」提前買入,
-	//   撿回被冷卻期錯過的深跌買點。改用滾動視窗 (取代舊的「每 engine 生命週期 N 次」),讓回測/連續/上線三模式語意一致。
-	CooldownBreakBudget     int `yaml:"cooldown_break_budget"`
-	CooldownBreakWindowDays int `yaml:"cooldown_break_window_days"` // 滾動視窗 (日曆日);<=0 視為 365 (≈252 交易日≈1 年)
 
 	// ── 熊市也用「現金比例」買入,根治「深跌時沒現金」(實測把深跌沒錢 79→0) ──
 	//   BearBuyFrac:熊市買入 = 現金 × BearBuyFrac × 幾何深度權重 (ratio^i)。需搭配 BuyFracBasis。
@@ -118,8 +109,6 @@ type StockParams struct {
 	BullBuyFrac              *float64 `yaml:"bull_buy_frac"`               // 覆寫牛市買入現金比例
 	BearBuyFrac              *float64 `yaml:"bear_buy_frac"`               // 覆寫熊市買入現金比例
 	BuyTierRatio             *float64 `yaml:"buy_tier_ratio"`              // 覆寫加碼幾何權重底數
-	BaselineSellThreshold    *float64 `yaml:"baseline_sell_threshold"`     // 覆寫獲利了結觸發門檻
-	SellFracOfPosition       *float64 `yaml:"sell_frac_of_position"`       // 覆寫獲利了結賣出比例
 	TrailStopBear            *float64 `yaml:"trail_stop_bear"`             // 覆寫熊市移動停利回撤幅度
 	TrailMinGain             *float64 `yaml:"trail_min_gain"`              // 覆寫移動停利啟動最低獲利門檻
 	TrailReentryCooldownDays *int     `yaml:"trail_reentry_cooldown_days"` // 覆寫移動停利出場後的暫停買入天數
@@ -156,12 +145,6 @@ func (c *Config) ForStock(stockID string) *Config {
 	}
 	if ov.BuyTierRatio != nil {
 		cp.BuyTierRatio = *ov.BuyTierRatio
-	}
-	if ov.BaselineSellThreshold != nil {
-		cp.BaselineSellThreshold = *ov.BaselineSellThreshold
-	}
-	if ov.SellFracOfPosition != nil {
-		cp.SellFracOfPosition = *ov.SellFracOfPosition
 	}
 	if ov.TrailStopBear != nil {
 		cp.TrailStopBear = *ov.TrailStopBear
@@ -211,14 +194,14 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("track_stocks must not be empty")
 	}
 
-	// 現行 Baseline 策略一律走「現金比例」買賣;缺這些旋鈕會讓策略「靜默不交易」(買 0 股 / 不賣),
+	// 現行 Baseline 策略一律走「現金比例」買入、熊市移動停利賣出;缺這些旋鈕會讓策略「靜默不交易」(買 0 股 / 不賣),
 	// 故在載入時就 fail-fast,避免上線後才發現整天沒下任何單。
 	if c.ScalingStrategy == "Baseline" {
-		if c.BuyFracBasis == "" || c.BullBuyFrac <= 0 || c.BearBuyFrac <= 0 || c.SellFracOfPosition <= 0 {
+		if c.BuyFracBasis == "" || c.BullBuyFrac <= 0 || c.BearBuyFrac <= 0 || c.TrailStopBear <= 0 {
 			return nil, fmt.Errorf(
-				"Baseline 策略需設定 buy_frac_basis / bull_buy_frac / bear_buy_frac / sell_frac_of_position (現金比例買賣);"+
-					"得 buy_frac_basis=%q bull_buy_frac=%g bear_buy_frac=%g sell_frac_of_position=%g",
-				c.BuyFracBasis, c.BullBuyFrac, c.BearBuyFrac, c.SellFracOfPosition)
+				"Baseline 策略需設定 buy_frac_basis / bull_buy_frac / bear_buy_frac (現金比例買入) 與 trail_stop_bear (熊市移動停利);"+
+					"得 buy_frac_basis=%q bull_buy_frac=%g bear_buy_frac=%g trail_stop_bear=%g",
+				c.BuyFracBasis, c.BullBuyFrac, c.BearBuyFrac, c.TrailStopBear)
 		}
 	}
 

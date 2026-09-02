@@ -88,28 +88,6 @@ func TestDecideBuy_CooldownBlocksThenAllowsAtBoundary(t *testing.T) {
 	}
 }
 
-// TestDecideBuy_BreakBudgetOverridesCooldown 驗證冷卻期內有打破冷卻額度時可放行並標記 BrokeCooldown。
-func TestDecideBuy_BreakBudgetOverridesCooldown(t *testing.T) {
-	cfg := decideCfg()
-	cfg.CooldownBreakBudget = 2
-
-	// Arrange — 在冷卻內,但尚有打破冷卻額度。
-	snap := Snapshot{
-		Today: mustDate(t, "2024-06-05"), TodayPrice: 90, MA20: 100,
-		Cash: 1_000_000, LowestHeldPrice: 100,
-		HasLastBuy: true, LastBuyDate: mustDate(t, "2024-06-01"),
-		CooldownBreaksLeft: 1,
-	}
-
-	// Act
-	got := DecideBuy(cfg, snap)
-
-	// Assert — 放行且標記動用了一次打破冷卻。
-	if !got.Should || !got.BrokeCooldown {
-		t.Fatalf("expected buy via break budget with BrokeCooldown=true, got %+v", got)
-	}
-}
-
 // TestDecideBuy_NoCashNoBuy 驗證現金為零時 DecideBuy 不產生買入決策。
 func TestDecideBuy_NoCashNoBuy(t *testing.T) {
 	cfg := decideCfg()
@@ -145,51 +123,6 @@ func TestDecideSell_NoPositions(t *testing.T) {
 	// Act + Assert
 	if DecideSell(cfg, snap).Should {
 		t.Fatalf("expected no sell with no positions")
-	}
-}
-
-// TestDecideSell_ProfitTakeOnlyInBull 驗證獲利了結僅在牛市且漲幅達門檻時觸發,空頭不啟動獲利了結。
-func TestDecideSell_ProfitTakeOnlyInBull(t *testing.T) {
-	cfg := decideCfg() // threshold 1.0 (翻倍), SellFracOfPosition 0.33
-	cases := []struct {
-		name  string
-		bull  bool
-		price float64
-		want  bool
-	}{
-		{"bull gain<100% no sell", true, 150, false},
-		{"bull gain>=100% sells", true, 210, true},
-		{"bear gain>=100% no profit-take", false, 210, false},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			// Arrange — 最低成本 100,持股 99 (避免移動停利路徑混入,bear 無 peak)。
-			snap := Snapshot{TodayPrice: c.price, LowestHeldPrice: 100, IsBull: c.bull, HeldShares: 99}
-			// Act
-			got := DecideSell(cfg, snap)
-			// Assert
-			if got.Should != c.want {
-				t.Fatalf("%s: Should=%v want %v (%+v)", c.name, got.Should, c.want, got)
-			}
-			if got.Should {
-				if got.Reason != "profit" || got.TargetShares != int(math.Round(0.33*99)) {
-					t.Fatalf("%s: want profit sell of round(0.33*99), got %+v", c.name, got)
-				}
-			}
-		})
-	}
-}
-
-// TestDecideSell_SellFractionRoundsUpToOne 驗證持股量極小時賣出股數四捨五入後至少為 1 股。
-func TestDecideSell_SellFractionRoundsUpToOne(t *testing.T) {
-	cfg := decideCfg()
-	// Arrange — 持股 2,round(0.33*2)=round(0.66)=1。
-	snap := Snapshot{TodayPrice: 210, LowestHeldPrice: 100, IsBull: true, HeldShares: 2}
-	// Act
-	got := DecideSell(cfg, snap)
-	// Assert
-	if !got.Should || got.TargetShares != 1 {
-		t.Fatalf("expected 1 share sold (min), got %+v", got)
 	}
 }
 
@@ -317,31 +250,35 @@ func TestAmountToShares(t *testing.T) {
 	}
 }
 
-// TestPassesCooldown 驗證 passesCooldown 在各種冷卻狀態 (無紀錄/已過/未過/有額度) 的放行與阻擋行為。
+// TestPassesCooldown 驗證 passesCooldown 在各種冷卻狀態 (無紀錄/已過/未過) 的放行與阻擋行為。
 func TestPassesCooldown(t *testing.T) {
 	cfg := decideCfg() // CooldownDays 14
 	today := mustDate(t, "2024-06-20")
 
-	// 無上次買入 → 通過、未動用額度。
-	if ok, broke := passesCooldown(cfg, Snapshot{}); !ok || broke {
-		t.Fatalf("no last buy should pass without break, got ok=%v broke=%v", ok, broke)
+	// 無上次買入 → 通過。
+	if !passesCooldown(cfg, Snapshot{}) {
+		t.Fatalf("no last buy should pass")
 	}
 	// 已過冷卻 → 通過。
 	past := Snapshot{HasLastBuy: true, Today: today, LastBuyDate: mustDate(t, "2024-06-01")}
-	if ok, broke := passesCooldown(cfg, past); !ok || broke {
-		t.Fatalf("past cooldown should pass, got ok=%v broke=%v", ok, broke)
+	if !passesCooldown(cfg, past) {
+		t.Fatalf("past cooldown should pass")
 	}
-	// 冷卻內、無額度 → 擋下。
-	cfg.CooldownBreakBudget = 0
+	// 冷卻內 → 擋下 (無任何例外路徑)。
 	inside := Snapshot{HasLastBuy: true, Today: today, LastBuyDate: mustDate(t, "2024-06-15")}
-	if ok, _ := passesCooldown(cfg, inside); ok {
-		t.Fatalf("inside cooldown without budget should block")
+	if passesCooldown(cfg, inside) {
+		t.Fatalf("inside cooldown should block")
 	}
-	// 冷卻內、有額度 → 通過並標記。
-	cfg.CooldownBreakBudget = 2
-	inside.CooldownBreaksLeft = 1
-	if ok, broke := passesCooldown(cfg, inside); !ok || !broke {
-		t.Fatalf("inside cooldown with budget should pass+broke, got ok=%v broke=%v", ok, broke)
+}
+
+// TestDecideSell_BullNeverSells 驗證多頭下即使獲利極大也不賣出 (唯一賣出路徑為熊市移動停利)。
+func TestDecideSell_BullNeverSells(t *testing.T) {
+	cfg := decideCfg()
+	cfg.TrailStopBear = 0.10
+	cfg.TrailMinGain = 0.10
+	snap := Snapshot{TodayPrice: 300, LowestHeldPrice: 100, IsBull: true, HeldShares: 99, PeakSinceHold: 400}
+	if got := DecideSell(cfg, snap); got.Should {
+		t.Fatalf("bull regime must never sell, got %+v", got)
 	}
 }
 
@@ -352,11 +289,11 @@ func TestPassesCooldown_BullUsesBullCooldown(t *testing.T) {
 	cfg.BullCooldownDays = 5
 	// Arrange — 7 天前買過。空頭 (30天) 應擋;牛市 (5天) 應放行。
 	snap := Snapshot{HasLastBuy: true, Today: mustDate(t, "2024-06-08"), LastBuyDate: mustDate(t, "2024-06-01")}
-	if ok, _ := passesCooldown(cfg, snap); ok {
+	if passesCooldown(cfg, snap) {
 		t.Fatalf("bear 30d cooldown should block at 7 days")
 	}
 	snap.IsBull = true
-	if ok, _ := passesCooldown(cfg, snap); !ok {
+	if !passesCooldown(cfg, snap) {
 		t.Fatalf("bull 5d cooldown should pass at 7 days")
 	}
 }

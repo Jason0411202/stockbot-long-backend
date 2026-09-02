@@ -112,8 +112,8 @@ func (s *TradingService) RunOnline(ctx context.Context) error {
 		return fmt.Errorf("無任何股票歷史資料")
 	}
 
-	// 從 DB 還原引擎的現金、持倉與冷卻錨點。
-	if err := s.SeedFromDB(ctx); err != nil {
+	// 從 DB 還原引擎的現金、持倉、冷卻錨點、停利出場日與持倉峰值。
+	if err := s.SeedFromDB(ctx, series); err != nil {
 		return fmt.Errorf("SeedFromDB: %w", err)
 	}
 
@@ -141,10 +141,11 @@ func (s *TradingService) loadSeries(ctx context.Context) (map[string]*trading.St
 	return series, nil
 }
 
-// SeedFromDB 從 DB 還原引擎的現金、持倉與各股冷卻錨點。
+// SeedFromDB 從 DB 還原引擎的全部決策狀態:現金、持倉、各股最後買入日 (冷卻錨點)、最後賣出日 (移動停利
+// 再進場暫停錨點),並依持倉與價格序列重建持倉峰值 (截至水位線),使重啟後的決策與從頭連續回放完全一致。
 // 現金以 BotState 為準；無紀錄時退回 cfg.InitialCash（首次啟動）。
 // lot 日期同時相容 DATE 與 DATETIME 兩種格式。
-func (s *TradingService) SeedFromDB(ctx context.Context) error {
+func (s *TradingService) SeedFromDB(ctx context.Context, series map[string]*trading.StockSeries) error {
 	// 讀取持久化的現金值；無紀錄時使用設定的起始現金。
 	cash, hasCash, err := s.loadCash(ctx)
 	if err != nil {
@@ -194,7 +195,41 @@ func (s *TradingService) SeedFromDB(ctx context.Context) error {
 		}
 		s.engine.SeedLastBuy(stockID, lb)
 	}
+
+	// 還原各股最後賣出日 (移動停利為唯一賣出路徑 → 即最後停利出場日,供再進場暫停閘)。
+	for _, stockID := range s.cfg.TrackStocks {
+		raw, has, err := s.ledger.LastSellDateRaw(ctx, stockID)
+		if err != nil {
+			return fmt.Errorf("LastSellDateRaw(%s): %w", stockID, err)
+		}
+		if !has {
+			continue
+		}
+		ls, perr := parseLedgerDate(raw)
+		if perr != nil {
+			s.log.WithError(perr).WithFields(logrus.Fields{"date": raw, "stock_id": stockID}).Warn("跳過無法解析的 last-sell date")
+			continue
+		}
+		s.engine.SeedLastTrailSell(stockID, ls)
+	}
+
+	// 依已還原的持倉與價格序列重建「持倉期間最高決策價」(截至水位線);水位線之後的日期由 catch-up 逐日更新。
+	watermark, err := s.loadWatermark(ctx)
+	if err != nil {
+		return fmt.Errorf("loadWatermark: %w", err)
+	}
+	if !watermark.IsZero() {
+		s.engine.RebuildPeakSinceHold(series, watermark)
+	}
 	return nil
+}
+
+// parseLedgerDate 解析帳本日期字串,同時相容 DATE 與 DATETIME 兩種格式。
+func parseLedgerDate(raw string) (time.Time, error) {
+	if d, err := time.Parse(dateLayout, raw); err == nil {
+		return d, nil
+	}
+	return time.Parse(datetimeLayout, raw)
 }
 
 // CatchUp 以靜默 executor 回放 [水位線+1, 序列最新日] 區間的歷史決策，

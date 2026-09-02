@@ -543,3 +543,41 @@ func TestMarkComplete(t *testing.T) {
 	}
 	assertMet(t, mock)
 }
+
+// TestLastSellDateRaw_Found 驗證有賣出紀錄時 LastSellDateRaw 回傳最後賣出日期且 ok=true。
+func TestLastSellDateRaw_Found(t *testing.T) {
+	// Arrange
+	db, mock := newMock(t)
+	repo := NewLedgerRepository(db)
+	mock.ExpectQuery("SELECT MAX.sell_date. FROM RealizedGainsLosses").
+		WithArgs("00631L").
+		WillReturnRows(sqlmock.NewRows([]string{"d"}).AddRow("2024-07-15"))
+
+	// Act
+	raw, ok, err := repo.LastSellDateRaw(ctx, "00631L")
+
+	// Assert
+	if err != nil || !ok || raw != "2024-07-15" {
+		t.Fatalf("LastSellDateRaw = (%q, %v, %v), want 2024-07-15/true", raw, ok, err)
+	}
+	assertMet(t, mock)
+}
+
+// TestLastSellDateRaw_Null 驗證從未賣出時 LastSellDateRaw 回傳空字串且 ok=false 無錯誤。
+func TestLastSellDateRaw_Null(t *testing.T) {
+	// Arrange — never sold → MAX returns NULL.
+	db, mock := newMock(t)
+	repo := NewLedgerRepository(db)
+	mock.ExpectQuery("SELECT MAX.sell_date. FROM RealizedGainsLosses").
+		WithArgs("ZZZ").
+		WillReturnRows(sqlmock.NewRows([]string{"d"}).AddRow(nil))
+
+	// Act
+	raw, ok, err := repo.LastSellDateRaw(ctx, "ZZZ")
+
+	// Assert
+	if err != nil || ok || raw != "" {
+		t.Fatalf("LastSellDateRaw (null) = (%q, %v, %v), want (\"\", false, nil)", raw, ok, err)
+	}
+	assertMet(t, mock)
+}

@@ -185,3 +185,23 @@ func (r *LedgerRepository) LastBuyDateRaw(ctx context.Context, stockID string) (
 	}
 	return dateStr.String, true, nil
 }
+
+// LastSellDateRaw 回傳 stockID 在 RealizedGainsLosses 中最新一筆賣出日 (sell_date) 的原始字串。
+// 移動停利為唯一賣出路徑,故此日期即為最後一次停利出場日,供上線啟動還原再進場暫停閘。
+// 查無資料或 NULL 時 ok=false,由呼叫端解析成 time.Time。
+func (r *LedgerRepository) LastSellDateRaw(ctx context.Context, stockID string) (string, bool, error) {
+	const query = "SELECT MAX(sell_date) FROM RealizedGainsLosses WHERE stock_id = ?;"
+	var dateStr sql.NullString
+	err := r.db.QueryRowContext(ctx, query, stockID).Scan(&dateStr)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("query last sell date for %s: %w", stockID, err)
+	}
+	// NULL 或空字串表示該股從未賣出。
+	if !dateStr.Valid || dateStr.String == "" {
+		return "", false, nil
+	}
+	return dateStr.String, true, nil
+}

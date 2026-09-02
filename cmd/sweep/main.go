@@ -28,14 +28,13 @@ const leveragedStock = "00631L"
 
 // combo 為一組待評估的策略旗標 (共用旋鈕 + 00631L 覆寫)。
 type combo struct {
-	regimeMA      int     // 共用 regime_ma_window
-	cdBreakBudget int     // cooldown_break_budget
-	bullBand      float64 // bull_buy_band
-	bullFrac      float64 // bull_buy_frac
-	trailStop     float64 // trail_stop_bear
-	trailMin      float64 // trail_min_gain
-	ovRegimeMA    int     // 00631L 覆寫 regime_ma_window
-	ovReentryCd   int     // 00631L 覆寫 trail_reentry_cooldown_days
+	regimeMA    int     // 共用 regime_ma_window
+	bullBand    float64 // bull_buy_band
+	bullFrac    float64 // bull_buy_frac
+	trailStop   float64 // trail_stop_bear
+	trailMin    float64 // trail_min_gain
+	ovRegimeMA  int     // 00631L 覆寫 regime_ma_window
+	ovReentryCd int     // 00631L 覆寫 trail_reentry_cooldown_days
 }
 
 // result 為單一組合的評估指標彙整。
@@ -80,37 +79,33 @@ func main() {
 
 	// 定義暴力網格 (每個值列皆含現行 config 值,使 baseline 一併入表可比)。
 	grid := struct {
-		regimeMA      []int
-		cdBreakBudget []int
-		bullBand      []float64
-		bullFrac      []float64
-		trailStop     []float64
-		trailMin      []float64
-		ovRegimeMA    []int
-		ovReentryCd   []int
+		regimeMA    []int
+		bullBand    []float64
+		bullFrac    []float64
+		trailStop   []float64
+		trailMin    []float64
+		ovRegimeMA  []int
+		ovReentryCd []int
 	}{
-		regimeMA:      []int{60, 70, 85, 95, 110},
-		cdBreakBudget: []int{2, 3, 4},
-		bullBand:      []float64{0.05, 0.08, 0.11},
-		bullFrac:      []float64{0.15, 0.20, 0.25},
-		trailStop:     []float64{0.06, 0.08, 0.10},
-		trailMin:      []float64{0.10, 0.15, 0.20},
-		ovRegimeMA:    []int{50, 60, 70},
-		ovReentryCd:   []int{0, 30, 42, 60},
+		regimeMA:    []int{60, 70, 85, 95, 110},
+		bullBand:    []float64{0.05, 0.08, 0.11},
+		bullFrac:    []float64{0.15, 0.20, 0.25},
+		trailStop:   []float64{0.06, 0.08, 0.10},
+		trailMin:    []float64{0.10, 0.15, 0.20},
+		ovRegimeMA:  []int{50, 60, 70},
+		ovReentryCd: []int{0, 30, 42, 60},
 	}
 
 	// 展開所有組合。
 	var combos []combo
 	for _, rm := range grid.regimeMA {
-		for _, cb := range grid.cdBreakBudget {
-			for _, bb := range grid.bullBand {
-				for _, bf := range grid.bullFrac {
-					for _, ts := range grid.trailStop {
-						for _, tm := range grid.trailMin {
-							for _, orm := range grid.ovRegimeMA {
-								for _, orc := range grid.ovReentryCd {
-									combos = append(combos, combo{rm, cb, bb, bf, ts, tm, orm, orc})
-								}
+		for _, bb := range grid.bullBand {
+			for _, bf := range grid.bullFrac {
+				for _, ts := range grid.trailStop {
+					for _, tm := range grid.trailMin {
+						for _, orm := range grid.ovRegimeMA {
+							for _, orc := range grid.ovReentryCd {
+								combos = append(combos, combo{rm, bb, bf, ts, tm, orm, orc})
 							}
 						}
 					}
@@ -153,7 +148,7 @@ func main() {
 
 	// 找出 baseline 組合 (對齊現行 config.yaml) 作為比較基準。
 	baseCombo := combo{
-		regimeMA: base.RegimeMAWindow, cdBreakBudget: base.CooldownBreakBudget,
+		regimeMA: base.RegimeMAWindow,
 		bullBand: base.BullBuyBand, bullFrac: base.BullBuyFrac,
 		trailStop: base.TrailStopBear, trailMin: base.TrailMinGain,
 		ovRegimeMA:  ovInt(base, leveragedStock, base.RegimeMAWindow, func(p config.StockParams) *int { return p.RegimeMAWindow }),
@@ -220,7 +215,6 @@ func evalCombo(base *config.Config, series map[string]*trading.StockSeries, wfp 
 	// 淺拷貝基底並覆寫共用旋鈕;StockOverrides 換成本組合專屬的新 map (避免並行共享)。
 	cfg := *base
 	cfg.RegimeMAWindow = c.regimeMA
-	cfg.CooldownBreakBudget = c.cdBreakBudget
 	cfg.BullBuyBand = c.bullBand
 	cfg.BullBuyFrac = c.bullFrac
 	cfg.TrailStopBear = c.trailStop
@@ -284,8 +278,8 @@ func ovInt(c *config.Config, stockID string, fallback int, pick func(config.Stoc
 
 // printHeader 印出排行表頭。
 func printHeader() {
-	fmt.Printf("%-4s %5s %3s %5s %5s %5s %5s | %6s %7s | %7s %7s %7s %6s | %6s %6s %7s\n",
-		"#", "regMA", "cdB", "band", "frac", "trail", "tmin", "631reg", "reentry",
+	fmt.Printf("%-4s %5s %5s %5s %5s %5s | %6s %7s | %7s %7s %7s %6s | %6s %6s %7s\n",
+		"#", "regMA", "band", "frac", "trail", "tmin", "631reg", "reentry",
 		"fCalmar", "fMWR", "fDD", "fMult", "wfCal", "oosRet", "oosWrst")
 }
 
@@ -295,8 +289,8 @@ func printRow(rank int, r result, marked bool) {
 	if marked {
 		tag = "  <= baseline"
 	}
-	fmt.Printf("%-4d %5d %3d %5.2f %5.2f %5.2f %5.2f | %6d %7d | %7.2f %+6.1f%% %+6.1f%% %5.1fx | %6.2f %5.0f%% %7.2f%s\n",
-		rank, r.c.regimeMA, r.c.cdBreakBudget, r.c.bullBand, r.c.bullFrac, r.c.trailStop, r.c.trailMin,
+	fmt.Printf("%-4d %5d %5.2f %5.2f %5.2f %5.2f | %6d %7d | %7.2f %+6.1f%% %+6.1f%% %5.1fx | %6.2f %5.0f%% %7.2f%s\n",
+		rank, r.c.regimeMA, r.c.bullBand, r.c.bullFrac, r.c.trailStop, r.c.trailMin,
 		r.c.ovRegimeMA, r.c.ovReentryCd,
 		r.fullCalmar, r.fullMWR*100, r.fullDD*100, r.fullMult, r.wfMedCal, r.oosRet*100, r.oosWorst, tag)
 }

@@ -146,7 +146,7 @@ func sampleWindowReport() backtest.WindowReport {
 		End:   time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC),
 		Years: 4.0, TotalIn: 100000,
 		Strat: sampleMetrics(), BH: sampleMetrics(), Blend: sampleMetrics(),
-		Buys: 10, Sells: 4, BHBuys: 5, TrailSells: 2, ProfitSells: 2,
+		Buys: 10, Sells: 4, BHBuys: 5, TrailSells: 2,
 		StratFinalCash:   1500,
 		RetParticipation: 1.1,
 	}

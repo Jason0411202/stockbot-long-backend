@@ -96,12 +96,14 @@ func (f *fakeNotifier) SendTradeEmbed(n discord.TradeNotification) error {
 	return f.err
 }
 
-// fakeSeed 模擬 LedgerSeedStore，提供未實現損益清單與最後買入日期供 SeedFromDB 測試使用。
+// fakeSeed 模擬 LedgerSeedStore，提供未實現損益清單、最後買入日與最後賣出日供 SeedFromDB 測試使用。
 type fakeSeed struct {
-	unrealized []entity.UnrealizedGainsLoss
-	lastBuy    map[string]string // stockID -> raw date ("" or absent = none)
-	loadErr    error
-	lastBuyErr error
+	unrealized  []entity.UnrealizedGainsLoss
+	lastBuy     map[string]string // stockID -> raw date ("" or absent = none)
+	lastSell    map[string]string // stockID -> raw sell date ("" or absent = none)
+	loadErr     error
+	lastBuyErr  error
+	lastSellErr error
 }
 
 // LoadAllUnrealized 回傳預設的未實現損益清單，loadErr 非 nil 時回傳錯誤。
@@ -124,6 +126,18 @@ func (f *fakeSeed) LastBuyDateRaw(_ context.Context, stockID string) (string, bo
 	return v, true, nil
 }
 
+// LastSellDateRaw 回傳指定股票的最後賣出日期原始字串，無記錄或空字串時回傳 false。
+func (f *fakeSeed) LastSellDateRaw(_ context.Context, stockID string) (string, bool, error) {
+	if f.lastSellErr != nil {
+		return "", false, f.lastSellErr
+	}
+	v, ok := f.lastSell[stockID]
+	if !ok || v == "" {
+		return "", false, nil
+	}
+	return v, true, nil
+}
+
 // ── helpers ─────────────────────────────────────────────────────────────────────
 
 // tradingTestCfg 建立符合線上演算法設定的 Config，供引擎整合測試使用。
@@ -132,27 +146,24 @@ func tradingTestCfg(stocks ...string) *config.Config {
 		stocks = []string{"AAA"}
 	}
 	return &config.Config{
-		TrackStocks:             stocks,
-		ScalingStrategy:         "Baseline",
-		InitialCash:             1_000_000,
-		MAWindow:                10,
-		RegimeMethod:            "ma_pos",
-		RegimeMAWindow:          50,
-		CooldownDays:            14,
-		BullCooldownDays:        14,
-		BullBuyBand:             0.05,
-		BuyFracBasis:            "cash",
-		BullBuyFrac:             0.20,
-		BearBuyFrac:             0.02,
-		BuyTierRatio:            2.5,
-		BuyDepthBasis:           "peak",
-		BuyPeakLookback:         252,
-		BaselineBuyTiers:        []config.BaselineBuyTier{{Above: -0.1}, {Above: -0.2}, {Above: -0.3}, {Above: -0.4}},
-		BaselineSellThreshold:   1.0,
-		SellFracOfPosition:      0.33,
-		TrailStopBear:           0.10,
-		TrailMinGain:            0.10,
-		CooldownBreakWindowDays: 365,
+		TrackStocks:      stocks,
+		ScalingStrategy:  "Baseline",
+		InitialCash:      1_000_000,
+		MAWindow:         10,
+		RegimeMethod:     "ma_pos",
+		RegimeMAWindow:   50,
+		CooldownDays:     14,
+		BullCooldownDays: 14,
+		BullBuyBand:      0.05,
+		BuyFracBasis:     "cash",
+		BullBuyFrac:      0.20,
+		BearBuyFrac:      0.02,
+		BuyTierRatio:     2.5,
+		BuyDepthBasis:    "peak",
+		BuyPeakLookback:  252,
+		BaselineBuyTiers: []config.BaselineBuyTier{{Above: -0.1}, {Above: -0.2}, {Above: -0.3}, {Above: -0.4}},
+		TrailStopBear:    0.10,
+		TrailMinGain:     0.10,
 	}
 }
 
@@ -189,7 +200,7 @@ func newTradingFixture(cfg *config.Config) (*TradingService, *fakeSeed, *fakeSta
 	portfolio := NewPortfolioService(ledger, stock, log)
 	market := NewMarketDataService(&fakeFetcher{}, stock, newFakeBackfill(), cfg, log)
 	engine := trading.NewEngine(cfg)
-	seed := &fakeSeed{lastBuy: map[string]string{}}
+	seed := &fakeSeed{lastBuy: map[string]string{}, lastSell: map[string]string{}}
 	state := newFakeState()
 	notify := &fakeNotifier{}
 	realtime := &fakeRealtime{opens: map[string]float64{}}
@@ -260,7 +271,7 @@ func TestTradingService_SeedFromDB(t *testing.T) {
 	}
 	seed.lastBuy["AAA"] = "2024-01-02"
 
-	if err := svc.SeedFromDB(context.Background()); err != nil {
+	if err := svc.SeedFromDB(context.Background(), nil); err != nil {
 		t.Fatalf("SeedFromDB: %v", err)
 	}
 	if svc.engine.Cash() != 54321 {
@@ -284,7 +295,7 @@ func TestTradingService_SeedFromDB_NoCashFallbackAndDatetimeLot(t *testing.T) {
 	}
 	// no last-buy entry for AAA
 
-	if err := svc.SeedFromDB(context.Background()); err != nil {
+	if err := svc.SeedFromDB(context.Background(), nil); err != nil {
 		t.Fatalf("SeedFromDB: %v", err)
 	}
 	if svc.engine.Cash() != cfg.InitialCash {
@@ -430,7 +441,7 @@ func TestTradingExecutor_OnSell_RoutesToPortfolioAndNotifies(t *testing.T) {
 
 	exec := &tradingExecutor{svc: svc, ctx: context.Background(), notify: true}
 	day := time.Date(2024, 6, 6, 0, 0, 0, 0, time.UTC)
-	reason := trading.TradeReason{Action: "sell", Trigger: "profit", Regime: "bull", Price: 80.0, Shares: 100, Amount: 8000, CashAfter: 9000, GainPct: 1.0}
+	reason := trading.TradeReason{Action: "sell", Trigger: "trail", Regime: "bear", Price: 80.0, Shares: 100, Amount: 8000, CashAfter: 9000, GainPct: 0.6, TrailStopPct: 0.1}
 
 	if err := exec.OnSellApplied("AAA", day, 100, 80.0, 9000, reason); err != nil {
 		t.Fatalf("OnSellApplied: %v", err)
@@ -711,5 +722,54 @@ func TestInOpenDecisionWindow(t *testing.T) {
 		if got := inOpenDecisionWindow(c.t); got != c.want {
 			t.Fatalf("inOpenDecisionWindow(%s) = %v, want %v", c.t.Format("15:04"), got, c.want)
 		}
+	}
+}
+
+// TestTradingService_SeedFromDB_RestoresTrailSellAndPeak 驗證 SeedFromDB 還原最後賣出日至再進場暫停閘,
+// 並依持倉與序列重建持倉峰值 (截至水位線),使重啟後的移動停利判定與連續回放一致。
+func TestTradingService_SeedFromDB_RestoresTrailSellAndPeak(t *testing.T) {
+	// Arrange — 持倉自 2024-01-10 起;序列在 01-06 (持倉前) 有 500、01-20 有 300、01-31 之後 (水位線後) 有 900。
+	cfg := tradingTestCfg("AAA")
+	cfg.DecisionPriceBasis = "open"
+	cfg.TrailReentryCooldownDays = 42
+	svc, seed, state, _, _, _ := newTradingFixture(cfg)
+	state.values["last_processed_date"] = "2024-01-30"
+	seed.unrealized = []entity.UnrealizedGainsLoss{
+		{TransactionDate: "2024-01-10", StockID: "AAA", TransactionPrice: 100.0, Shares: 10},
+	}
+	seed.lastBuy["AAA"] = "2024-01-10"
+	seed.lastSell["AAA"] = "2024-01-05"
+	start := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	n := 45
+	dates := make([]time.Time, n)
+	opens := make([]float64, n)
+	closes := make([]float64, n)
+	for i := 0; i < n; i++ {
+		dates[i] = start.AddDate(0, 0, i)
+		px := 100.0
+		switch {
+		case i == 5:
+			px = 500
+		case i == 19:
+			px = 300
+		case i >= 31:
+			px = 900
+		}
+		opens[i] = px
+		closes[i] = px
+	}
+	series := map[string]*trading.StockSeries{"AAA": trading.NewStockSeries(dates, opens, closes, nil, nil, nil)}
+
+	// Act
+	if err := svc.SeedFromDB(context.Background(), series); err != nil {
+		t.Fatalf("SeedFromDB: %v", err)
+	}
+
+	// Assert — 峰值為持倉期間截至水位線的最高開盤價;最後停利出場日已還原。
+	if got := svc.engine.PeakSinceHold("AAA"); got != 300 {
+		t.Fatalf("rebuilt peak = %.2f, want 300", got)
+	}
+	if ts, ok := svc.engine.LastTrailSell("AAA"); !ok || ts.Format("2006-01-02") != "2024-01-05" {
+		t.Fatalf("lastTrailSell not seeded: %v %v", ts, ok)
 	}
 }
