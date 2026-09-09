@@ -48,23 +48,22 @@ func (NoopExecutor) OnSellApplied(string, time.Time, int, float64, float64, Trad
 }
 
 // Engine 是上線與回測共用的 in-memory 模擬器。
-// 它持有「策略觀點下的真實狀態」:現金、未實現持倉、每檔股票最後買入日。
-// 上線模式啟動時會從 DB 還原這些狀態,使引擎與真實 DB 內容一致。
+// 它持有「策略觀點下的真實狀態」:現金、未實現持倉、每檔股票最後買入日、持倉峰值與最後停利出場日。
+// 上線模式啟動時會從 DB 還原這些狀態 (SeedCash / SeedPosition / SeedLastBuy / SeedLastTrailSell /
+// RebuildPeakSinceHold),使引擎與真實 DB 內容一致,重啟後的決策與從頭連續回放完全相同。
 type Engine struct {
 	cfg           *config.Config
 	cash          float64
 	positions     map[string][]lot
 	lastBuy       map[string]time.Time
-	peakSinceHold map[string]float64     // 持倉期間最高收盤 (移動停利用);全出後歸零
-	breakDates    map[string][]time.Time // 每檔歷次「動用打破冷卻額度」的日期 (滾動視窗計數用)
-	lastTrailSell map[string]time.Time   // 每檔最後一次移動停利出場日 (出場後暫停買入用);未持久化,重啟靠 catch-up 回放重建
+	peakSinceHold map[string]float64   // 持倉期間最高決策價 (移動停利用);全出後歸零
+	lastTrailSell map[string]time.Time // 每檔最後一次移動停利出場日 (出場後暫停買入用)
 
 	totalBuys   int
 	totalSells  int
 	skippedBuys int
 
-	trailSells  int // 移動停利觸發的賣出次數
-	profitSells int // 獲利了結觸發的賣出次數
+	trailSells int // 移動停利觸發的賣出次數
 
 	rec *DayRecorder // 選用觀測者;nil 表示不收集 (上線模式)。
 }
@@ -75,7 +74,6 @@ type EngineStats struct {
 	TotalSells  int
 	SkippedBuys int // 想買但可動用現金連 1 股都不夠 → 完全沒買成
 	TrailSells  int // 移動停利觸發次數
-	ProfitSells int // 獲利了結觸發次數
 }
 
 // NewEngine 建立空狀態的引擎,起始現金為 cfg.InitialCash。
@@ -86,7 +84,6 @@ func NewEngine(cfg *config.Config) *Engine {
 		positions:     make(map[string][]lot, len(cfg.TrackStocks)),
 		lastBuy:       make(map[string]time.Time, len(cfg.TrackStocks)),
 		peakSinceHold: make(map[string]float64, len(cfg.TrackStocks)),
-		breakDates:    make(map[string][]time.Time, len(cfg.TrackStocks)),
 		lastTrailSell: make(map[string]time.Time, len(cfg.TrackStocks)),
 	}
 }
@@ -119,6 +116,56 @@ func (e *Engine) SeedLastBuy(stockID string, date time.Time) {
 	e.lastBuy[stockID] = date
 }
 
+// SeedLastTrailSell 餵入既有最後一次移動停利出場日 (上線啟動從 RealizedGainsLosses 最後賣出日還原)。
+// 移動停利為唯一賣出路徑,故帳本的最後賣出日即為最後停利出場日;供再進場暫停閘於重啟後維持與連續回放一致。
+func (e *Engine) SeedLastTrailSell(stockID string, date time.Time) {
+	e.lastTrailSell[stockID] = date
+}
+
+// RebuildPeakSinceHold 依已餵入的持倉與價格序列,重建每檔「持倉期間最高決策價」(截至 upTo 當日,含)。
+// 移動停利為全數出場,故目前持倉的最早 lot 日即為本輪建倉日;峰值 = 該日起至 upTo 每個交易日的決策價
+// (open 基準為開盤價、close 基準為收盤價) 最大值,與連續處理逐日更新的結果完全相同。
+// 無持倉的股票峰值歸零。upTo 之後的交易日由 catch-up 回放時再逐日更新。
+func (e *Engine) RebuildPeakSinceHold(series map[string]*StockSeries, upTo time.Time) {
+	openBasis := e.cfg.DecisionPriceBasis == "open"
+	for stockID, pos := range e.positions {
+		// 無持倉:峰值歸零。
+		if len(pos) == 0 {
+			e.peakSinceHold[stockID] = 0
+			continue
+		}
+		s, ok := series[stockID]
+		if !ok {
+			continue
+		}
+		// 本輪建倉日 = 目前持倉中最早的 lot 日。
+		holdStart := pos[0].date
+		for _, l := range pos[1:] {
+			if l.date.Before(holdStart) {
+				holdStart = l.date
+			}
+		}
+		// 掃描 [holdStart, upTo] 內每個交易日的決策價取最大值。
+		peak := 0.0
+		for i, d := range s.Dates {
+			if d.Before(holdStart) {
+				continue
+			}
+			if d.After(upTo) {
+				break
+			}
+			px := s.ClosePrices[i]
+			if openBasis {
+				px = s.OpenAt(i)
+			}
+			if px > peak {
+				peak = px
+			}
+		}
+		e.peakSinceHold[stockID] = peak
+	}
+}
+
 // Cash 回傳當前現金。
 func (e *Engine) Cash() float64 { return e.cash }
 
@@ -138,7 +185,6 @@ func (e *Engine) Stats() EngineStats {
 		TotalSells:  e.totalSells,
 		SkippedBuys: e.skippedBuys,
 		TrailSells:  e.trailSells,
-		ProfitSells: e.profitSells,
 	}
 }
 
@@ -301,9 +347,6 @@ func (e *Engine) processStock(stockID string, today time.Time, decisionPrice flo
 	if needEquity {
 		snap.Equity = eqToday
 	}
-	if eff.CooldownBreakBudget > 0 {
-		snap.CooldownBreaksLeft = eff.CooldownBreakBudget - e.breaksInWindow(eff, stockID, today)
-	}
 	// 移動停利出場後的「暫停買入」閘:避免空頭中「停損→隔日又逢低買→再停損」的 whipsaw 循環 (zero-value 不暫停)。
 	reentryBlocked := false
 	if eff.TrailReentryCooldownDays > 0 {
@@ -384,26 +427,9 @@ func (e *Engine) buildSnapshot(stockID string, today time.Time, todayPrice, ma20
 	}
 }
 
-// breaksInWindow 回傳近 cfg.CooldownBreakWindowDays 日曆日內 (不含界外) 同一檔已動用的「打破冷卻」次數。
-// 收 cfg 參數以支援 per-stock override (窗長可能各股不同)。
-func (e *Engine) breaksInWindow(cfg *config.Config, stockID string, today time.Time) int {
-	w := cfg.CooldownBreakWindowDays
-	if w <= 0 {
-		w = 365 // ≈252 交易日≈1 年
-	}
-	cutoff := today.Add(-time.Duration(w) * 24 * time.Hour)
-	n := 0
-	for _, d := range e.breakDates[stockID] {
-		if d.After(cutoff) {
-			n++
-		}
-	}
-	return n
-}
-
 // applyGateInputs 依 cfg 旗標「按需」把選用指標填入 snapshot (近期高點 RecentPeak,供 peak 深度基準 /
 // 熊市現金比例的深度權重使用)。近期高點截至 asOfIdx (open 基準時為前一交易日,不含當日收盤)。
-// IsBull / Cash / Equity / CooldownBreaksLeft 由 processStock 設定。
+// IsBull / Cash / Equity 由 processStock 設定。
 func (e *Engine) applyGateInputs(snap *Snapshot, s *StockSeries, asOfIdx int) {
 	if e.cfg.BuyDepthBasis == "peak" {
 		lb := e.cfg.BuyPeakLookback
@@ -472,9 +498,6 @@ func (e *Engine) applyBuy(stockID string, today time.Time, intent BuyIntent, exe
 		price:  intent.Price,
 	})
 	e.lastBuy[stockID] = today
-	if intent.BrokeCooldown {
-		e.breakDates[stockID] = append(e.breakDates[stockID], today) // 記錄一次「打破冷卻」(滾動視窗計數)
-	}
 	e.totalBuys++
 	// 觀測者記錄夾取後的真實成交額 (買入為負現金流)。被夾取到 0 股的情況已在上面提前 return。
 	if e.rec != nil && e.rec.OnCashflow != nil {
@@ -490,6 +513,7 @@ func (e *Engine) applyBuy(stockID string, today time.Time, intent BuyIntent, exe
 }
 
 // applySell 將賣出意圖套用到現金與持倉，並通知 executor 寫入副作用。
+// 依 TargetShares 由成本最低的 lot 起逐筆賣出 (移動停利為全數出場,TargetShares = 全部持股)。
 func (e *Engine) applySell(stockID string, today time.Time, intent SellIntent, exec Executor) error {
 	pos := e.positions[stockID]
 	if len(pos) == 0 {
@@ -533,8 +557,6 @@ func (e *Engine) applySell(stockID string, today time.Time, intent SellIntent, e
 		if intent.Reason == "trail" {
 			e.trailSells++
 			e.lastTrailSell[stockID] = today // 記錄出場日,供「暫停買入」閘判定
-		} else {
-			e.profitSells++
 		}
 		if e.rec != nil && e.rec.OnCashflow != nil {
 			e.rec.OnCashflow(today, float64(soldShares)*intent.Price)
@@ -548,4 +570,13 @@ func (e *Engine) applySell(stockID string, today time.Time, intent SellIntent, e
 		return exec.OnSellApplied(stockID, today, soldShares, intent.Price, e.cash, reason)
 	}
 	return nil
+}
+
+// PeakSinceHold 回傳某檔目前追蹤的持倉期間最高決策價 (供跨套件測試檢視狀態還原結果);無持倉為 0。
+func (e *Engine) PeakSinceHold(stockID string) float64 { return e.peakSinceHold[stockID] }
+
+// LastTrailSell 回傳某檔最後一次移動停利出場日 (供跨套件測試檢視狀態還原結果);無紀錄時 ok=false。
+func (e *Engine) LastTrailSell(stockID string) (time.Time, bool) {
+	d, ok := e.lastTrailSell[stockID]
+	return d, ok
 }

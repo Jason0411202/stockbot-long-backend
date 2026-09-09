@@ -50,11 +50,12 @@ type RealtimeFetcher interface {
 }
 
 // LedgerSeedStore 是線上啟動時用於還原引擎狀態的帳本唯讀 port，
-// 提供 TradingService 從 DB 讀取持倉與各股最後買入日所需的查詢方法。
+// 提供 TradingService 從 DB 讀取持倉、各股最後買入日與最後賣出日 (移動停利出場日) 所需的查詢方法。
 // 由 *repository.LedgerRepository 實作（與 LedgerStore 為同一具體型別）。
 type LedgerSeedStore interface {
 	LoadAllUnrealized(ctx context.Context) ([]entity.UnrealizedGainsLoss, error)
 	LastBuyDateRaw(ctx context.Context, stockID string) (string, bool, error)
+	LastSellDateRaw(ctx context.Context, stockID string) (string, bool, error)
 }
 
 // SeriesLoader 是 TradingService 用於建構引擎記憶體價格序列的 StockHistory 載入 port，

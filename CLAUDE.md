@@ -112,7 +112,7 @@ common issuance 起 catch-up，其現金軌跡與帳本與回測全期完全一�
   **前一交易日收盤**（無未來資訊）；線上經 TWSE MIS 取即時開盤、回測/CSV 用歷史 `open_price`，兩邊同基準。
   帳本成交價由引擎決策價寫入（`PortfolioService.BuyShares/SellShares` 收 `price` 參數），**不可**改回
   `GetPriceAsOf` 查 DB（開盤決策當下 DB 尚無當日 K 棒，會誤拿 T-1 收盤）。現行參數為**開盤基準 + lump-sum 專調**
-  （`regime_ma_window 85`、`trail_stop_bear 0.08`、`bull_buy_band 0.08`、`cooldown_break_budget 3`，
+  （`regime_ma_window 85`、`trail_stop_bear 0.08`、`bull_buy_band 0.08`，
   00631L override `regime_ma_window 60` + `trail_reentry_cooldown_days 42`）；改回收盤基準、改決策基準、
   或重新開啟外部注資（`monthly_contribution > 0`）都需重新以 `cmd/eval_csv` 跑 walk-forward / IS-OOS 調參並重釘指紋。
 - **API wire keys 不可變。** `internal/dto` 的 JSON tag 是前端既有契約（含唯一的 camelCase
@@ -127,13 +127,20 @@ common issuance 起 catch-up，其現金軌跡與帳本與回測全期完全一�
   `Engine.CostBasis()`（純讀持倉、零 I/O、不參與決策,golden fingerprint 不受影響）。
 - **realized-P&L 端點的日期格式。** DSN 不得加 `parseTime`；`RealizedGainsLosses` 的 `DATE` 欄位
   需維持既有 wire 格式（見近期 commit 402cd71）。
-- **策略單一來源。** 目前只有 `Baseline` 現金比例策略；舊的固定金額金字塔已整組移除。
-  所有可調參數集中在 `config.yaml`，不要在程式碼硬編策略數字。
+- **策略單一來源。** 目前只有 `Baseline` 現金比例策略；舊的固定金額金字塔已整組移除。2026-09 再簡化：
+  移除「打破冷卻額度」與「多頭獲利了結」（消融實驗證實貢獻在雜訊內、屬過擬合旋鈕），**唯一賣出路徑為熊市移動停利**，
+  多頭持股續抱。所有可調參數集中在 `config.yaml`，不要在程式碼硬編策略數字。
 - **per-stock override 採用準則。** `config.yaml` 的 `stock_overrides` 僅採用通過 IS/OOS 樣本內外
   驗證、樣本外不退化的覆寫（現行 `00631L: regime_ma_window 60` + `trail_reentry_cooldown_days 42`；後者僅套 2x 槓桿股，
   全股套用會過擬合）。
-- **引擎記憶體狀態未持久化。** `peakSinceHold`、`lastTrailSell`（移動停利再進場冷卻用）等為純記憶體狀態，
-  不寫入 DB；上線重啟靠 catch-up 回放重建，故 `init_db_back_months` 須涵蓋足夠回看（≥ 冷卻天數）才能正確還原。
+- **引擎記憶體狀態於啟動時完整還原。** `peakSinceHold`、`lastTrailSell`（移動停利再進場冷卻用）不另存 DB，
+  但 `TradingService.SeedFromDB` 會從帳本重建：`lastTrailSell` 取 `RealizedGainsLosses` 最後 `sell_date`
+  （移動停利為唯一賣出路徑，故最後賣出日即最後停利出場日）；`peakSinceHold` 由 `Engine.RebuildPeakSinceHold`
+  以「目前持倉最早 lot 日 → 水位線」區間的決策價最大值重建（全數出場後持倉清空，故最早 lot 日即建倉日）。
+  重啟後的決策與從頭連續回放完全一致，不再依賴 `init_db_back_months` 覆蓋冷卻天數。新增引擎記憶體狀態時必須同步補上還原路徑。
+- **回測與上線起點一致。** `backtest.EvaluateFullSpan` 與上線首次 catch-up 皆從 `CommonIssuanceStart`（所有追蹤股都已上市的
+  最早日）起算；walk-forward 視窗才用 `commonSupportStart`（含 MA 暖身）。不要把全期回測改回 support start，否則前 19 個
+  交易日的決策會與線上帳本不一致。
 - **BotState 持久化欄位。** 跨重啟持久化於 `BotState` 的鍵為 `last_processed_date`（水位線）、`current_cash`、
   `total_contributed`（累計外部注資，供 API 本金明細；`monthly_contribution=0` 定版下恆為 0）。`total_contributed`
   只在「有新注資的月份」累加；要與回測完全對齊請清空 BotState + 帳本讓其從 common issuance 重新 catch-up。

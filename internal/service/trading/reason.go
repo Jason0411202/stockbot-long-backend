@@ -10,7 +10,7 @@ import "fmt"
 // TradeReason 描述一筆成交的決策理由 (供 log 結構化欄位與 Discord 通知排版使用)。
 type TradeReason struct {
 	Action  string // "buy" / "sell"
-	Trigger string // "dip"(逢低買入) / "trail"(熊市移動停利) / "profit"(多頭獲利了結)
+	Trigger string // "dip"(逢低買入) / "trail"(熊市移動停利)
 	Regime  string // "bull"(牛市) / "bear"(熊市)
 
 	// 成交端 (引擎 apply 後補上)。
@@ -20,13 +20,12 @@ type TradeReason struct {
 	CashAfter float64 // 成交後剩餘現金
 
 	// 買入決策端。
-	EntryMA       float64 // 進場均線 (當日決策可見到的最後一筆)
-	BandPct       float64 // 牛市放寬帶寬 (熊市為 0)
-	DepthPct      float64 // 深度基準值 (peak 基準 = 距近期高點回撤;越負跌越深)
-	BrokeCooldown bool    // 是否動用「打破冷卻」額度提前買入
+	EntryMA  float64 // 進場均線 (當日決策可見到的最後一筆)
+	BandPct  float64 // 牛市放寬帶寬 (熊市為 0)
+	DepthPct float64 // 深度基準值 (peak 基準 = 距近期高點回撤;越負跌越深)
 
 	// 賣出決策端。
-	GainPct      float64 // profit:相對最低成本獲利;trail:自峰值回落前的峰值相對成本獲利
+	GainPct      float64 // trail:自峰值回落前的峰值相對最低成本獲利
 	TrailStopPct float64 // trail:移動停利回撤門檻
 }
 
@@ -42,25 +41,17 @@ func (r TradeReason) regimeLabel() string {
 func (r TradeReason) Summary() string {
 	switch r.Trigger {
 	case "dip":
-		// 逢低買入:牛市放寬帶寬、熊市嚴格 <均線;附距高點回撤與是否打破冷卻。
+		// 逢低買入:牛市放寬帶寬、熊市嚴格 <均線;附距高點回撤。
 		band := ""
 		if r.Regime == "bull" && r.BandPct > 0 {
 			band = fmt.Sprintf("×(1+%.0f%%)", r.BandPct*100)
 		}
-		s := fmt.Sprintf("%s逢低買入:開盤價 %.2f 低於進場均線 %.2f%s;距近期高點回撤 %.1f%%",
+		return fmt.Sprintf("%s逢低買入:開盤價 %.2f 低於進場均線 %.2f%s;距近期高點回撤 %.1f%%",
 			r.regimeLabel(), r.Price, r.EntryMA, band, -r.DepthPct*100)
-		if r.BrokeCooldown {
-			s += ";已動用「打破冷卻」額度提前進場"
-		}
-		return s
 	case "trail":
 		// 熊市移動停利:自持有期間峰值回落達門檻,全數出場保護獲利。
 		return fmt.Sprintf("熊市移動停利:自持有期間峰值回落達 %.0f%%,以開盤價 %.2f 全數出場鎖住獲利",
 			r.TrailStopPct*100, r.Price)
-	case "profit":
-		// 多頭獲利了結:相對最低成本獲利達門檻,分批賣出。
-		return fmt.Sprintf("多頭獲利了結:相對最低成本獲利已達 +%.0f%%,以開盤價 %.2f 分批賣出 %d 股",
-			r.GainPct*100, r.Price, r.Shares)
 	}
 	return ""
 }

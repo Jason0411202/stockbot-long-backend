@@ -46,14 +46,14 @@ func TestForStock_AllFieldsOverridden(t *testing.T) {
 	// Arrange
 	base := &Config{
 		MAWindow: 10, RegimeMAWindow: 95, BullBuyBand: 0.05, CooldownDays: 14, BullCooldownDays: 14,
-		BullBuyFrac: 0.20, BearBuyFrac: 0.02, BuyTierRatio: 2.5, BaselineSellThreshold: 1.0,
-		SellFracOfPosition: 0.33, TrailStopBear: 0.10, TrailMinGain: 0.10,
+		BullBuyFrac: 0.20, BearBuyFrac: 0.02, BuyTierRatio: 2.5,
+		TrailStopBear: 0.10, TrailMinGain: 0.10,
 		StockOverrides: map[string]StockParams{
 			"X": {
 				MAWindow: iptr(5), RegimeMAWindow: iptr(60), BullBuyBand: fptr(0.08),
 				CooldownDays: iptr(7), BullCooldownDays: iptr(3), BullBuyFrac: fptr(0.25),
-				BearBuyFrac: fptr(0.03), BuyTierRatio: fptr(3.0), BaselineSellThreshold: fptr(0.8),
-				SellFracOfPosition: fptr(0.5), TrailStopBear: fptr(0.12), TrailMinGain: fptr(0.05),
+				BearBuyFrac: fptr(0.03), BuyTierRatio: fptr(3.0),
+				TrailStopBear: fptr(0.12), TrailMinGain: fptr(0.05),
 			},
 		},
 	}
@@ -64,7 +64,7 @@ func TestForStock_AllFieldsOverridden(t *testing.T) {
 	// Assert — 每個欄位都被覆寫成 override 值。
 	if e.MAWindow != 5 || e.RegimeMAWindow != 60 || e.BullBuyBand != 0.08 || e.CooldownDays != 7 ||
 		e.BullCooldownDays != 3 || e.BullBuyFrac != 0.25 || e.BearBuyFrac != 0.03 || e.BuyTierRatio != 3.0 ||
-		e.BaselineSellThreshold != 0.8 || e.SellFracOfPosition != 0.5 || e.TrailStopBear != 0.12 || e.TrailMinGain != 0.05 {
+		e.TrailStopBear != 0.12 || e.TrailMinGain != 0.05 {
 		t.Fatalf("not all fields overridden: %+v", e)
 	}
 	// base 不被改動。
@@ -98,8 +98,8 @@ buy_depth_basis: peak
 baseline_buy_tiers:
   - { above: -0.1 }
   - { above: -0.2 }
-baseline_sell_threshold: 1.0
-sell_frac_of_position: 0.33
+trail_stop_bear: 0.08
+trail_min_gain: 0.10
 initial_cash: 1000000
 `
 
@@ -194,7 +194,7 @@ back_testing_months: -1
 buy_frac_basis: cash
 bull_buy_frac: 0.20
 bear_buy_frac: 0.02
-sell_frac_of_position: 0.33
+trail_stop_bear: 0.08
 `
 	// Act
 	cfg, err := Load(writeConfig(t, body))
@@ -257,8 +257,8 @@ back_testing_months: -1
 		t.Fatalf("expected error when cash-fraction knobs missing for Baseline")
 	}
 
-	// 補齊四個旋鈕後應通過。
-	ok := body + "buy_frac_basis: cash\nbull_buy_frac: 0.2\nbear_buy_frac: 0.02\nsell_frac_of_position: 0.33\n"
+	// 補齊四個旋鈕 (三個現金比例 + 移動停利) 後應通過。
+	ok := body + "buy_frac_basis: cash\nbull_buy_frac: 0.2\nbear_buy_frac: 0.02\ntrail_stop_bear: 0.08\n"
 	if _, err := Load(writeConfig(t, ok)); err != nil {
 		t.Fatalf("complete cash-fraction config should load, got %v", err)
 	}
@@ -287,9 +287,6 @@ scaling_strategy: Baseline
 max_back_months: 1
 init_db_back_months: 60
 back_testing_months: -1
-baseline_buy_fallback_amount: 3000
-baseline_sell_threshold: 1.0
-baseline_sell_amount: 10000
 initial_cash: 1000000
 `
 	p := writeConfig(t, body)

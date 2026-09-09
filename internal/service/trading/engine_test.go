@@ -3,11 +3,10 @@ package trading
 
 import (
 	"testing"
-	"time"
 )
 
 // engine_test.go 為 Engine 的整合測試 (金字塔中層):驗證「決策 → 套用 → 狀態變動」這條鏈
-// (現金夾取、持倉增減、峰值追蹤、打破冷卻計數、狀態還原、as-of 估值)。
+// (現金夾取、持倉增減、峰值追蹤、狀態還原與重建、as-of 估值)。
 // per-stock 隔離測試因依賴 backtest 視窗核心,移至 backtest 套件。
 
 // TestEngine_BuysInBullNeverGoesNegative 驗證多頭行情下引擎至少成交一筆買入,且現金不跌為負,現金耗盡後出現 skipped。
@@ -138,28 +137,6 @@ func TestEngine_HoldingValueAsOf_PreListingIsZero(t *testing.T) {
 	}
 }
 
-// TestEngine_BreaksInWindow_RollingCount 驗證 breaksInWindow 僅計算滾動視窗內的打破冷卻次數,視窗外記錄不列入。
-func TestEngine_BreaksInWindow_RollingCount(t *testing.T) {
-	// Arrange — 直接填入歷次打破冷卻日期 (同套件可存取未匯出欄位)。
-	cfg := baseCfg("TEST")
-	cfg.CooldownBreakWindowDays = 365
-	engine := NewEngine(cfg)
-	today := mustDate(t, "2024-12-31")
-	engine.breakDates["TEST"] = []time.Time{
-		today.AddDate(-2, 0, 0), // 2 年前 → 視窗外
-		today.AddDate(0, -1, 0), // 1 月前 → 視窗內
-		today.AddDate(0, 0, -5), // 5 天前 → 視窗內
-	}
-
-	// Act
-	n := engine.breaksInWindow(cfg, "TEST", today)
-
-	// Assert — 只算近 365 日內的兩次。
-	if n != 2 {
-		t.Fatalf("breaksInWindow = %d, want 2", n)
-	}
-}
-
 // TestRegimeBull_MaSlope 驗證 ma_slope 方法在上升序列中判為牛市,回看越界時判為空頭。
 func TestRegimeBull_MaSlope(t *testing.T) {
 	// Arrange — 上升序列;ma_slope:當前 MA > lb 日前 MA → bull。
@@ -176,5 +153,69 @@ func TestRegimeBull_MaSlope(t *testing.T) {
 	// 回看越界 (idx-lb<0 → prev MA NaN) → false。
 	if regimeBull(cfg, up, 5) {
 		t.Fatalf("insufficient lookback should be bear (false)")
+	}
+}
+
+// TestEngine_RebuildPeakSinceHold_MatchesContinuousRun 驗證「還原持倉 + 重建峰值」與從頭連續處理得到相同的 peakSinceHold。
+func TestEngine_RebuildPeakSinceHold_MatchesContinuousRun(t *testing.T) {
+	// Arrange — 先讓一個引擎連續跑到第 90 天並確實建倉。
+	cfg := baseCfg("TEST")
+	cfg.DecisionPriceBasis = "open"
+	series := map[string]*StockSeries{"TEST": seriesFrom(mustDate(t, "2020-01-01"), linRamp(160, 50, 200))}
+	cont := NewEngine(cfg)
+	cut := 90
+	for _, d := range series["TEST"].Dates[:cut] {
+		if err := cont.ProcessDay(d, series, NoopExecutor{}); err != nil {
+			t.Fatalf("ProcessDay: %v", err)
+		}
+	}
+	if len(cont.positions["TEST"]) == 0 {
+		t.Fatalf("fixture must hold a position by day %d", cut)
+	}
+
+	// Act — 以帳本持倉重建另一個引擎並重建峰值 (截至第 90 天)。
+	restored := NewEngine(cfg)
+	for _, l := range cont.positions["TEST"] {
+		restored.SeedPosition("TEST", l.date, l.shares, l.price)
+	}
+	restored.RebuildPeakSinceHold(series, series["TEST"].Dates[cut-1])
+
+	// Assert — 峰值完全一致;無持倉股票歸零。
+	if got, want := restored.peakSinceHold["TEST"], cont.peakSinceHold["TEST"]; got != want {
+		t.Fatalf("rebuilt peak = %.2f, want %.2f", got, want)
+	}
+	empty := NewEngine(cfg)
+	empty.positions["TEST"] = nil
+	empty.peakSinceHold["TEST"] = 123
+	empty.RebuildPeakSinceHold(series, series["TEST"].Dates[cut-1])
+	if empty.peakSinceHold["TEST"] != 0 {
+		t.Fatalf("no-position stock should reset peak to 0, got %.2f", empty.peakSinceHold["TEST"])
+	}
+}
+
+// TestEngine_SeedLastTrailSell_BlocksReentry 驗證還原最後停利出場日後,再進場暫停閘在冷卻期內擋下買入、期滿放行。
+func TestEngine_SeedLastTrailSell_BlocksReentry(t *testing.T) {
+	// Arrange — 下跌序列 (價 < MA,熊市),每日皆符合逢低買入條件。
+	cfg := baseCfg("TEST")
+	cfg.TrailReentryCooldownDays = 30
+	series := map[string]*StockSeries{"TEST": seriesFrom(mustDate(t, "2020-01-01"), linRamp(120, 200, 100))}
+	start := mustDate(t, "2020-03-01") // 第 60 天,MA 已就緒
+
+	// Act + Assert — 出場日在 10 天前 → 擋下;40 天前 → 放行。
+	blocked := NewEngine(cfg)
+	blocked.SeedLastTrailSell("TEST", start.AddDate(0, 0, -10))
+	if err := blocked.ProcessDay(start, series, NoopExecutor{}); err != nil {
+		t.Fatalf("ProcessDay: %v", err)
+	}
+	if blocked.Stats().TotalBuys != 0 {
+		t.Fatalf("reentry cooldown should block buy")
+	}
+	allowed := NewEngine(cfg)
+	allowed.SeedLastTrailSell("TEST", start.AddDate(0, 0, -40))
+	if err := allowed.ProcessDay(start, series, NoopExecutor{}); err != nil {
+		t.Fatalf("ProcessDay: %v", err)
+	}
+	if allowed.Stats().TotalBuys != 1 {
+		t.Fatalf("expired reentry cooldown should allow buy, got %+v", allowed.Stats())
 	}
 }

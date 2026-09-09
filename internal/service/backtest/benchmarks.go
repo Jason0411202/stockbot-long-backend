@@ -34,8 +34,7 @@ type armResult struct {
 	buys         int
 	sells        int
 	skipped      int
-	trailSells   int // 移動停利觸發的賣出次數 (策略才有意義)
-	profitSells  int // 獲利了結觸發的賣出次數 (策略才有意義)
+	trailSells   int // 移動停利觸發的賣出次數 (策略才有意義;唯一賣出路徑)
 }
 
 // tradableAt 回傳在 day 當天「已上市可交易」的追蹤股票 (CloseAsOf ok)。

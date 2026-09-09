@@ -36,7 +36,7 @@
 - **回測績效** `backtest`（資料不足或評估失敗時為 `null`）：
   - 全期 headline：`span_start`/`span_end`/`years`/`total_in`，以及 `strategy` 與 `buy_hold` 各自的
     `final_equity`/`multiple`/`mwr`（資金加權年化報酬）/`max_drawdown`（NAV 回撤）/`calmar`/`sortino`/`avg_exposure`，
-    外加策略交易統計 `buys`/`sells`/`trail_sells`/`profit_sells`/`skipped`/`final_cash`。
+    外加策略交易統計 `buys`/`sells`/`trail_sells`/`profit_sells`（獲利了結機制已移除，恆為 0，key 保留向後相容）/`skipped`/`final_cash`。
   - `equity_curve` 全期（等距取樣，最多 400 點）每日權益曲線陣列，每點含 `date`/`strat_equity`/`bh_equity`，
     供前端繪製「策略 vs Buy & Hold」歷史權益折線圖。
   - `walk_forward` 多視窗穩健性 scorecard：中位 MWR / 回撤 / Calmar、`calmar_win_rate`、`blend_skill_rate`、

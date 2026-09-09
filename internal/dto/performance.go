@@ -58,7 +58,7 @@ type BacktestPerformance struct {
 	Buys        int     `json:"buys"`         // 買入次數
 	Sells       int     `json:"sells"`        // 賣出次數
 	TrailSells  int     `json:"trail_sells"`  // 移動停利賣出次數
-	ProfitSells int     `json:"profit_sells"` // 獲利了結賣出次數
+	ProfitSells int     `json:"profit_sells"` // 獲利了結賣出次數 (機制已移除,恆為 0;wire key 保留向後相容)
 	Skipped     int     `json:"skipped"`      // 現金不足被夾取跳過的買入次數
 	FinalCash   float64 `json:"final_cash"`   // 策略期末閒置現金 (現金尾巴)
 

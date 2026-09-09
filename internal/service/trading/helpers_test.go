@@ -30,27 +30,24 @@ func baseCfg(stocks ...string) *config.Config {
 		stocks = []string{"TEST"}
 	}
 	return &config.Config{
-		TrackStocks:             stocks,
-		ScalingStrategy:         "Baseline",
-		InitialCash:             1_000_000,
-		MAWindow:                10,
-		RegimeMethod:            "ma_pos",
-		RegimeMAWindow:          50,
-		CooldownDays:            14,
-		BullCooldownDays:        14,
-		BullBuyBand:             0.05,
-		BuyFracBasis:            "cash",
-		BullBuyFrac:             0.20,
-		BearBuyFrac:             0.02,
-		BuyTierRatio:            2.5,
-		BuyDepthBasis:           "peak",
-		BuyPeakLookback:         252,
-		BaselineBuyTiers:        []config.BaselineBuyTier{{Above: -0.1}, {Above: -0.2}, {Above: -0.3}, {Above: -0.4}},
-		BaselineSellThreshold:   1.0,
-		SellFracOfPosition:      0.33,
-		TrailStopBear:           0.10,
-		TrailMinGain:            0.10,
-		CooldownBreakWindowDays: 365,
+		TrackStocks:      stocks,
+		ScalingStrategy:  "Baseline",
+		InitialCash:      1_000_000,
+		MAWindow:         10,
+		RegimeMethod:     "ma_pos",
+		RegimeMAWindow:   50,
+		CooldownDays:     14,
+		BullCooldownDays: 14,
+		BullBuyBand:      0.05,
+		BuyFracBasis:     "cash",
+		BullBuyFrac:      0.20,
+		BearBuyFrac:      0.02,
+		BuyTierRatio:     2.5,
+		BuyDepthBasis:    "peak",
+		BuyPeakLookback:  252,
+		BaselineBuyTiers: []config.BaselineBuyTier{{Above: -0.1}, {Above: -0.2}, {Above: -0.3}, {Above: -0.4}},
+		TrailStopBear:    0.10,
+		TrailMinGain:     0.10,
 	}
 }
 
@@ -58,17 +55,15 @@ func baseCfg(stocks ...string) *config.Config {
 // 不含 regime / per-stock,讓單一條件被獨立驗證。
 func decideCfg() *config.Config {
 	return &config.Config{
-		ScalingStrategy:       "Baseline",
-		InitialCash:           1_000_000,
-		CooldownDays:          14,
-		BuyFracBasis:          "cash",
-		BullBuyFrac:           0.20,
-		BearBuyFrac:           0.02,
-		BuyTierRatio:          2.5,
-		BuyDepthBasis:         "held_high",
-		BaselineBuyTiers:      []config.BaselineBuyTier{{Above: -0.1}, {Above: -0.2}},
-		BaselineSellThreshold: 1.0,
-		SellFracOfPosition:    0.33,
+		ScalingStrategy:  "Baseline",
+		InitialCash:      1_000_000,
+		CooldownDays:     14,
+		BuyFracBasis:     "cash",
+		BullBuyFrac:      0.20,
+		BearBuyFrac:      0.02,
+		BuyTierRatio:     2.5,
+		BuyDepthBasis:    "held_high",
+		BaselineBuyTiers: []config.BaselineBuyTier{{Above: -0.1}, {Above: -0.2}},
 	}
 }
 
