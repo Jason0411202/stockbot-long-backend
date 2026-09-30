@@ -285,3 +285,15 @@ func TestPortfolio_LegacyDatetimeDoesNotOverrideSameDayClose(t *testing.T) {
 		t.Fatalf("same day close overridden: %+v", rows[0])
 	}
 }
+
+func TestAtomicDay_StaleWriterWithUnchangedCashIsRejected(t *testing.T) {
+	cfg := tradingTestCfg("AAA")
+	s, _, state, _, _, _ := newTradingFixture(cfg)
+	day := time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC)
+	state.values[stateKeyWatermark] = "2024-02-29"
+	s.seeded = true
+	s.engineDate = day.AddDate(0, 0, -2)
+	if err := s.commitDay(context.Background(), day, map[string]*trading.StockSeries{}, map[string]float64{"AAA": 90}, false); err == nil || !s.needsReload {
+		t.Fatal("stale process was allowed to overwrite risk anchors")
+	}
+}

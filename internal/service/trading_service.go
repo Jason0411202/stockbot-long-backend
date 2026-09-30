@@ -28,6 +28,8 @@ import (
 type TradingService struct {
 	calendar    TradingCalendar
 	needsReload bool
+	engineDate  time.Time
+	seeded      bool
 	engine      *trading.Engine
 	portfolio   *PortfolioService
 	market      *MarketDataService
@@ -260,6 +262,8 @@ func (s *TradingService) SeedFromDB(ctx context.Context, series map[string]*trad
 		metrics.SetLastProcessedDate(watermark)
 	}
 
+	s.engineDate = watermark
+	s.seeded = true
 	return nil
 }
 

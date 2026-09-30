@@ -63,6 +63,10 @@ func (s *TradingService) commitDay(ctx context.Context, day time.Time, series ma
 	if !expected.IsZero() && !day.After(expected) {
 		return nil
 	}
+	if s.seeded && !expected.Equal(s.engineDate) {
+		s.needsReload = true
+		return fmt.Errorf("engine watermark is stale; reload required")
+	}
 	candidate := *s
 	candidate.engine = s.engine.Clone()
 	exec := &tradingExecutor{svc: &candidate, notify: notify, deferred: true}
@@ -124,6 +128,8 @@ func (s *TradingService) commitDay(ctx context.Context, day time.Time, series ma
 		return err
 	}
 	s.engine = candidate.engine
+	s.engineDate = day
+	s.seeded = true
 	holding := s.engine.HoldingValueAsOf(series, day)
 	if opens != nil {
 		holding = s.engine.HoldingValueAt(opens)
@@ -197,6 +203,15 @@ func (s *TradingService) validateDay(ctx context.Context, day, prev time.Time, s
 }
 
 func (s *TradingService) reloadIfNeeded(ctx context.Context, series map[string]*trading.StockSeries) error {
+	if s.seeded {
+		wm, err := s.loadWatermark(ctx)
+		if err != nil {
+			return err
+		}
+		if !wm.Equal(s.engineDate) {
+			s.needsReload = true
+		}
+	}
 	if !s.needsReload {
 		return nil
 	}
