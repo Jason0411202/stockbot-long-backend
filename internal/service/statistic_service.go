@@ -63,7 +63,7 @@ func upperPointDays(prices []float64) int {
 // StockStatisticData 回傳每檔追蹤股票的統計資料 DTO 清單。
 // 任一 repository 呼叫發生錯誤時直接回傳錯誤（由 controller 決定如何處理）。
 func (s *StatisticService) StockStatisticData(ctx context.Context) ([]dto.StockStatistic, error) {
-	today := time.Now().Format("2006-01-02")
+	today := time.Now().In(time.FixedZone("Asia/Taipei", 8*60*60)).Format("2006-01-02")
 
 	out := make([]dto.StockStatistic, 0, len(s.cfg.TrackStocks))
 	for _, stockID := range s.cfg.TrackStocks {
