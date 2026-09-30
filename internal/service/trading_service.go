@@ -129,12 +129,8 @@ func (s *TradingService) RunOnline(ctx context.Context) error {
 		return fmt.Errorf("SeedFromDB: %w", err)
 	}
 
-	if wm, err := s.loadWatermark(ctx); err == nil {
-		if err = s.guardSplits(wm, series); err == nil {
-			if err = s.finalizeLatest(ctx, series); err != nil {
-				s.log.WithError(err).Warn("close valuation refresh pending")
-			}
-		}
+	if err := s.finalizeLatest(ctx, series); err != nil {
+		s.log.WithError(err).Warn("close valuation refresh pending")
 	}
 
 	// 靜默回放未處理的歷史日期。
@@ -286,10 +282,6 @@ func (s *TradingService) CatchUp(ctx context.Context, series map[string]*trading
 		return fmt.Errorf("loadWatermark: %w", err)
 	}
 
-	if err := s.guardSplits(watermark, series); err != nil {
-		return err
-	}
-
 	// 收集所有股票的日期聯集並確認不為空。
 	allDates := trading.CollectDateUnion(series)
 	if len(allDates) == 0 {
@@ -405,13 +397,6 @@ func (s *TradingService) refreshCompletedDays(ctx context.Context, today time.Ti
 	if err = s.reloadIfNeeded(ctx, series); err != nil {
 		return err
 	}
-	prev, err := s.loadWatermark(ctx)
-	if err != nil {
-		return err
-	}
-	if err = s.guardSplits(prev, series); err != nil {
-		return err
-	}
 	if err = s.finalizeLatest(ctx, series); err != nil {
 		return err
 	}
@@ -464,9 +449,6 @@ func (s *TradingService) runOneDayAtOpen(ctx context.Context, exec trading.Execu
 	if err = s.reloadIfNeeded(ctx, series); err != nil {
 		return err
 	}
-	if err = s.guardSplits(prev, series); err != nil {
-		return err
-	}
 	expected := today.AddDate(0, 0, -1)
 	if s.calendar != nil {
 		expected, err = s.calendar.PreviousTradingDay(ctx, today)
@@ -474,27 +456,50 @@ func (s *TradingService) runOneDayAtOpen(ctx context.Context, exec trading.Execu
 			return err
 		}
 	}
+	var active []string
 	for _, id := range s.cfg.TrackStocks {
 		ss := series[id]
-		if ss == nil || len(ss.Dates) == 0 || !ss.Dates[len(ss.Dates)-1].Equal(expected) {
-			return fmt.Errorf("stale or missing history %s: require %s", id, expected.Format(dateLayout))
+		if ss != nil && ss.Suspended(today) {
+			continue
+		}
+		active = append(active, id)
+		required := expected
+		for ss != nil && ss.Suspended(required) {
+			if s.calendar != nil {
+				required, err = s.calendar.PreviousTradingDay(ctx, required)
+				if err != nil {
+					return err
+				}
+			} else {
+				required = required.AddDate(0, 0, -1)
+			}
+		}
+		if ss == nil || len(ss.Dates) == 0 || !ss.Dates[len(ss.Dates)-1].Equal(required) {
+			return fmt.Errorf("stale or missing history %s: require %s", id, required.Format(dateLayout))
 		}
 	}
-	opens, err := s.realtime.FetchOpens(ctx, s.cfg.TrackStocks)
-	if err != nil {
-		return err
+	opens := map[string]float64{}
+	if len(active) > 0 {
+		opens, err = s.realtime.FetchOpens(ctx, active)
+		if err != nil {
+			return err
+		}
 	}
-	for _, id := range s.cfg.TrackStocks {
-		px := opens[id]
+	book := bookFor(s.series)
+	normalized := make(map[string]float64, len(active))
+	for _, id := range active {
+		px := opens[id] * book.Factor(id, today.Format(dateLayout))
 		if px <= 0 || math.IsNaN(px) || math.IsInf(px, 0) {
 			s.log.WithField("stock_id", id).Info("awaiting complete opening prices; no watermark advance")
 			return nil
 		}
 		last := series[id].ClosePrices[len(series[id].ClosePrices)-1]
 		if px/last < 0.5 || px/last > 2 {
-			return fmt.Errorf("possible split or bad opening price %s; trading paused for reconciliation", id)
+			return fmt.Errorf("inconsistent opening quote %s after official unit conversion; retry market data", id)
 		}
+		normalized[id] = px
 	}
+	opens = normalized
 	if err = s.finalizeLatest(ctx, series); err != nil {
 		return err
 	}
@@ -517,23 +522,9 @@ func seriesBefore(src map[string]*trading.StockSeries, day time.Time) map[string
 			opens = ss.OpenPrices[:n]
 		}
 		out[id] = trading.NewStockSeries(ss.Dates[:n], opens, ss.ClosePrices[:n], nil, nil, nil)
-		out[id].SplitDates = ss.SplitDates
+		out[id].Suspensions = ss.Suspensions
 	}
 	return out
-}
-
-func (s *TradingService) guardSplits(prev time.Time, series map[string]*trading.StockSeries) error {
-	if prev.IsZero() {
-		return nil
-	}
-	for id, ss := range series {
-		for _, d := range ss.SplitDates {
-			if d.After(prev) {
-				return fmt.Errorf("unreconciled split or price discontinuity %s %s; trading paused", id, d.Format(dateLayout))
-			}
-		}
-	}
-	return nil
 }
 
 // loadWatermark 讀取 BotState 的 last_processed_date；
@@ -664,7 +655,7 @@ func (e *tradingExecutor) logTrade(action, stockID, dateStr string, reason tradi
 		"date":       dateStr,
 		"trigger":    reason.Trigger,
 		"regime":     reason.Regime,
-		"shares":     reason.Shares,
+		"shares":     reason.ShareQuantity(),
 		"price":      fmt.Sprintf("%.2f", reason.Price),
 		"amount":     fmt.Sprintf("%.2f", reason.Amount),
 		"cash_after": fmt.Sprintf("%.2f", reason.CashAfter),
@@ -681,7 +672,7 @@ func buildTradeNotification(title string, color int, stockID, dateStr string, re
 			{Name: "股票", Value: stockID, Inline: true},
 			{Name: "市況", Value: regimeText(reason.Regime), Inline: true},
 			{Name: "成交價(開盤)", Value: fmt.Sprintf("%.2f", reason.Price), Inline: true},
-			{Name: "股數", Value: fmt.Sprintf("%d 股", reason.Shares), Inline: true},
+			{Name: "股數", Value: fmt.Sprintf("%s 股", strconv.FormatFloat(reason.ShareQuantity(), 'f', -1, 64)), Inline: true},
 			{Name: "金額", Value: fmt.Sprintf("$%.0f", reason.Amount), Inline: true},
 			{Name: "剩餘現金", Value: fmt.Sprintf("$%.0f", reason.CashAfter), Inline: true},
 			{Name: "📋 交易理由", Value: reason.Summary(), Inline: false},

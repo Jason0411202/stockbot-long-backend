@@ -257,6 +257,9 @@ func (e *Engine) ProcessDay(today time.Time, series map[string]*StockSeries, exe
 		if !ok {
 			continue
 		}
+		if s.Suspended(today) {
+			continue
+		}
 
 		// 依決策基準決定成交價與「指標可見的最後一筆收盤索引」。
 		decisionPrice := s.ClosePrices[idx]
@@ -297,7 +300,7 @@ func (e *Engine) ProcessOpenDecision(today time.Time, opens map[string]float64, 
 	}
 	for _, stockID := range e.cfg.TrackStocks {
 		s, ok := series[stockID]
-		if !ok || len(s.Dates) == 0 {
+		if !ok || len(s.Dates) == 0 || s.Suspended(today) {
 			continue
 		}
 		openPx, ok := opens[stockID]

@@ -14,10 +14,11 @@ type TradeReason struct {
 	Regime  string // "bull"(牛市) / "bear"(熊市)
 
 	// 成交端 (引擎 apply 後補上)。
-	Price     float64 // 成交價 (open 基準 = 當日開盤價)
-	Shares    int     // 實際成交股數 (已過現金夾取)
-	Amount    float64 // 成交金額 = Price × Shares
-	CashAfter float64 // 成交後剩餘現金
+	Price         float64 // 成交價 (open 基準 = 當日開盤價)
+	Shares        int     // 實際成交股數 (已過現金夾取)
+	DisplayShares float64 // current exchange-unit equivalent, display only
+	Amount        float64 // 成交金額 = Price × Shares
+	CashAfter     float64 // 成交後剩餘現金
 
 	// 買入決策端。
 	EntryMA  float64 // 進場均線 (當日決策可見到的最後一筆)
@@ -27,6 +28,20 @@ type TradeReason struct {
 	// 賣出決策端。
 	GainPct      float64 // trail:自峰值回落前的峰值相對最低成本獲利
 	TrailStopPct float64 // trail:移動停利回撤門檻
+}
+
+func (r TradeReason) InDisplayUnits(factor float64) TradeReason {
+	r.Price /= factor
+	r.EntryMA /= factor
+	r.DisplayShares = float64(r.Shares) * factor
+	return r
+}
+
+func (r TradeReason) ShareQuantity() float64 {
+	if r.DisplayShares != 0 {
+		return r.DisplayShares
+	}
+	return float64(r.Shares)
 }
 
 // regimeLabel 回傳 regime 的繁中標籤 (牛市 / 熊市)。

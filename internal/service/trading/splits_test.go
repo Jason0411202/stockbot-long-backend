@@ -1,51 +1,87 @@
-// internal/service/trading/splits_test.go 驗證 ApplySplitAdjust 對正向分割、反向分割及非分割行情的還原正確性。
 package trading
 
 import (
+	"github.com/Jason0411202/stockbot-long-backend/internal/marketunits"
 	"math"
+	"reflect"
 	"testing"
+	"time"
 )
 
-// TestSplitAdjust_ForwardSplit 驗證正向股票分割時,分割前的收盤價與最高價皆按比例縮小以維持序列連續。
-func TestSplitAdjust_ForwardSplit(t *testing.T) {
-	// 1:4 正向分割發生在 idx1→idx2 (102 → 25.5,ratio 0.25)。
-	closes := []float64{100, 102, 25.5, 26}
-	highs := []float64{101, 103, 25.8, 26.5}
-	ApplySplitAdjust(closes, highs)
-	// 分割前 (idx 0,1) 應被縮小 ×0.25,分割後不變 → 序列連續。
-	want := []float64{25, 25.5, 25.5, 26}
-	for i, w := range want {
-		if math.Abs(closes[i]-w) > 1e-9 {
-			t.Fatalf("close[%d]=%.4f, want %.4f", i, closes[i], w)
-		}
+func TestOfficialSplitKeepsRealReturn(t *testing.T) {
+	b := marketunits.Default()
+	dates := []time.Time{time.Date(2026, 3, 24, 0, 0, 0, 0, time.UTC), time.Date(2026, 3, 31, 0, 0, 0, 0, time.UTC)}
+	closes := []float64{443.15, 19.17}
+	opens := []float64{444, 19.75}
+	vols := []float64{100, 2200}
+	b.Normalize("00631L", dates, [][]float64{closes, opens}, vols)
+	if math.Abs(closes[0]-443.15/22) > 1e-10 || closes[1] != 19.17 || vols[0] != 2200 {
+		t.Fatalf("wrong normalization: %v %v", closes, vols)
 	}
-	if math.Abs(highs[0]-25.25) > 1e-9 {
-		t.Fatalf("high[0]=%.4f, want 25.25 (high 同步 back-adjust)", highs[0])
+	if math.Abs(closes[1]/closes[0]-1) < 0.04 {
+		t.Fatal("real resumed-session loss was erased")
 	}
-}
-
-// TestSplitAdjust_ReverseSplit 驗證反向股票分割時,分割前的收盤價按倍率放大以維持序列連續。
-func TestSplitAdjust_ReverseSplit(t *testing.T) {
-	// 1:N 反向分割 (idx1→idx2:11 → 44,ratio 4)。
-	closes := []float64{10, 11, 44, 45}
-	ApplySplitAdjust(closes)
-	want := []float64{40, 44, 44, 45}
-	for i, w := range want {
-		if math.Abs(closes[i]-w) > 1e-9 {
-			t.Fatalf("close[%d]=%.4f, want %.4f", i, closes[i], w)
-		}
+	s := NewStockSeries(dates, opens, closes, nil, nil, nil)
+	s.SetSuspensions("00631L", b)
+	if !s.Suspended(dates[0].AddDate(0, 0, 1)) || s.Suspended(dates[1]) {
+		t.Fatal("wrong suspension interval")
 	}
 }
 
-// TestSplitAdjust_NoSplit_Unchanged 驗證正常行情與除息小跳空不被誤判為分割,價格序列維持不變。
-func TestSplitAdjust_NoSplit_Unchanged(t *testing.T) {
-	// 一般行情 + 除息小跳空 (~3%) 都不應被當成分割。
-	closes := []float64{100, 105, 98, 95.2, 110}
-	cp := append([]float64(nil), closes...)
-	ApplySplitAdjust(closes)
-	for i := range closes {
-		if math.Abs(closes[i]-cp[i]) > 1e-12 {
-			t.Fatalf("close[%d] 被改動 = %.4f, want 原值 %.4f (非分割不應調整)", i, closes[i], cp[i])
+func TestSplitsDoNotChangeDecisionsCashPeaksOrRestart(t *testing.T) {
+	cfg := baseCfg("TEST")
+	cfg.DecisionPriceBasis = "open"
+	start := mustDate(t, "2026-10-01")
+	book := marketunits.Book{Basis: marketunits.BasisDate, Actions: []marketunits.Action{
+		{StockID: "TEST", Date: "2026-12-01", Ratio: 2},
+		{StockID: "TEST", Date: "2027-01-01", Ratio: 22},
+		{StockID: "TEST", Date: "2027-02-01", Ratio: 1.0 / 7},
+	}}
+	dates := make([]time.Time, 200)
+	raw := make([]float64, 200)
+	prices := make([]float64, 200)
+	for i := range dates {
+		dates[i] = start.AddDate(0, 0, i)
+		prices[i] = 100 + 30*math.Sin(float64(i)*0.045) + float64(i)/4
+		raw[i] = prices[i] / book.Factor("TEST", dates[i].Format(time.DateOnly))
+	}
+	book.Normalize("TEST", dates, [][]float64{raw}, nil)
+	base := map[string]*StockSeries{"TEST": NewStockSeries(dates, prices, prices, nil, nil, nil)}
+	split := map[string]*StockSeries{"TEST": NewStockSeries(dates, raw, raw, nil, nil, nil)}
+	want, got, online := NewEngine(cfg), NewEngine(cfg), NewEngine(cfg)
+	for i, d := range dates {
+		if err := want.ProcessDay(d, base, NoopExecutor{}); err != nil {
+			t.Fatal(err)
 		}
+		if err := got.ProcessDay(d, split, NoopExecutor{}); err != nil {
+			t.Fatal(err)
+		}
+		if err := online.ProcessOpenDecision(d, map[string]float64{"TEST": raw[i]}, split, NoopExecutor{}); err != nil {
+			t.Fatal(err)
+		}
+		if i == 61 || i == 123 { // restart immediately after unit events
+			restarted := NewEngine(cfg)
+			restarted.SeedCash(online.Cash())
+			for _, lot := range online.positions["TEST"] {
+				restarted.SeedPosition("TEST", lot.date, lot.shares, lot.price)
+			}
+			restarted.SeedRiskState("TEST", online.RiskState("TEST"))
+			online = restarted
+		}
+		for _, e := range []*Engine{got, online} {
+			if math.Abs(e.Cash()-want.Cash()) > 1e-7 || math.Abs(e.HoldingValueAsOf(split, d)-want.HoldingValueAsOf(base, d)) > 1e-7 || math.Abs(e.CostBasis()-want.CostBasis()) > 1e-7 {
+				t.Fatalf("split changed accounting on %s", d)
+			}
+			wr, gr := want.RiskState("TEST"), e.RiskState("TEST")
+			if !wr.LastBuy.Equal(gr.LastBuy) || !wr.LastTrailSell.Equal(gr.LastTrailSell) || math.Abs(wr.Peak-gr.Peak) > 1e-9 {
+				t.Fatal("split changed risk anchors")
+			}
+		}
+	}
+	if want.Stats().TotalBuys == 0 || want.Stats().TotalSells == 0 {
+		t.Fatal("fixture did not exercise both buys and sells")
+	}
+	if !reflect.DeepEqual(want.Stats(), got.Stats()) {
+		t.Fatal("different trading decisions")
 	}
 }

@@ -22,8 +22,8 @@ type lot struct {
 // 一般建構請走 NewStockSeries —— 它會以與 DB / CSV 路徑完全相同的方式計算 MA20 與 PrefixClose,
 // 確保黃金指紋不變。
 type StockSeries struct {
-	Dates       []time.Time // asc
-	SplitDates  []time.Time // raw price discontinuities requiring live reconciliation
+	Dates       []time.Time    // asc
+	Suspensions [][2]time.Time // announced/inferred non-trading interval [start, resume)
 	DateIndex   map[string]int
 	ClosePrices []float64
 	MA20        []float64 // MA20[i] = 截至 Dates[i] 的 20 日均價;不足 20 日以 NaN 表示

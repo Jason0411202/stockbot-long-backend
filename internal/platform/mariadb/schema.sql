@@ -67,6 +67,19 @@ CREATE TABLE IF NOT EXISTS BotState (
     PRIMARY KEY (state_key)
 );
 
+-- Persist the complete official corporate-action book without truncation.
+ALTER TABLE BotState MODIFY COLUMN state_value TEXT NOT NULL;
+
+-- Accounting-unit prices can contain fractions after reverse splits. Keep
+-- sufficient precision across restarts; existing monetary values are retained.
+ALTER TABLE UnrealizedGainsLosses MODIFY COLUMN transaction_price DECIMAL(24,12) NOT NULL;
+ALTER TABLE RealizedGainsLosses MODIFY COLUMN purchase_price DECIMAL(24,12) NOT NULL;
+ALTER TABLE RealizedGainsLosses MODIFY COLUMN sell_price DECIMAL(24,12) NOT NULL;
+ALTER TABLE UnrealizedGainsLosses MODIFY COLUMN investment_cost DECIMAL(24,8) NOT NULL;
+ALTER TABLE RealizedGainsLosses MODIFY COLUMN investment_cost DECIMAL(24,8) NOT NULL;
+ALTER TABLE RealizedGainsLosses MODIFY COLUMN revenue DECIMAL(24,8) NOT NULL;
+ALTER TABLE RealizedGainsLosses MODIFY COLUMN profit_loss DECIMAL(24,8) NOT NULL;
+
 -- EquityHistory: 上線引擎逐日寫入的真實帳戶權益快照 (現金 + 持股市值),供前端歷史權益折線圖。
 -- 每個交易日一列;catch-up 回放與每日 loop 皆以 date 為 PK upsert,故重覆處理同一天會覆寫而非重複插入。
 -- 與回測 equity_curve 不同,此為真實帳本走勢,隨上線運行逐日累積 (既有部署升級後從升級點起累積;

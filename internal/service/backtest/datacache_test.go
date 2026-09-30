@@ -3,10 +3,42 @@ package backtest
 
 import (
 	"github.com/Jason0411202/stockbot-long-backend/internal/service/trading"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
+
+func TestCSVUsesPersistedOfficialUnitsForAllOHLCV(t *testing.T) {
+	dir := t.TempDir()
+	writeCSV(t, dir, "AAA", "date,open,high,low,close,volume\n2026-10-01,100,110,95,105,100\n2026-10-02,25,28,24,27,400\n")
+	book := `{"basis":"2026-09-30","actions":[{"stock_id":"AAA","date":"2026-10-02","ratio":4}]}`
+	if err := os.WriteFile(filepath.Join(dir, "market-units.json"), []byte(book), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ss, err := LoadSeriesFromCSV(dir, []string{"AAA"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := ss["AAA"]
+	if s.ClosePrices[0] != 105 || s.ClosePrices[1] != 108 || s.OpenPrices[1] != 100 || s.Highs[1] != 112 || s.Lows[1] != 96 || s.Volumes[1] != 100 {
+		t.Fatalf("inconsistent CSV: %+v", s)
+	}
+	if math.Abs(s.ClosePrices[1]/s.ClosePrices[0]-108.0/105) > 1e-12 {
+		t.Fatal("real return erased")
+	}
+}
+
+func TestBenchmarkDoesNotBuySuspendedStock(t *testing.T) {
+	cfg := baseCfg("AAA")
+	s := flatSeries(5, 2026, 10, 100)
+	day := s.Dates[2]
+	s.Suspensions = append(s.Suspensions, [2]time.Time{day, day.AddDate(0, 0, 1)})
+	if ids := tradableAt(cfg, map[string]*trading.StockSeries{"AAA": s}, day); len(ids) != 0 {
+		t.Fatal("benchmark bought suspended stock")
+	}
+}
 
 // datacache_test.go 驗證離線 CSV 載入路徑 (walk-forward 掃描用,不依賴 DB):
 // header 略過、壞列略過、亂序重排、分割還原、缺檔報錯。

@@ -20,11 +20,12 @@ type PortfolioService struct {
 	ledger LedgerStore
 	stock  StockStore
 	log    *logrus.Entry
+	now    func() time.Time
 }
 
 // NewPortfolioService 建立並回傳一個已完成依賴注入的 PortfolioService。
 func NewPortfolioService(ledger LedgerStore, stock StockStore, log *logrus.Logger) *PortfolioService {
-	return &PortfolioService{ledger: ledger, stock: stock, log: log.WithField("component", "portfolio")}
+	return &PortfolioService{ledger: ledger, stock: stock, log: log.WithField("component", "portfolio"), now: time.Now}
 }
 
 // round2 將浮點數四捨五入至小數點後兩位，與原始 sqls.go 的呈現捨入邏輯一致。
@@ -41,7 +42,7 @@ func (s *PortfolioService) UnrealizedGainsLosses(ctx context.Context) ([]dto.Unr
 	}
 
 	// 對每檔不同 stockID 查詢當日收盤價，以 map 快取避免重複查詢。
-	today := time.Now().In(time.FixedZone("Asia/Taipei", 8*60*60)).Format("2006-01-02")
+	today := s.now().In(time.FixedZone("Asia/Taipei", 8*60*60)).Format("2006-01-02")
 	priceDates := map[string]string{}
 	priceBases := map[string]string{}
 	prices := make(map[string]float64, len(lots))
@@ -89,6 +90,7 @@ func (s *PortfolioService) UnrealizedGainsLosses(ctx context.Context) ([]dto.Unr
 	out := make([]dto.UnrealizedGainLoss, 0, len(lots))
 	for _, lot := range lots {
 		todayClosePrice := prices[lot.StockID]
+		factor := displayFactor(s.stock, lot.StockID, today)
 
 		nowValue := todayClosePrice * float64(lot.Shares)
 		if lot.Shares == 0 && lot.TransactionPrice > 0 { // 相容舊資料 (未記錄股數者)
@@ -106,10 +108,10 @@ func (s *PortfolioService) UnrealizedGainsLosses(ctx context.Context) ([]dto.Unr
 			TransactionDate:   lot.TransactionDate,
 			StockID:           lot.StockID,
 			StockName:         lot.StockName,
-			TransactionPrice:  lot.TransactionPrice,
+			TransactionPrice:  lot.TransactionPrice / factor,
 			InvestmentCost:    lot.InvestmentCost,
-			Shares:            lot.Shares,
-			TodayClosePrice:   todayClosePrice,
+			Shares:            float64(lot.Shares) * factor,
+			TodayClosePrice:   todayClosePrice / factor,
 			NowValue:          round2(nowValue),
 			PredictProfitLoss: round2(predictProfitLoss),
 			PredictProfitRate: round2(predictProfitRate),
@@ -128,18 +130,19 @@ func (s *PortfolioService) RealizedGainsLosses(ctx context.Context) ([]dto.Reali
 	// 逐筆套用呈現捨入並組裝回應 DTO。
 	out := make([]dto.RealizedGainLoss, 0, len(rows))
 	for _, r := range rows {
+		factor := displayFactor(s.stock, r.StockID, s.now().In(time.FixedZone("Asia/Taipei", 8*3600)).Format(dateLayout))
 		out = append(out, dto.RealizedGainLoss{
 			BuyDate:        r.BuyDate,
 			SellDate:       r.SellDate,
 			StockID:        r.StockID,
 			StockName:      r.StockName,
-			PurchasePrice:  r.PurchasePrice,
-			SellPrice:      r.SellPrice,
+			PurchasePrice:  r.PurchasePrice / factor,
+			SellPrice:      r.SellPrice / factor,
 			InvestmentCost: r.InvestmentCost,
 			Revenue:        round2(r.Revenue),
 			ProfitLoss:     round2(r.ProfitLoss),
 			ProfitRate:     round2(r.ProfitRate),
-			Shares:         r.Shares,
+			Shares:         float64(r.Shares) * factor,
 		})
 	}
 	return out, nil

@@ -4,6 +4,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/sirupsen/logrus"
 
@@ -30,8 +31,9 @@ func (s *StockHistoryService) StockHistoryData(ctx context.Context, stockID stri
 	}
 	// 逐筆轉換為 DTO 後回傳。
 	out := make([]dto.StockHistoryPoint, 0, len(rows))
+	factor := displayFactor(s.stock, stockID, time.Now().In(time.FixedZone("Asia/Taipei", 8*3600)).Format(dateLayout))
 	for _, r := range rows {
-		out = append(out, dto.StockHistoryPoint{Date: r.Date, Price: r.ClosePrice})
+		out = append(out, dto.StockHistoryPoint{Date: r.Date, Price: r.ClosePrice / factor})
 	}
 	return out, nil
 }

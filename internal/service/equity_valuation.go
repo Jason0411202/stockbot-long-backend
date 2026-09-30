@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/Jason0411202/stockbot-long-backend/internal/config"
 	"github.com/Jason0411202/stockbot-long-backend/internal/entity"
@@ -88,6 +89,17 @@ func (r *ClosedEquityReader) ListEquityAsc(ctx context.Context) ([]entity.Equity
 			}
 			i, ok := ss.DateIndex[snap.Date]
 			if !ok {
+				day, err := time.Parse(dateLayout, snap.Date)
+				if err != nil {
+					return nil, err
+				}
+				if ss.Suspended(day) {
+					price, found := ss.CloseAsOf(day)
+					if found {
+						value += float64(held[id]) * price
+						continue
+					}
+				}
 				complete = false
 				break
 			}

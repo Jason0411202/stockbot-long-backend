@@ -3,8 +3,10 @@ package backtest
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"github.com/Jason0411202/stockbot-long-backend/internal/config"
+	"github.com/Jason0411202/stockbot-long-backend/internal/marketunits"
 	"github.com/Jason0411202/stockbot-long-backend/internal/service/trading"
 	"os"
 	"path/filepath"
@@ -22,10 +24,22 @@ import (
 // LoadSeriesFromCSV 從 dir 下的 <stockID>.csv 讀入所有 stocks 的歷史資料,建立 series map。
 // 任一檔缺檔即回錯;單列解析失敗則略過該列。
 func LoadSeriesFromCSV(dir string, stocks []string) (map[string]*trading.StockSeries, error) {
+	book := marketunits.Default()
+	b, err := os.ReadFile(filepath.Join(dir, "market-units.json"))
+	if err == nil {
+		if err := json.Unmarshal(b, &book); err != nil {
+			return nil, err
+		}
+	} else if !os.IsNotExist(err) {
+		return nil, err
+	}
+	if err := book.Validate(); err != nil {
+		return nil, err
+	}
 	series := make(map[string]*trading.StockSeries, len(stocks))
 	for _, stockID := range stocks {
 		path := filepath.Join(dir, stockID+".csv")
-		s, err := loadOneCSV(path)
+		s, err := loadOneCSV(path, stockID, book)
 		if err != nil {
 			return nil, fmt.Errorf("載入 %s: %w", path, err)
 		}
@@ -38,7 +52,7 @@ func LoadSeriesFromCSV(dir string, stocks []string) (map[string]*trading.StockSe
 }
 
 // loadOneCSV 讀取單一股票 CSV 並建立已排序、已 split-adjust 的 StockSeries。
-func loadOneCSV(path string) (*trading.StockSeries, error) {
+func loadOneCSV(path, stockID string, book marketunits.Book) (*trading.StockSeries, error) {
 	// 開啟 CSV 檔案,確保離開時關閉。
 	f, err := os.Open(path)
 	if err != nil {
@@ -106,9 +120,11 @@ func loadOneCSV(path string) (*trading.StockSeries, error) {
 	}
 
 	// 還原股票分割 (split):使價格序列連續 (開盤同步縮放),再計算 MA / 前綴和 / peak。
-	trading.ApplySplitAdjust(closes, opens, highs, lows)
+	book.Normalize(stockID, dates, [][]float64{closes, opens, highs, lows}, vols)
 
-	return trading.NewStockSeries(dates, opens, closes, highs, lows, vols), nil
+	s := trading.NewStockSeries(dates, opens, closes, highs, lows, vols)
+	s.SetSuspensions(stockID, book)
+	return s, nil
 }
 
 // parseFloat 將 CSV 欄位轉成 float64，解析失敗時回傳 0。

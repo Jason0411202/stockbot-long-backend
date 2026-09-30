@@ -4,6 +4,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"math"
 	"regexp"
 	"testing"
 
@@ -83,16 +84,16 @@ func TestGetPriceAsOf(t *testing.T) {
 	// Arrange
 	db, mock := newMock(t)
 	repo := NewStockHistoryRepository(db)
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT close_price FROM StockHistory WHERE stock_id = ? AND date <= ? ORDER BY date DESC LIMIT 1;")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT date, close_price FROM StockHistory WHERE stock_id = ? AND date <= ? ORDER BY date DESC LIMIT 1;")).
 		WithArgs("00631L", "2024-06-06").
-		WillReturnRows(sqlmock.NewRows([]string{"close_price"}).AddRow(123.45))
+		WillReturnRows(sqlmock.NewRows([]string{"date", "close_price"}).AddRow("2024-06-06", 123.45))
 
 	// Act
 	px, err := repo.GetPriceAsOf(ctx, "00631L", "2024-06-06", "close_price")
 
 	// Assert
-	if err != nil || px != 123.45 {
-		t.Fatalf("GetPriceAsOf = (%.2f, %v), want 123.45", px, err)
+	if err != nil || math.Abs(px-123.45/22) > 1e-10 {
+		t.Fatalf("GetPriceAsOf = (%.2f, %v), want 123.45 / 22", px, err)
 	}
 	assertMet(t, mock)
 }
@@ -119,15 +120,15 @@ func TestGetClosePricesDescAsOf(t *testing.T) {
 	// Arrange — newest-first close series.
 	db, mock := newMock(t)
 	repo := NewStockHistoryRepository(db)
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT close_price FROM StockHistory WHERE stock_id = ? AND date <= ? ORDER BY date DESC;")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT date, close_price FROM StockHistory WHERE stock_id = ? AND date <= ? ORDER BY date DESC;")).
 		WithArgs("00631L", "2024-06-06").
-		WillReturnRows(sqlmock.NewRows([]string{"close_price"}).AddRow(100.0).AddRow(110.0).AddRow(95.0))
+		WillReturnRows(sqlmock.NewRows([]string{"date", "close_price"}).AddRow("2024-06-06", 100.0).AddRow("2024-06-05", 110.0).AddRow("2024-06-04", 95.0))
 
 	// Act
 	prices, err := repo.GetClosePricesDescAsOf(ctx, "00631L", "2024-06-06")
 
 	// Assert
-	if err != nil || len(prices) != 3 || prices[0] != 100.0 || prices[2] != 95.0 {
+	if err != nil || len(prices) != 3 || math.Abs(prices[0]-100.0/22) > 1e-10 || math.Abs(prices[2]-95.0/22) > 1e-10 {
 		t.Fatalf("GetClosePricesDescAsOf = (%v, %v), want [100 110 95]", prices, err)
 	}
 	assertMet(t, mock)
@@ -146,7 +147,7 @@ func TestGetCloseHistoryAsc(t *testing.T) {
 	hist, err := repo.GetCloseHistoryAsc(ctx, "00631L")
 
 	// Assert
-	if err != nil || len(hist) != 2 || hist[1].Date != "2024-01-03" || hist[1].OpenPrice != 50.5 || hist[1].ClosePrice != 51.0 {
+	if err != nil || len(hist) != 2 || hist[1].Date != "2024-01-03" || math.Abs(hist[1].OpenPrice-50.5/22) > 1e-10 || math.Abs(hist[1].ClosePrice-51.0/22) > 1e-10 {
 		t.Fatalf("GetCloseHistoryAsc = (%+v, %v)", hist, err)
 	}
 	assertMet(t, mock)

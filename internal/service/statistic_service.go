@@ -87,7 +87,7 @@ func (s *StatisticService) StockStatisticData(ctx context.Context) ([]dto.StockS
 		out = append(out, dto.StockStatistic{
 			StockID:        stockID,
 			StockName:      name,
-			TodayPrice:     todayPrice,
+			TodayPrice:     todayPrice / displayFactor(s.stock, stockID, today),
 			LowerPointDays: lowerPointDays(prices),
 			UpperPointDays: upperPointDays(prices),
 		})

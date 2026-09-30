@@ -8,6 +8,8 @@ package main
 // 目的：讓 walk-forward 回測 / 參數掃描完全脫離 MariaDB 與 docker —— 只要有 CSV 就能跑。
 // TWSE 抓取邏輯已統一在 internal/client/twse (與上線寫 DB 路徑共用同一客戶端)。
 import (
+	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -18,6 +20,7 @@ import (
 
 	"github.com/Jason0411202/stockbot-long-backend/internal/client/twse"
 	"github.com/Jason0411202/stockbot-long-backend/internal/entity"
+	"github.com/Jason0411202/stockbot-long-backend/internal/marketunits"
 )
 
 // main 解析旗標、建立輸出目錄，並對每檔標的逐月向 TWSE 抓取資料後寫出 CSV。
@@ -31,6 +34,22 @@ func main() {
 
 	if err := os.MkdirAll(*outDir, 0o755); err != nil {
 		fmt.Fprintln(os.Stderr, "mkdir 失敗:", err)
+		os.Exit(1)
+	}
+	// Freeze the same official units alongside raw CSV for reproducible replay.
+	actions, err := twse.NewSplitClient().FetchSplits(context.Background())
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	book, err := marketunits.Default().Merge(actions)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	b, _ := json.MarshalIndent(book, "", "  ")
+	if err := os.WriteFile(filepath.Join(*outDir, "market-units.json"), b, 0o644); err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 

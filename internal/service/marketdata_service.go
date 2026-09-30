@@ -77,6 +77,11 @@ func dateToYearMonth(date string) (string, error) {
 // UpdateDatabase 執行每日資料更新：對所有追蹤股票的每個月份日期，一律重抓 TWSE 資料並寫入。
 // 當月資料必抓；前月資料也允許覆蓋（以修正尚未完整的資料）。每次抓取間隔 3 秒。
 func (s *MarketDataService) UpdateDatabase(ctx context.Context) error {
+	if units, ok := s.stock.(interface{ RefreshUnits(context.Context) error }); ok {
+		if err := units.RefreshUnits(ctx); err != nil {
+			return err
+		}
+	}
 	now := time.Now().In(time.FixedZone("Asia/Taipei", 8*60*60))
 	currentDate := now.Format("20060102")
 	s.log.WithField("current_date", currentDate).Info("開始每日資料更新")

@@ -15,7 +15,7 @@ import (
 // 共用同一條路徑，確保行為完全一致。
 //
 // 對每檔 stockID：讀取（date, open_price, close_price）→ 以 "2006-01-02" 解析日期（失敗者跳過）→
-// ApplySplitAdjust 還原分割（開盤同步縮放）→ NewStockSeries（highs/lows/vols 皆 nil，與 DB 路徑相同）。
+// Repository normalizes prices once; NewStockSeries builds indicators.
 // 沒有任何有效資料的股票會被略過（不出現在回傳 map 中）。
 func LoadTradingSeries(ctx context.Context, loader SeriesLoader, stockIDs []string) (map[string]*trading.StockSeries, error) {
 	raw, err := loader.LoadSeries(ctx, stockIDs)
@@ -48,19 +48,10 @@ func LoadTradingSeries(ctx context.Context, loader SeriesLoader, stockIDs []stri
 			continue
 		}
 
-		// 還原股票分割 (split):使收盤與開盤序列同步連續,再由 NewStockSeries 計算 MA / 前綴和。
-		var splits []time.Time
-		for i := 1; i < len(closes); i++ {
-			if closes[i-1] > 0 && closes[i] > 0 {
-				ratio := closes[i] / closes[i-1]
-				if ratio < 0.5 || ratio > 2 {
-					splits = append(splits, dates[i])
-				}
-			}
-		}
-		trading.ApplySplitAdjust(closes, opens)
+		// Prices already use accounting units at the repository boundary.
 		series[stockID] = trading.NewStockSeries(dates, opens, closes, nil, nil, nil)
-		series[stockID].SplitDates = splits
+		series[stockID].SetSuspensions(stockID, bookFor(loader))
+
 	}
 
 	return series, nil

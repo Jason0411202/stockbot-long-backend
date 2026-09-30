@@ -69,6 +69,16 @@ func main() {
 	stateRepo := repository.NewBotStateRepository(db)
 	backfillRepo := repository.NewBackfillRepository(db)
 	equityRepo := repository.NewEquityHistoryRepository(db)
+	units, err := service.NewMarketUnits(ctx, stateRepo, twse.NewSplitClient())
+	if err != nil {
+		log.WithError(err).Fatal("restore market unit book")
+	}
+	stockRepo.SetUnits(units)
+	if err := units.RefreshUnits(ctx); err != nil {
+		// Reads remain available from the durable book; the trading loop retries
+		// official-data refresh automatically before its next decision.
+		log.WithError(err).Warn("official corporate-action refresh pending")
+	}
 
 	// --- clients (外部系統) ---
 	twseClient := twse.NewClient()

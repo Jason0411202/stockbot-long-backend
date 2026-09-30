@@ -5,13 +5,36 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 
 	"github.com/Jason0411202/stockbot-long-backend/internal/entity"
+	"github.com/Jason0411202/stockbot-long-backend/internal/marketunits"
 )
 
 // StockHistoryRepository 存取 StockHistory 資料表的讀寫操作。
 type StockHistoryRepository struct {
-	db *sql.DB
+	db    *sql.DB
+	units interface {
+		UnitBook() marketunits.Book
+		RefreshUnits(context.Context) error
+	}
+}
+
+func (r *StockHistoryRepository) SetUnits(units interface {
+	UnitBook() marketunits.Book
+	RefreshUnits(context.Context) error
+}) { r.units = units }
+func (r *StockHistoryRepository) UnitBook() marketunits.Book {
+	if r.units != nil {
+		return r.units.UnitBook()
+	}
+	return marketunits.Default()
+}
+func (r *StockHistoryRepository) RefreshUnits(ctx context.Context) error {
+	if r.units != nil {
+		return r.units.RefreshUnits(ctx)
+	}
+	return nil
 }
 
 // NewStockHistoryRepository 以傳入的連線池建立 StockHistoryRepository。
@@ -24,6 +47,9 @@ func (r *StockHistoryRepository) LatestClose(ctx context.Context, stockID, asOf 
 	var date string
 	var price float64
 	err := runner(ctx, r.db).QueryRowContext(ctx, "SELECT date, close_price FROM StockHistory WHERE stock_id = ? AND date <= ? ORDER BY date DESC LIMIT 1;", stockID, asOf).Scan(&date, &price)
+	if err == nil {
+		price *= r.UnitBook().Factor(stockID, date[:10])
+	}
 	return date, price, err
 }
 
@@ -58,22 +84,23 @@ func (r *StockHistoryRepository) GetPriceAsOf(ctx context.Context, stockID, asOf
 	}
 
 	// priceType 已通過白名單驗證,安全地插值為欄位名稱。
-	query := "SELECT " + priceType + " FROM StockHistory WHERE stock_id = ? AND date <= ? ORDER BY date DESC LIMIT 1;"
+	query := "SELECT date, " + priceType + " FROM StockHistory WHERE stock_id = ? AND date <= ? ORDER BY date DESC LIMIT 1;"
 	var price float64
-	err := runner(ctx, r.db).QueryRowContext(ctx, query, stockID, asOf).Scan(&price)
+	var date string
+	err := runner(ctx, r.db).QueryRowContext(ctx, query, stockID, asOf).Scan(&date, &price)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return 0, nil
 		}
 		return 0, fmt.Errorf("query %s for %s as of %s: %w", priceType, stockID, asOf, err)
 	}
-	return price, nil
+	return price * r.UnitBook().Factor(stockID, date[:10]), nil
 }
 
 // GetClosePricesDescAsOf 回傳 stockID 在 asOf 日期以前所有收盤價,依日期降冪排列。
 // 呼叫端依此序列計算移動平均等日距指標。
 func (r *StockHistoryRepository) GetClosePricesDescAsOf(ctx context.Context, stockID, asOf string) ([]float64, error) {
-	const query = "SELECT close_price FROM StockHistory WHERE stock_id = ? AND date <= ? ORDER BY date DESC;"
+	const query = "SELECT date, close_price FROM StockHistory WHERE stock_id = ? AND date <= ? ORDER BY date DESC;"
 	rows, err := runner(ctx, r.db).QueryContext(ctx, query, stockID, asOf)
 	if err != nil {
 		return nil, fmt.Errorf("query close prices for %s as of %s: %w", stockID, asOf, err)
@@ -82,12 +109,14 @@ func (r *StockHistoryRepository) GetClosePricesDescAsOf(ctx context.Context, sto
 
 	// 逐列掃描收盤價並收集至切片。
 	prices := make([]float64, 0)
+	book := r.UnitBook()
 	for rows.Next() {
 		var price float64
-		if err := rows.Scan(&price); err != nil {
+		var date string
+		if err := rows.Scan(&date, &price); err != nil {
 			return nil, fmt.Errorf("scan close price: %w", err)
 		}
-		prices = append(prices, price)
+		prices = append(prices, price*book.Factor(stockID, date[:10]))
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate close prices: %w", err)
@@ -107,11 +136,20 @@ func (r *StockHistoryRepository) GetCloseHistoryAsc(ctx context.Context, stockID
 
 	// 逐列掃描並收集歷史資料 (開盤 + 收盤)。
 	history := make([]entity.StockHistory, 0)
+	book := r.UnitBook()
 	for rows.Next() {
 		var h entity.StockHistory
 		if err := rows.Scan(&h.Date, &h.OpenPrice, &h.ClosePrice); err != nil {
 			return nil, fmt.Errorf("scan close history row: %w", err)
 		}
+		// Raw OHLC remains untouched in storage. Every strategy/API read uses
+		// the same permanent accounting unit, including historical indicators.
+		if len(h.Date) < len(time.DateOnly) {
+			return nil, fmt.Errorf("invalid bar date %q", h.Date)
+		}
+		f := book.Factor(stockID, h.Date[:10])
+		h.OpenPrice *= f
+		h.ClosePrice *= f
 		history = append(history, h)
 	}
 	if err := rows.Err(); err != nil {

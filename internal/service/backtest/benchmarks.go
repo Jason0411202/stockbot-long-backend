@@ -43,7 +43,7 @@ func tradableAt(cfg *config.Config, series map[string]*trading.StockSeries, day 
 	out := make([]string, 0, len(cfg.TrackStocks))
 	for _, id := range cfg.TrackStocks {
 		s, ok := series[id]
-		if !ok {
+		if !ok || s.Suspended(day) {
 			continue
 		}
 		if _, ok := s.CloseAsOf(day); ok {

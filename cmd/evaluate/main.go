@@ -66,6 +66,11 @@ func main() {
 	defer db.Close()
 
 	stockRepo := repository.NewStockHistoryRepository(db)
+	units, err := service.NewMarketUnits(context.Background(), repository.NewBotStateRepository(db), nil)
+	if err != nil {
+		log.Fatalf("restore market units: %v", err)
+	}
+	stockRepo.SetUnits(units)
 	series, err := service.LoadTradingSeries(context.Background(), stockRepo, cfg.TrackStocks)
 	if err != nil {
 		log.Fatalf("LoadTradingSeries 失敗: %v", err)

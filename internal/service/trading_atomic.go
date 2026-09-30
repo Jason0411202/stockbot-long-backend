@@ -34,6 +34,7 @@ func (e *tradingExecutor) emit(event tradeEvent) {
 }
 
 func (e *tradingExecutor) publish(event tradeEvent) {
+	event.reason = event.reason.InDisplayUnits(displayFactor(e.svc.series, event.stockID, event.date))
 	action, title, color := "買入成交", "🟥 買入成交", buyColor
 	if event.reason.Action == "sell" {
 		action, title, color = "賣出成交", "🟩 賣出成交", sellColor
@@ -132,7 +133,14 @@ func (s *TradingService) commitDay(ctx context.Context, day time.Time, series ma
 	s.seeded = true
 	holding := s.engine.HoldingValueAsOf(series, day)
 	if opens != nil {
-		holding = s.engine.HoldingValueAt(opens)
+		marks := make(map[string]float64, len(series))
+		for id, ss := range series {
+			marks[id], _ = ss.CloseAsOf(day)
+		}
+		for id, price := range opens {
+			marks[id] = price
+		}
+		holding = s.engine.HoldingValueAt(marks)
 	}
 	metrics.SetPortfolioSnapshot(s.engine.Cash(), holding, s.engine.Cash()+holding, s.engine.CostBasis())
 	metrics.SetLastProcessedDate(day)
@@ -160,7 +168,7 @@ func (s *TradingService) finalizeLatest(ctx context.Context, series map[string]*
 		if ss == nil {
 			return fmt.Errorf("missing series %s", id)
 		}
-		if _, ok := ss.DateIndex[day.Format(dateLayout)]; !ok {
+		if _, ok := ss.DateIndex[day.Format(dateLayout)]; !ok && !ss.Suspended(day) {
 			return nil
 		}
 	}
@@ -182,7 +190,11 @@ func (s *TradingService) validateDay(ctx context.Context, day, prev time.Time, s
 				return err
 			}
 			if open {
-				return fmt.Errorf("unprocessed trading day %s before %s", d.Format(dateLayout), day.Format(dateLayout))
+				for _, id := range s.cfg.TrackStocks {
+					if series[id] == nil || !series[id].Suspended(d) {
+						return fmt.Errorf("unprocessed trading day %s before %s", d.Format(dateLayout), day.Format(dateLayout))
+					}
+				}
 			}
 		}
 	}
@@ -191,12 +203,21 @@ func (s *TradingService) validateDay(ctx context.Context, day, prev time.Time, s
 		if ss == nil {
 			return fmt.Errorf("missing series for %s", id)
 		}
+		if ss.Suspended(day) {
+			continue
+		}
 		i, ok := ss.DateIndex[day.Format(dateLayout)]
 		if !ok || ss.ClosePrices[i] <= 0 {
 			return fmt.Errorf("missing daily bar %s %s", id, day.Format(dateLayout))
 		}
 		if s.cfg.DecisionPriceBasis == "open" && (i >= len(ss.OpenPrices) || ss.OpenPrices[i] <= 0) {
 			return fmt.Errorf("missing open %s %s", id, day.Format(dateLayout))
+		}
+		if i > 0 && ss.ClosePrices[i-1] > 0 {
+			ratio := ss.OpenAt(i) / ss.ClosePrices[i-1]
+			if ratio < 0.5 || ratio > 2 {
+				return fmt.Errorf("inconsistent normalized bar %s %s; retry official market data", id, day.Format(dateLayout))
+			}
 		}
 	}
 	return nil
