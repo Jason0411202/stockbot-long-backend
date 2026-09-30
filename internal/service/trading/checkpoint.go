@@ -1,6 +1,9 @@
 package trading
 
-import "time"
+import (
+	"sort"
+	"time"
+)
 
 // Clone creates an isolated candidate day; publish it only after persistence.
 // Recorders belong to offline backtests and are deliberately not copied.
@@ -56,4 +59,28 @@ func (e *Engine) HoldingValueAt(prices map[string]float64) float64 {
 		}
 	}
 	return total
+}
+
+// HoldingValueForDisplay keeps monitoring aligned with dated API valuations
+// when a newer opening fill exists but its closing bar is not published yet.
+// This display-only mark is never used in strategy decisions or closed history.
+func (e *Engine) HoldingValueForDisplay(series map[string]*StockSeries, day time.Time) float64 {
+	prices := map[string]float64{}
+	for id, lots := range e.positions {
+		var date time.Time
+		if ss := series[id]; ss != nil {
+			i := sort.Search(len(ss.Dates), func(i int) bool { return ss.Dates[i].After(day) })
+			if i > 0 {
+				date = ss.Dates[i-1]
+				prices[id] = ss.ClosePrices[i-1]
+			}
+		}
+		for _, l := range lots {
+			if !l.date.After(day) && l.date.After(date) {
+				date = l.date
+				prices[id] = l.price
+			}
+		}
+	}
+	return e.HoldingValueAt(prices)
 }

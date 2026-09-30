@@ -257,7 +257,7 @@ func (s *TradingService) SeedFromDB(ctx context.Context, series map[string]*trad
 	}
 	// Publish restored metrics even when catch-up has no work.
 	if !watermark.IsZero() {
-		holding := s.engine.HoldingValueAsOf(series, watermark)
+		holding := s.engine.HoldingValueForDisplay(series, watermark)
 		metrics.SetPortfolioSnapshot(s.engine.Cash(), holding, s.engine.Cash()+holding, s.engine.CostBasis())
 		metrics.SetLastProcessedDate(watermark)
 	}
