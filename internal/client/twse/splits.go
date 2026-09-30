@@ -142,6 +142,15 @@ func (c *SplitClient) FetchSplits(ctx context.Context) ([]marketunits.Action, er
 		if err != nil {
 			return nil, err
 		}
+		// TWTC9U rounds ratios to eight decimals. Recover exact integral
+		// reverse splits (e.g. 0.14285714 -> 1/7), so rounding in the feed
+		// cannot introduce a tiny artificial return or fractional-share loss.
+		if ratio > 0 && ratio < 1 {
+			exact := 1 / math.Round(1/ratio)
+			if math.Abs(exact-ratio) <= 0.000000005 {
+				ratio = exact
+			}
+		}
 		out = append(out, marketunits.Action{StockID: strings.TrimSpace(row[1]), Date: resume, SuspendFrom: suspend, Ratio: ratio})
 	}
 	return out, nil

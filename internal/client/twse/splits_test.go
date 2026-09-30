@@ -16,18 +16,21 @@ func TestSplitClientUsesOfficialRatioAndTradingSuspension(t *testing.T) {
 			}
 			w.Write([]byte(`{"stat":"OK","data":[["115/03/31","00631L","ETF","","443.15","20.14"],["114/02/19","00676R","ETF","反分割","2.04","12.23"]]}`))
 		} else {
-			w.Write([]byte(`{"stat":"OK","data":[["115/11/11","00662","ETF","分割","115/11/17","5.00000000"]]}`))
+			w.Write([]byte(`{"stat":"OK","data":[["115/11/11","00662","ETF","分割","115/11/17","5.00000000"],["115/11/11","TEST","ETF","反分割","115/11/17","0.14285714"]]}`))
 		}
 	}))
 	defer srv.Close()
 	c := NewSplitClient()
 	c.BaseURL = srv.URL + "/"
 	a, err := c.FetchSplits(context.Background())
-	if err != nil || len(a) != 3 {
+	if err != nil || len(a) != 4 {
 		t.Fatalf("%+v %v", a, err)
 	}
 	if a[0].Ratio != 22 || math.Abs(a[1].Ratio-1.0/6) > 1e-12 || a[2].SuspendFrom != "2026-11-11" || a[2].Date != "2026-11-17" || a[2].Ratio != 5 {
 		t.Fatalf("wrong action: %+v", a)
+	}
+	if a[3].Ratio != 1.0/7 {
+		t.Fatal("rounded official ratio was not restored exactly")
 	}
 }
 
