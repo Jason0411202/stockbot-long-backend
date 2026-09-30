@@ -32,9 +32,8 @@ func round2(x float64) float64 {
 	return math.Round(x*100) / 100
 }
 
-// UnrealizedGainsLosses 列出所有未實現持倉，並為每筆 lot 計算即時損益。
-// 每檔股票的當日收盤價僅查詢一次（而非原始 N+1 逐筆查詢），查詢失敗時以 0 代替，
-// 行為與原始逐筆處理相同。
+// UnrealizedGainsLosses returns dated valuations for the complete paper ledger.
+// Missing quotes return an error instead of fabricating a total loss.
 func (s *PortfolioService) UnrealizedGainsLosses(ctx context.Context) ([]dto.UnrealizedGainLoss, error) {
 	lots, err := s.ledger.ListUnrealized(ctx)
 	if err != nil {
@@ -50,13 +49,16 @@ func (s *PortfolioService) UnrealizedGainsLosses(ctx context.Context) ([]dto.Unr
 		if _, ok := prices[lot.StockID]; ok {
 			continue
 		}
-		price, perr := s.stock.GetPriceAsOf(ctx, lot.StockID, today, "close_price")
+		var price float64
+		var perr error
 		if quotes, ok := s.stock.(interface {
 			LatestClose(context.Context, string, string) (string, float64, error)
 		}); ok {
 			priceDates[lot.StockID], price, perr = quotes.LatestClose(ctx, lot.StockID, today)
+		} else {
+			price, perr = s.stock.GetPriceAsOf(ctx, lot.StockID, today, "close_price")
 		}
-		if perr != nil || price <= 0 {
+		if perr != nil || price <= 0 || math.IsNaN(price) || math.IsInf(price, 0) {
 			return nil, fmt.Errorf("unavailable valuation price for %s: %v", lot.StockID, perr)
 		}
 		prices[lot.StockID] = price
@@ -65,9 +67,20 @@ func (s *PortfolioService) UnrealizedGainsLosses(ctx context.Context) ([]dto.Unr
 	// A new opening fill is newer than yesterday's close. Use that stock's latest
 	// simulated fill as an explicitly provisional mark until today's close arrives.
 	for _, lot := range lots {
-		if priceDates[lot.StockID] != "" && lot.TransactionDate > priceDates[lot.StockID] {
+		if priceDates[lot.StockID] == "" {
+			continue
+		}
+		date, err := parseLedgerDate(lot.TransactionDate)
+		if err != nil {
+			return nil, err
+		}
+		quoteDate, err := parseLedgerDate(priceDates[lot.StockID])
+		if err != nil {
+			return nil, err
+		}
+		if date.After(quoteDate) {
 			prices[lot.StockID] = lot.TransactionPrice
-			priceDates[lot.StockID] = lot.TransactionDate
+			priceDates[lot.StockID] = date.Format(dateLayout)
 			priceBases[lot.StockID] = "opening_fill"
 		}
 	}

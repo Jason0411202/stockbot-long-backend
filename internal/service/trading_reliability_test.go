@@ -273,3 +273,15 @@ func TestPortfolio_OpeningFillDoesNotUseYesterdayClose(t *testing.T) {
 		t.Fatalf("new fill valued at old close: %+v", rows[0])
 	}
 }
+
+func TestPortfolio_LegacyDatetimeDoesNotOverrideSameDayClose(t *testing.T) {
+	ledger := &fakeLedger{listU: []entity.UnrealizedGainsLoss{{TransactionDate: "2026-09-30 00:00:00", StockID: "AAA", Shares: 100, TransactionPrice: 39.1, InvestmentCost: 3910}}}
+	svc := NewPortfolioService(ledger, quoteStock{fakeStock: newFakeStock(), date: "2026-09-30", price: 40}, newTestLogger())
+	rows, err := svc.UnrealizedGainsLosses(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows[0].PriceBasis != "close" || rows[0].TodayClosePrice != 40 {
+		t.Fatalf("same day close overridden: %+v", rows[0])
+	}
+}
