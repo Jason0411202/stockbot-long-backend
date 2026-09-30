@@ -151,24 +151,13 @@ func TestSellShares_LegacyZeroShareLotDeleted(t *testing.T) {
 	stock.prices["X"] = 20
 
 	svc := newPortfolioService(ledger, stock)
-	if err := svc.SellShares(context.Background(), "X", "2024-03-01", 100, 20); err != nil {
-		t.Fatalf("SellShares: %v", err)
+	if err := svc.SellShares(context.Background(), "X", "2024-03-01", 100, 20); err == nil {
+		t.Fatal("invalid zero-share lot must fail without data loss")
+	}
+	if len(ledger.deletes) != 0 || len(ledger.realized) != 0 || len(ledger.lots) != 2 {
+		t.Fatal("legacy lot was altered")
 	}
 
-	// First delete is the legacy zero-share lot; second delete is the full real lot.
-	if len(ledger.deletes) != 2 {
-		t.Fatalf("expected 2 deletes (legacy + full lot), got %+v", ledger.deletes)
-	}
-	if ledger.deletes[0].transactionDate != "2023-12-01" {
-		t.Fatalf("expected legacy lot deleted first, got %+v", ledger.deletes)
-	}
-	if ledger.deletes[1].transactionDate != "2024-01-02" {
-		t.Fatalf("expected real lot deleted second, got %+v", ledger.deletes)
-	}
-	// Only the real lot produces a realized row.
-	if len(ledger.realized) != 1 || ledger.realized[0].Shares != 100 {
-		t.Fatalf("expected one realized row for the real lot, got %+v", ledger.realized)
-	}
 }
 
 // --- SellShares: no inventory -> no-op ----------------------------------------
@@ -180,8 +169,8 @@ func TestSellShares_NoInventoryNoOp(t *testing.T) {
 	stock.prices["X"] = 20
 
 	svc := newPortfolioService(ledger, stock)
-	if err := svc.SellShares(context.Background(), "X", "2024-03-01", 100, 20); err != nil {
-		t.Fatalf("SellShares no-op should not error: %v", err)
+	if err := svc.SellShares(context.Background(), "X", "2024-03-01", 100, 20); err == nil {
+		t.Fatalf("missing inventory must return an error: %v", err)
 	}
 	if len(ledger.deletes) != 0 || len(ledger.updates) != 0 || len(ledger.realized) != 0 {
 		t.Fatalf("no-op should not mutate anything: deletes=%+v updates=%+v realized=%+v", ledger.deletes, ledger.updates, ledger.realized)
@@ -306,15 +295,10 @@ func TestUnrealizedGainsLosses_PriceErrorUsesZero(t *testing.T) {
 	stock.priceErr["X"] = errFake
 
 	svc := newPortfolioService(ledger, stock)
-	rows, err := svc.UnrealizedGainsLosses(context.Background())
-	if err != nil {
-		t.Fatalf("UnrealizedGainsLosses should swallow price error: %v", err)
+	if _, err := svc.UnrealizedGainsLosses(context.Background()); err == nil {
+		t.Fatal("unavailable quote must not fabricate a total loss")
 	}
-	r := rows[0]
-	// todayClose=0 -> nowValue=0; pl = -1000; rate = -100
-	if r.TodayClosePrice != 0 || r.NowValue != 0 || r.PredictProfitLoss != -1000 || r.PredictProfitRate != -100 {
-		t.Fatalf("price-error path wrong: close=%v now=%v pl=%v rate=%v", r.TodayClosePrice, r.NowValue, r.PredictProfitLoss, r.PredictProfitRate)
-	}
+
 }
 
 // TestUnrealizedGainsLosses_ZeroCostGuardsRate 驗證投資成本為零時損益率被保護為 0，避免除以零。

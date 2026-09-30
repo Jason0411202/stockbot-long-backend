@@ -5,6 +5,8 @@ package dto
 // 前 6 欄來自 DB;後 4 欄為依即時收盤價計算的衍生欄位 (computed)。
 // 注意:todayClosePrice 是唯一的 camelCase key,必須保持原樣。
 type UnrealizedGainLoss struct {
+	PriceDate string `json:"price_date"`
+	PriceBasis string `json:"price_basis"`
 	TransactionDate   string  `json:"transaction_date"`    // 交易日期 (YYYY-MM-DD)
 	StockID           string  `json:"stock_id"`            // 股票代號
 	StockName         string  `json:"stock_name"`          // 股票名稱

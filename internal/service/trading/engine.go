@@ -147,6 +147,11 @@ func (e *Engine) RebuildPeakSinceHold(series map[string]*StockSeries, upTo time.
 		}
 		// 掃描 [holdStart, upTo] 內每個交易日的決策價取最大值。
 		peak := 0.0
+		for _, l := range pos {
+			if l.price > peak {
+				peak = l.price
+			}
+		}
 		for i, d := range s.Dates {
 			if d.Before(holdStart) {
 				continue
@@ -288,7 +293,7 @@ func (e *Engine) ProcessOpenDecision(today time.Time, opens map[string]float64, 
 	eqToday := 0.0
 	if needEquity {
 		// series 最末筆即 T-1,as-of(today) 估值自然落在前一交易日收盤,無未來資訊。
-		eqToday = e.cash + e.HoldingValueAsOf(series, today)
+		eqToday = e.cash + e.HoldingValueAsOf(series, today.AddDate(0, 0, -1))
 	}
 	for _, stockID := range e.cfg.TrackStocks {
 		s, ok := series[stockID]
@@ -299,7 +304,7 @@ func (e *Engine) ProcessOpenDecision(today time.Time, opens map[string]float64, 
 		if !ok || openPx <= 0 {
 			continue
 		}
-		asOfIdx := len(s.Dates) - 1
+		asOfIdx := sort.Search(len(s.Dates), func(i int) bool { return !s.Dates[i].Before(today) }) - 1
 		if err := e.processStock(stockID, today, openPx, asOfIdx, s, exec, eqToday, needEquity); err != nil {
 			return err
 		}

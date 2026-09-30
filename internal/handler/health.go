@@ -4,6 +4,7 @@ package handler
 import (
 	"database/sql"
 	"net/http"
+	"os"
 
 	"github.com/labstack/echo/v4"
 )
@@ -14,7 +15,7 @@ import (
 func NewLivenessHandler() echo.HandlerFunc {
 	return func(c echo.Context) error {
 		// 固定回傳 200 + {"status":"ok"},表示 process 本身正常運行。
-		return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
+		return c.JSON(http.StatusOK, map[string]string{"status": "ok", "version": os.Getenv("APP_COMMIT")})
 	}
 }
 

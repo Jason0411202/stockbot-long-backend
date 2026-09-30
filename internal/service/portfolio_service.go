@@ -42,17 +42,34 @@ func (s *PortfolioService) UnrealizedGainsLosses(ctx context.Context) ([]dto.Unr
 	}
 
 	// 對每檔不同 stockID 查詢當日收盤價，以 map 快取避免重複查詢。
-	today := time.Now().Format("2006-01-02")
+	today := time.Now().In(time.FixedZone("Asia/Taipei", 8*60*60)).Format("2006-01-02")
+	priceDates := map[string]string{}
+	priceBases := map[string]string{}
 	prices := make(map[string]float64, len(lots))
 	for _, lot := range lots {
 		if _, ok := prices[lot.StockID]; ok {
 			continue
 		}
 		price, perr := s.stock.GetPriceAsOf(ctx, lot.StockID, today, "close_price")
-		if perr != nil {
-			price = 0 // 與原始行為一致:price 查詢失敗時 todayClosePrice=0
+		if quotes, ok := s.stock.(interface {
+			LatestClose(context.Context, string, string) (string, float64, error)
+		}); ok {
+			priceDates[lot.StockID], price, perr = quotes.LatestClose(ctx, lot.StockID, today)
+		}
+		if perr != nil || price <= 0 {
+			return nil, fmt.Errorf("unavailable valuation price for %s: %v", lot.StockID, perr)
 		}
 		prices[lot.StockID] = price
+		priceBases[lot.StockID] = "close"
+	}
+	// A new opening fill is newer than yesterday's close. Use that stock's latest
+	// simulated fill as an explicitly provisional mark until today's close arrives.
+	for _, lot := range lots {
+		if priceDates[lot.StockID] != "" && lot.TransactionDate > priceDates[lot.StockID] {
+			prices[lot.StockID] = lot.TransactionPrice
+			priceDates[lot.StockID] = lot.TransactionDate
+			priceBases[lot.StockID] = "opening_fill"
+		}
 	}
 
 	// 逐筆計算預估損益並組裝回應 DTO。
@@ -71,6 +88,8 @@ func (s *PortfolioService) UnrealizedGainsLosses(ctx context.Context) ([]dto.Unr
 		}
 
 		out = append(out, dto.UnrealizedGainLoss{
+			PriceDate:         priceDates[lot.StockID],
+			PriceBasis:        priceBases[lot.StockID],
 			TransactionDate:   lot.TransactionDate,
 			StockID:           lot.StockID,
 			StockName:         lot.StockName,
@@ -160,15 +179,11 @@ func (s *PortfolioService) SellShares(ctx context.Context, stockID, today string
 		}
 		if !found {
 			s.log.Warn("賣出時找不到持倉: ", stockID)
-			return nil // 無庫存可賣，視為 no-op
+			return fmt.Errorf("insufficient ledger shares for %s: missing %d", stockID, remaining)
 		}
 
 		if lot.Shares <= 0 {
-			// 舊資料 shares=0，無法以股數為單位處理，直接刪除避免死迴圈。
-			if err := s.ledger.DeleteUnrealized(ctx, stockID, lot.TransactionDate); err != nil {
-				return fmt.Errorf("delete legacy zero-share lot for %s: %w", stockID, err)
-			}
-			continue
+			return fmt.Errorf("invalid zero-share lot %s %s", stockID, lot.TransactionDate)
 		}
 
 		if lot.Shares <= remaining {

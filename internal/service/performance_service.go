@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"os"
 	"strconv"
 	"time"
 
@@ -90,9 +91,16 @@ func (s *PerformanceService) Summary(ctx context.Context) (dto.PerformanceSummar
 		return dto.PerformanceSummary{}, fmt.Errorf("realized gains losses: %w", err)
 	}
 	holdingValue, unrealizedPnL := 0.0, 0.0
+	valuationDate, valuationBasis := "", "close"
 	for _, u := range unreal {
 		holdingValue += u.NowValue
 		unrealizedPnL += u.PredictProfitLoss
+		if valuationDate == "" || u.PriceDate < valuationDate {
+			valuationDate = u.PriceDate
+		}
+		if u.PriceBasis != "close" {
+			valuationBasis = "mixed"
+		}
 	}
 	realizedPnL := 0.0
 	for _, r := range realized {
@@ -117,6 +125,7 @@ func (s *PerformanceService) Summary(ctx context.Context) (dto.PerformanceSummar
 
 	// 組裝摘要 (金額兩位小數),回測區塊以 best-effort 附加。
 	return dto.PerformanceSummary{
+		ValuationDate: valuationDate, ValuationBasis: valuationBasis, StrategyVersion: os.Getenv("APP_COMMIT"), TradingMode: "paper",
 		InitialCash:         s.cfg.InitialCash,
 		MonthlyContribution: s.cfg.MonthlyContribution,
 		TotalContributed:    round2(totalContributed),

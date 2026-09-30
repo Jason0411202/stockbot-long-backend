@@ -23,6 +23,10 @@ func (f JSONFloat) MarshalJSON() ([]byte, error) {
 // PerformanceSummary 是 GET /api/get_performance_summary 的回應:一次回傳本金明細、實盤現況與回測績效。
 // 本金 (investing principal) 指「從外部注入股市的資金」(期初一次性 + 每月定額),不含後續滾出的獲利。
 type PerformanceSummary struct {
+	ValuationDate   string `json:"valuation_date"`
+	ValuationBasis  string `json:"valuation_basis"`
+	StrategyVersion string `json:"strategy_version"`
+	TradingMode     string `json:"trading_mode"`
 	// ── 本金明細 (外部注入,非滾出的獲利) ──
 	InitialCash         float64 `json:"initial_cash"`         // 期初一次性投入本金
 	MonthlyContribution float64 `json:"monthly_contribution"` // 每月定額注資設定 (0 = 關閉)

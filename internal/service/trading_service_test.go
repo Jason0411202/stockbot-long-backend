@@ -40,10 +40,14 @@ func (f *fakeSeriesLoader) LoadSeries(_ context.Context, stockIDs []string) (map
 
 // fakeState 模擬 StateStore，以記憶體 map 儲存鍵值並記錄所有 Set 呼叫。
 type fakeState struct {
-	values  map[string]string
-	getErr  error
-	setErr  error
-	setKeys []string
+	ledger    *fakeLedger
+	equity    *fakeEquity
+	commitErr error
+	failKey   string
+	values    map[string]string
+	getErr    error
+	setErr    error
+	setKeys   []string
 }
 
 // newFakeState 建立並回傳已初始化 values map 的 fakeState 實例。
@@ -63,6 +67,9 @@ func (f *fakeState) Get(_ context.Context, key string) (string, bool, error) {
 // Set 記錄鍵名並將值寫入記憶體 map，setErr 非 nil 時回傳錯誤。
 func (f *fakeState) Set(_ context.Context, key, value string) error {
 	f.setKeys = append(f.setKeys, key)
+	if f.failKey == key {
+		return errFake
+	}
 	if f.setErr != nil {
 		return f.setErr
 	}
@@ -206,6 +213,8 @@ func newTradingFixture(cfg *config.Config) (*TradingService, *fakeSeed, *fakeSta
 	realtime := &fakeRealtime{opens: map[string]float64{}}
 	series := &fakeSeriesLoader{data: map[string][]entity.StockHistory{}}
 	equity := newFakeEquity()
+	state.ledger = ledger
+	state.equity = equity
 
 	svc := NewTradingService(engine, portfolio, market, series, seed, state, equity, notify, realtime, cfg, log)
 	return svc, seed, state, notify, ledger, stock
@@ -579,6 +588,7 @@ func TestTradingService_RunOneDayAtOpen_DecidesAtOpenAndPersists(t *testing.T) {
 	// 注入今日即時開盤價 160 (< MA10(asOf)×1.05 → 觸發逢低買入)。
 	svc.realtime.(*fakeRealtime).opens = map[string]float64{"AAA": 160}
 	today := start.AddDate(0, 0, 60)
+	state.values[stateKeyWatermark] = today.AddDate(0, 0, -1).Format(dateLayout)
 
 	exec := &tradingExecutor{svc: svc, ctx: context.Background(), notify: true}
 	if err := svc.runOneDayAtOpen(context.Background(), exec, today, false); err != nil {

@@ -3,6 +3,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -13,6 +14,20 @@ import (
 
 // fetchSleep 是相鄰兩次 TWSE API 呼叫之間的禮貌性等待時間。
 const fetchSleep = 3 * time.Second
+
+// UpdateDatabaseSince includes the entire outage, even across several months.
+func (s *MarketDataService) UpdateDatabaseSince(ctx context.Context, from, through time.Time) error {
+	copyService := *s
+	cfg := *s.cfg
+	if !from.IsZero() {
+		months := (through.Year()-from.Year())*12 + int(through.Month()-from.Month())
+		if months > cfg.MaxBackMonths {
+			cfg.MaxBackMonths = months
+		}
+	}
+	copyService.cfg = &cfg
+	return copyService.UpdateDatabase(ctx)
+}
 
 // MarketDataService 負責從 TWSE 抓取月線資料並寫入 StockHistory 資料表。
 // 它編排 MarketFetcher、StockStore 與 BackfillStore 三個 port，
@@ -40,6 +55,7 @@ func monthlyBackfillDates(currentDate string, months int) []string {
 	if err != nil {
 		return dates
 	}
+	t = time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, t.Location())
 	// 逐月往前推，每次取該月第 1 日格式化後加入清單。
 	for i := 0; i < months; i++ {
 		t = t.AddDate(0, -1, 0)
@@ -61,7 +77,7 @@ func dateToYearMonth(date string) (string, error) {
 // UpdateDatabase 執行每日資料更新：對所有追蹤股票的每個月份日期，一律重抓 TWSE 資料並寫入。
 // 當月資料必抓；前月資料也允許覆蓋（以修正尚未完整的資料）。每次抓取間隔 3 秒。
 func (s *MarketDataService) UpdateDatabase(ctx context.Context) error {
-	now := time.Now()
+	now := time.Now().In(time.FixedZone("Asia/Taipei", 8*60*60))
 	currentDate := now.Format("20060102")
 	s.log.WithField("current_date", currentDate).Info("開始每日資料更新")
 
@@ -76,6 +92,7 @@ func (s *MarketDataService) UpdateDatabase(ctx context.Context) error {
 
 	currentMonth := now.Format("2006-01")
 
+	var failures []error
 	// 對每檔追蹤股票、每個月份日期依序執行抓取與寫入。
 	for _, stockID := range s.cfg.TrackStocks {
 		for _, date := range dates {
@@ -87,12 +104,15 @@ func (s *MarketDataService) UpdateDatabase(ctx context.Context) error {
 			// 每日 daily 一律重抓 (currentMonth 必抓;previous month 也允許覆蓋)。
 			if err := s.fetchAndInsertMonth(ctx, stockID, date, ym, currentMonth); err != nil {
 				s.log.WithError(err).WithFields(logrus.Fields{"stock_id": stockID, "month": ym}).Error("fetchAndInsertMonth 錯誤")
+				failures = append(failures, err)
 				break
 			}
-			time.Sleep(fetchSleep)
+			if err := waitMarketFetch(ctx); err != nil {
+				return err
+			}
 		}
 	}
-	return nil
+	return errors.Join(failures...)
 }
 
 // BackfillMonths 執行初始化路徑的歷史回補：對每檔追蹤股票先讀取已完成月份清單，
@@ -156,4 +176,15 @@ func (s *MarketDataService) fetchAndInsertMonth(ctx context.Context, stockID, da
 		}
 	}
 	return nil
+}
+
+func waitMarketFetch(ctx context.Context) error {
+	t := time.NewTimer(fetchSleep)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
 }

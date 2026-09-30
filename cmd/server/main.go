@@ -98,10 +98,13 @@ func main() {
 	statSvc := service.NewStatisticService(stockRepo, cfg, log)
 	histSvc := service.NewStockHistoryService(stockRepo, log)
 	perfSvc := service.NewPerformanceService(cfg, portfolioSvc, stateRepo, stockRepo, log)
-	equitySvc := service.NewEquityHistoryService(equityRepo, log)
-	perfHistSvc := service.NewPerformanceHistoryService(cfg, stockRepo, equityRepo, log)
+	closedEquity := service.NewClosedEquityReader(equityRepo, ledgerRepo, stockRepo, cfg)
+	equitySvc := service.NewEquityHistoryService(closedEquity, log)
+	perfHistSvc := service.NewPerformanceHistoryService(cfg, stockRepo, closedEquity, log)
 	engine := trading.NewEngine(cfg)
 	tradingSvc := service.NewTradingService(engine, portfolioSvc, marketSvc, stockRepo, ledgerRepo, stateRepo, equityRepo, notifier, realtimeClient, cfg, log)
+
+	tradingSvc.SetCalendar(twse.NewCalendar())
 
 	// --- 初始 DB 回補 (取代舊 sqls.InitDatabase 的回補邏輯) ---
 	if cfg.InitDBBackMonths > cfg.MaxBackMonths {

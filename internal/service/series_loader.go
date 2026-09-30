@@ -49,8 +49,18 @@ func LoadTradingSeries(ctx context.Context, loader SeriesLoader, stockIDs []stri
 		}
 
 		// 還原股票分割 (split):使收盤與開盤序列同步連續,再由 NewStockSeries 計算 MA / 前綴和。
+		var splits []time.Time
+		for i := 1; i < len(closes); i++ {
+			if closes[i-1] > 0 && closes[i] > 0 {
+				ratio := closes[i] / closes[i-1]
+				if ratio < 0.5 || ratio > 2 {
+					splits = append(splits, dates[i])
+				}
+			}
+		}
 		trading.ApplySplitAdjust(closes, opens)
 		series[stockID] = trading.NewStockSeries(dates, opens, closes, nil, nil, nil)
+		series[stockID].SplitDates = splits
 	}
 
 	return series, nil

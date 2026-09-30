@@ -33,7 +33,7 @@ func scanUnrealized(rows *sql.Rows) (entity.UnrealizedGainsLoss, error) {
 // LoadAllUnrealized 回傳 UnrealizedGainsLosses 中的所有持倉紀錄,供上線引擎啟動時還原記憶體狀態。
 func (r *LedgerRepository) LoadAllUnrealized(ctx context.Context) ([]entity.UnrealizedGainsLoss, error) {
 	query := "SELECT " + unrealizedColumns + " FROM UnrealizedGainsLosses;"
-	rows, err := r.db.QueryContext(ctx, query)
+	rows, err := runner(ctx, r.db).QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("query unrealized lots: %w", err)
 	}
@@ -58,7 +58,7 @@ func (r *LedgerRepository) LoadAllUnrealized(ctx context.Context) ([]entity.Unre
 // 查無資料時 ok=false。
 func (r *LedgerRepository) GetLowestUnrealized(ctx context.Context, stockID, asOf string) (entity.UnrealizedGainsLoss, bool, error) {
 	query := "SELECT " + unrealizedColumns + " FROM UnrealizedGainsLosses WHERE stock_id = ? AND transaction_date <= ? ORDER BY transaction_price ASC, transaction_date ASC LIMIT 1;"
-	rows, err := r.db.QueryContext(ctx, query, stockID, asOf)
+	rows, err := runner(ctx, r.db).QueryContext(ctx, query, stockID, asOf)
 	if err != nil {
 		return entity.UnrealizedGainsLoss{}, false, fmt.Errorf("query lowest unrealized lot for %s: %w", stockID, err)
 	}
@@ -81,7 +81,7 @@ func (r *LedgerRepository) GetLowestUnrealized(ctx context.Context, stockID, asO
 // InsertUnrealized 寫入單筆未實現持倉。investment_cost 由呼叫端計算後傳入。
 func (r *LedgerRepository) InsertUnrealized(ctx context.Context, e entity.UnrealizedGainsLoss) error {
 	const query = "INSERT INTO UnrealizedGainsLosses (transaction_date, stock_id, stock_name, transaction_price, investment_cost, shares) VALUES (?, ?, ?, ?, ?, ?);"
-	if _, err := r.db.ExecContext(ctx, query, e.TransactionDate, e.StockID, e.StockName, e.TransactionPrice, e.InvestmentCost, e.Shares); err != nil {
+	if _, err := runner(ctx, r.db).ExecContext(ctx, query, e.TransactionDate, e.StockID, e.StockName, e.TransactionPrice, e.InvestmentCost, e.Shares); err != nil {
 		return fmt.Errorf("insert unrealized lot for %s on %s: %w", e.StockID, e.TransactionDate, err)
 	}
 	return nil
@@ -90,7 +90,7 @@ func (r *LedgerRepository) InsertUnrealized(ctx context.Context, e entity.Unreal
 // DeleteUnrealized 刪除以 (stockID, transactionDate) 為鍵的未實現持倉紀錄。
 func (r *LedgerRepository) DeleteUnrealized(ctx context.Context, stockID, transactionDate string) error {
 	const query = "DELETE FROM UnrealizedGainsLosses WHERE stock_id = ? AND transaction_date = ?;"
-	if _, err := r.db.ExecContext(ctx, query, stockID, transactionDate); err != nil {
+	if _, err := runner(ctx, r.db).ExecContext(ctx, query, stockID, transactionDate); err != nil {
 		return fmt.Errorf("delete unrealized lot for %s on %s: %w", stockID, transactionDate, err)
 	}
 	return nil
@@ -99,7 +99,7 @@ func (r *LedgerRepository) DeleteUnrealized(ctx context.Context, stockID, transa
 // UpdateUnrealized 更新部分賣出後以 (stockID, transactionDate) 為鍵的持倉剩餘 investment_cost 與 shares。
 func (r *LedgerRepository) UpdateUnrealized(ctx context.Context, stockID, transactionDate string, investmentCost float64, shares int) error {
 	const query = "UPDATE UnrealizedGainsLosses SET investment_cost = ?, shares = ? WHERE stock_id = ? AND transaction_date = ?;"
-	if _, err := r.db.ExecContext(ctx, query, investmentCost, shares, stockID, transactionDate); err != nil {
+	if _, err := runner(ctx, r.db).ExecContext(ctx, query, investmentCost, shares, stockID, transactionDate); err != nil {
 		return fmt.Errorf("update unrealized lot for %s on %s: %w", stockID, transactionDate, err)
 	}
 	return nil
@@ -108,16 +108,16 @@ func (r *LedgerRepository) UpdateUnrealized(ctx context.Context, stockID, transa
 // InsertRealized 寫入單筆已實現損益紀錄,所有數值由呼叫端計算後傳入。
 func (r *LedgerRepository) InsertRealized(ctx context.Context, e entity.RealizedGainsLoss) error {
 	const query = "INSERT INTO RealizedGainsLosses (buy_date, sell_date, stock_id, stock_name, purchase_price, sell_price, investment_cost, revenue, profit_loss, profit_rate, shares) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);"
-	if _, err := r.db.ExecContext(ctx, query, e.BuyDate, e.SellDate, e.StockID, e.StockName, e.PurchasePrice, e.SellPrice, e.InvestmentCost, e.Revenue, e.ProfitLoss, e.ProfitRate, e.Shares); err != nil {
+	if _, err := runner(ctx, r.db).ExecContext(ctx, query, e.BuyDate, e.SellDate, e.StockID, e.StockName, e.PurchasePrice, e.SellPrice, e.InvestmentCost, e.Revenue, e.ProfitLoss, e.ProfitRate, e.Shares); err != nil {
 		return fmt.Errorf("insert realized P&L for %s (%s->%s): %w", e.StockID, e.BuyDate, e.SellDate, err)
 	}
 	return nil
 }
 
-// ListUnrealized 回傳最新 500 筆未實現持倉,依 transaction_date 降冪排序,供 API 端使用。
+// ListUnrealized 回傳所有未實現持倉,依 transaction_date 降冪排序,供 API 端使用。
 func (r *LedgerRepository) ListUnrealized(ctx context.Context) ([]entity.UnrealizedGainsLoss, error) {
-	query := "SELECT " + unrealizedColumns + " FROM UnrealizedGainsLosses ORDER BY transaction_date DESC LIMIT 500;"
-	rows, err := r.db.QueryContext(ctx, query)
+	query := "SELECT " + unrealizedColumns + " FROM UnrealizedGainsLosses ORDER BY transaction_date DESC;"
+	rows, err := runner(ctx, r.db).QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("list unrealized lots: %w", err)
 	}
@@ -138,10 +138,10 @@ func (r *LedgerRepository) ListUnrealized(ctx context.Context) ([]entity.Unreali
 	return out, nil
 }
 
-// ListRealized 回傳最新 500 筆已實現損益,依 sell_date 降冪排序。
+// ListRealized 回傳所有已實現損益,依 sell_date 降冪排序。
 func (r *LedgerRepository) ListRealized(ctx context.Context) ([]entity.RealizedGainsLoss, error) {
-	const query = "SELECT buy_date, sell_date, stock_id, stock_name, purchase_price, sell_price, investment_cost, revenue, profit_loss, profit_rate, shares FROM RealizedGainsLosses ORDER BY sell_date DESC LIMIT 500;"
-	rows, err := r.db.QueryContext(ctx, query)
+	const query = "SELECT buy_date, sell_date, stock_id, stock_name, purchase_price, sell_price, investment_cost, revenue, profit_loss, profit_rate, shares FROM RealizedGainsLosses ORDER BY sell_date DESC;"
+	rows, err := runner(ctx, r.db).QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("list realized P&L: %w", err)
 	}
@@ -172,7 +172,7 @@ func (r *LedgerRepository) LastBuyDateRaw(ctx context.Context, stockID string) (
 			SELECT MAX(buy_date) AS d FROM RealizedGainsLosses WHERE stock_id = ?
 		) t;`
 	var dateStr sql.NullString
-	err := r.db.QueryRowContext(ctx, query, stockID, stockID).Scan(&dateStr)
+	err := runner(ctx, r.db).QueryRowContext(ctx, query, stockID, stockID).Scan(&dateStr)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return "", false, nil
@@ -192,7 +192,7 @@ func (r *LedgerRepository) LastBuyDateRaw(ctx context.Context, stockID string) (
 func (r *LedgerRepository) LastSellDateRaw(ctx context.Context, stockID string) (string, bool, error) {
 	const query = "SELECT MAX(sell_date) FROM RealizedGainsLosses WHERE stock_id = ?;"
 	var dateStr sql.NullString
-	err := r.db.QueryRowContext(ctx, query, stockID).Scan(&dateStr)
+	err := runner(ctx, r.db).QueryRowContext(ctx, query, stockID).Scan(&dateStr)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return "", false, nil

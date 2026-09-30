@@ -339,7 +339,7 @@ func TestListUnrealized(t *testing.T) {
 	// Arrange
 	db, mock := newMock(t)
 	repo := NewLedgerRepository(db)
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT " + unrealizedCols + " FROM UnrealizedGainsLosses ORDER BY transaction_date DESC LIMIT 500;")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT " + unrealizedCols + " FROM UnrealizedGainsLosses ORDER BY transaction_date DESC;")).
 		WillReturnRows(sqlmock.NewRows([]string{"transaction_date", "stock_id", "stock_name", "transaction_price", "investment_cost", "shares"}).
 			AddRow("2024-01-02", "00631L", "元大台灣50正2", 50.0, 5000.0, 100))
 
@@ -358,7 +358,7 @@ func TestListRealized(t *testing.T) {
 	// Arrange
 	db, mock := newMock(t)
 	repo := NewLedgerRepository(db)
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT buy_date, sell_date, stock_id, stock_name, purchase_price, sell_price, investment_cost, revenue, profit_loss, profit_rate, shares FROM RealizedGainsLosses ORDER BY sell_date DESC LIMIT 500;")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT buy_date, sell_date, stock_id, stock_name, purchase_price, sell_price, investment_cost, revenue, profit_loss, profit_rate, shares FROM RealizedGainsLosses ORDER BY sell_date DESC;")).
 		WillReturnRows(sqlmock.NewRows([]string{"buy_date", "sell_date", "stock_id", "stock_name", "purchase_price", "sell_price", "investment_cost", "revenue", "profit_loss", "profit_rate", "shares"}).
 			AddRow("2024-01-02", "2024-03-02", "00631L", "元大台灣50正2", 50.0, 80.0, 5000.0, 8000.0, 3000.0, 60.0, 100))
 

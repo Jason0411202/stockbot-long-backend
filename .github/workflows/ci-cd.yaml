@@ -7,6 +7,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: stockbot-production-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   IMAGE: ghcr.io/${{ github.repository }}
 
@@ -22,6 +26,7 @@ jobs:
       - run: go mod download
       - run: go vet ./...
       - run: go test ./... -v
+      - run: go test -race ./internal/service/... ./internal/repository/... ./internal/client/twse/...
 
   # ─── Job 2：Build & Push Image ───
   build:
@@ -137,26 +142,56 @@ jobs:
             APP_DIR="$HOME/stockbot-long-backend"
             REPO_NAME="${{ github.event.repository.name }}"
             mkdir -p "$APP_DIR" && cd "$APP_DIR"
-            curl -fsSL "https://codeload.github.com/${{ github.repository }}/tar.gz/refs/heads/main" -o /tmp/stockbot-src.tgz
-            rm -rf monitoring
-            tar -xzf /tmp/stockbot-src.tgz --strip-components=1 \
-              "$REPO_NAME-main/docker-compose.yml" "$REPO_NAME-main/monitoring"
-            rm -f /tmp/stockbot-src.tgz
+            RELEASE="$APP_DIR/releases/${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}"
+            mkdir -p "$RELEASE/previous"
+            chmod 700 "$RELEASE" "$RELEASE/previous"
+            if [ -f docker-compose.yml ]; then cp -p docker-compose.yml "$RELEASE/previous/"; fi
+            if [ -f .env ]; then cp -p .env "$RELEASE/previous/"; fi
+            if [ -d monitoring ]; then cp -a monitoring "$RELEASE/previous/"; fi
+            if sudo docker inspect stockbot-app >/dev/null 2>&1; then
+              sudo docker inspect --format '{{.Config.Image}}' stockbot-app > "$RELEASE/previous/image.txt"
+              sudo docker exec stockbot-mariadb sh -c 'exec mariadb-dump --single-transaction -uroot -p"$MARIADB_ROOT_PASSWORD" "$MARIADB_DATABASE"' > "$RELEASE/previous/database.sql"
+              chmod 600 "$RELEASE/previous/database.sql"
+            fi
+            curl -fsSL "https://codeload.github.com/${{ github.repository }}/tar.gz/${{ github.sha }}" -o "$RELEASE/source.tgz"
+            mkdir -p "$RELEASE/source"
+            tar -xzf "$RELEASE/source.tgz" --strip-components=1 -C "$RELEASE/source" \
+              "$REPO_NAME-${{ github.sha }}/docker-compose.yml" "$REPO_NAME-${{ github.sha }}/monitoring"
+            cp "$RELEASE/source/docker-compose.yml" .
+            mkdir -p monitoring
+            cp -a "$RELEASE/source/monitoring/." monitoring/
 
             # .env 以 GitHub 的 STOCKBOT_LONG_ENV_FILE 為單一來源，每次覆蓋寫入
-            printf '%s\n' "$DEPLOY_ENV_FILE" > .env
+            if [ -n "$DEPLOY_ENV_FILE" ]; then
+              printf '%s\n' "$DEPLOY_ENV_FILE" > .env
+              chmod 600 .env
+            elif [ ! -f .env ]; then
+              touch .env
+              chmod 600 .env
+            fi
 
             # 部署 image：直接取用 build job 推出的不可變 :sha image
             # （compose 代換 ${APP_IMAGE} 時 shell 環境變數優先於 .env，不需寫入 .env）
             IMAGE="${{ needs.build.outputs.image }}"
 
-            # 拉新 image 並滾動更新（全新與既有 server 皆 idempotent）
-            # --remove-orphans 會順手清掉 compose 已移除的服務容器（如舊的 Loki）
-            sudo APP_IMAGE="$IMAGE" docker compose pull
-            sudo APP_IMAGE="$IMAGE" docker compose up -d --remove-orphans
-
-            # monitoring/ 是以「刪除後重解壓」更新,既有容器 bind mount 仍指向舊 inode;
-            # 強制重建監控容器以掛載最新設定檔,並讓 VictoriaLogs/Alloy/Prometheus 重讀設定
-            # （監控資料存於 named volume,重建不遺失）
-            sudo APP_IMAGE="$IMAGE" docker compose up -d --force-recreate victorialogs alloy prometheus grafana
-            sudo docker image prune -f
+            # Keep existing images, containers' named volumes and release backups.
+            sudo APP_IMAGE="$IMAGE" docker compose pull app
+            sudo APP_IMAGE="$IMAGE" docker compose up -d --no-deps app
+            healthy=false
+            for attempt in $(seq 1 60); do
+              if sudo docker exec stockbot-app wget -qO- http://127.0.0.1:8080/ready >/dev/null; then
+                healthy=true
+                break
+              fi
+              sleep 5
+            done
+            if [ "$healthy" != true ]; then
+              if [ -s "$RELEASE/previous/image.txt" ]; then
+                PREVIOUS_IMAGE=$(cat "$RELEASE/previous/image.txt")
+                sudo APP_IMAGE="$PREVIOUS_IMAGE" docker compose up -d --no-deps app
+              fi
+              echo "Deployment readiness failed; previous application image restored."
+              exit 1
+            fi
+            sudo docker inspect --format '{{.Config.Image}}' stockbot-app
+            echo "Release verified: $IMAGE"

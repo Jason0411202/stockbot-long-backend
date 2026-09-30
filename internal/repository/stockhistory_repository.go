@@ -19,6 +19,14 @@ func NewStockHistoryRepository(db *sql.DB) *StockHistoryRepository {
 	return &StockHistoryRepository{db: db}
 }
 
+// LatestClose includes its actual date; API callers must not call a T-1 quote live.
+func (r *StockHistoryRepository) LatestClose(ctx context.Context, stockID, asOf string) (string, float64, error) {
+	var date string
+	var price float64
+	err := runner(ctx, r.db).QueryRowContext(ctx, "SELECT date, close_price FROM StockHistory WHERE stock_id = ? AND date <= ? ORDER BY date DESC LIMIT 1;", stockID, asOf).Scan(&date, &price)
+	return date, price, err
+}
+
 // allowedPriceColumns 列出 GetPriceAsOf 允許查詢的價格欄位白名單。
 // priceType 會以字串插值方式拼入 SQL (欄位名稱不能用 ? 佔位),故必須對照此集合驗證以防止 SQL 注入。
 var allowedPriceColumns = map[string]struct{}{
@@ -32,7 +40,7 @@ var allowedPriceColumns = map[string]struct{}{
 func (r *StockHistoryRepository) GetStockName(ctx context.Context, stockID string) (string, error) {
 	const query = "SELECT stock_name FROM StockHistory WHERE stock_id = ? ORDER BY date DESC LIMIT 1;"
 	var stockName string
-	err := r.db.QueryRowContext(ctx, query, stockID).Scan(&stockName)
+	err := runner(ctx, r.db).QueryRowContext(ctx, query, stockID).Scan(&stockName)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return "", nil
@@ -52,7 +60,7 @@ func (r *StockHistoryRepository) GetPriceAsOf(ctx context.Context, stockID, asOf
 	// priceType 已通過白名單驗證,安全地插值為欄位名稱。
 	query := "SELECT " + priceType + " FROM StockHistory WHERE stock_id = ? AND date <= ? ORDER BY date DESC LIMIT 1;"
 	var price float64
-	err := r.db.QueryRowContext(ctx, query, stockID, asOf).Scan(&price)
+	err := runner(ctx, r.db).QueryRowContext(ctx, query, stockID, asOf).Scan(&price)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return 0, nil
@@ -66,7 +74,7 @@ func (r *StockHistoryRepository) GetPriceAsOf(ctx context.Context, stockID, asOf
 // 呼叫端依此序列計算移動平均等日距指標。
 func (r *StockHistoryRepository) GetClosePricesDescAsOf(ctx context.Context, stockID, asOf string) ([]float64, error) {
 	const query = "SELECT close_price FROM StockHistory WHERE stock_id = ? AND date <= ? ORDER BY date DESC;"
-	rows, err := r.db.QueryContext(ctx, query, stockID, asOf)
+	rows, err := runner(ctx, r.db).QueryContext(ctx, query, stockID, asOf)
 	if err != nil {
 		return nil, fmt.Errorf("query close prices for %s as of %s: %w", stockID, asOf, err)
 	}
@@ -91,7 +99,7 @@ func (r *StockHistoryRepository) GetClosePricesDescAsOf(ctx context.Context, sto
 // 每筆 entity 填入 Date、OpenPrice 與 ClosePrice 三個欄位 (開盤價供 decision_price_basis=open 決策使用)。
 func (r *StockHistoryRepository) GetCloseHistoryAsc(ctx context.Context, stockID string) ([]entity.StockHistory, error) {
 	const query = "SELECT date, open_price, close_price FROM StockHistory WHERE stock_id = ? ORDER BY date ASC;"
-	rows, err := r.db.QueryContext(ctx, query, stockID)
+	rows, err := runner(ctx, r.db).QueryContext(ctx, query, stockID)
 	if err != nil {
 		return nil, fmt.Errorf("query close history for %s: %w", stockID, err)
 	}
@@ -131,7 +139,7 @@ func (r *StockHistoryRepository) LoadSeries(ctx context.Context, stockIDs []stri
 // value/price_change/transactions 等欄位為選用,本方法不寫入,保持 NULL。
 func (r *StockHistoryRepository) InsertBarIgnore(ctx context.Context, stockID, stockName string, b entity.Bar) error {
 	const query = `INSERT IGNORE INTO StockHistory (stock_id, stock_name, date, volume, open_price, high_price, low_price, close_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?);`
-	if _, err := r.db.ExecContext(ctx, query, stockID, stockName, b.Date, b.Volume, b.Open, b.High, b.Low, b.Close); err != nil {
+	if _, err := runner(ctx, r.db).ExecContext(ctx, query, stockID, stockName, b.Date, b.Volume, b.Open, b.High, b.Low, b.Close); err != nil {
 		return fmt.Errorf("insert bar for %s on %s: %w", stockID, b.Date, err)
 	}
 	return nil

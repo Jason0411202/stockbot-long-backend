@@ -83,7 +83,7 @@ func buildPerformanceHistory(cfg *config.Config, full backtest.WindowReport, sna
 	pts := make([]dto.PerformanceHistoryPoint, n)
 	stratPeak, bhPeak := strat[0], bh[0]
 	var liveStart time.Time
-	var livePeak float64
+	var livePeak, liveMaxDrawdown float64
 	haveLive := false
 	for i := 0; i < n; i++ {
 		if strat[i] > stratPeak {
@@ -134,7 +134,8 @@ func buildPerformanceHistory(cfg *config.Config, full backtest.WindowReport, sna
 			p.RealizedPnL = numPtr(totalPnL - unreal)
 			p.UnrealizedPnL = numPtr(unreal)
 			p.CAGR = cagrPctPtr(sp.TotalEquity, inv, yearsLive)
-			p.MaxDrawdown = ratioPtr(drawdownPct(sp.TotalEquity, livePeak))
+			liveMaxDrawdown = math.Min(liveMaxDrawdown, drawdownPct(sp.TotalEquity, livePeak))
+			p.MaxDrawdown = ratioPtr(liveMaxDrawdown)
 		}
 		pts[i] = p
 	}

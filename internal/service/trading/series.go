@@ -23,6 +23,7 @@ type lot struct {
 // 確保黃金指紋不變。
 type StockSeries struct {
 	Dates       []time.Time // asc
+	SplitDates  []time.Time // raw price discontinuities requiring live reconciliation
 	DateIndex   map[string]int
 	ClosePrices []float64
 	MA20        []float64 // MA20[i] = 截至 Dates[i] 的 20 日均價;不足 20 日以 NaN 表示
