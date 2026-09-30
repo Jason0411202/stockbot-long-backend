@@ -22,6 +22,9 @@ func TestCSVUsesPersistedOfficialUnitsForAllOHLCV(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := ss["AAA"]
+	if len(s.Suspensions) != 0 {
+		t.Fatal("omitted suspension inherited default stock's dates")
+	}
 	if s.ClosePrices[0] != 105 || s.ClosePrices[1] != 108 || s.OpenPrices[1] != 100 || s.Highs[1] != 112 || s.Lows[1] != 96 || s.Volumes[1] != 100 {
 		t.Fatalf("inconsistent CSV: %+v", s)
 	}

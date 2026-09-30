@@ -27,9 +27,11 @@ func LoadSeriesFromCSV(dir string, stocks []string) (map[string]*trading.StockSe
 	book := marketunits.Default()
 	b, err := os.ReadFile(filepath.Join(dir, "market-units.json"))
 	if err == nil {
-		if err := json.Unmarshal(b, &book); err != nil {
+		var restored marketunits.Book
+		if err := json.Unmarshal(b, &restored); err != nil {
 			return nil, err
 		}
+		book = restored
 	} else if !os.IsNotExist(err) {
 		return nil, err
 	}

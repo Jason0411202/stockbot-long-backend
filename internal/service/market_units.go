@@ -34,9 +34,13 @@ func NewMarketUnits(ctx context.Context, state StateStore, fetcher SplitFetcher)
 		return nil, err
 	}
 	if ok {
-		if err := json.Unmarshal([]byte(raw), &m.book); err != nil {
+		// Decode into zero storage: JSON omits empty suspension dates, and
+		// reusing Default().Actions would retain its first element's old date.
+		var restored marketunits.Book
+		if err := json.Unmarshal([]byte(raw), &restored); err != nil {
 			return nil, err
 		}
+		m.book = restored
 	}
 	if err := m.book.Validate(); err != nil {
 		return nil, err

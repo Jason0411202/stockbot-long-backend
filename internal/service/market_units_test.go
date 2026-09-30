@@ -47,6 +47,19 @@ func TestUnitBookDurableBeforePublishAndRestartIdempotent(t *testing.T) {
 	}
 }
 
+func TestRestoringSortedCatalogDoesNotInheritDefaultSuspension(t *testing.T) {
+	state := newFakeState()
+	state.values[unitsStateKey] = `{"basis":"2026-09-30","actions":[{"stock_id":"0050","date":"2025-06-18","ratio":4},{"stock_id":"00631L","date":"2026-03-31","suspend_from":"2026-03-25","ratio":22}]}`
+	units, err := NewMarketUnits(context.Background(), state, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	book := units.UnitBook()
+	if book.Actions[0].SuspendFrom != "" || book.Actions[1].SuspendFrom != "2026-03-25" {
+		t.Fatalf("default date leaked into restored catalog: %+v", book.Actions)
+	}
+}
+
 type unitSeriesLoader struct {
 	*fakeSeriesLoader
 	book marketunits.Book
