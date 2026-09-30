@@ -2,6 +2,7 @@
 package twse
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -70,8 +71,8 @@ func TestFetchMonth_StatNotOK(t *testing.T) {
 	client := NewClient(WithBaseURL(srv.URL))
 
 	// Act + Assert
-	if _, _, err := client.FetchMonth("20240101", "00631L"); err == nil {
-		t.Fatalf("expected error when stat != OK")
+	if _, _, err := client.FetchMonth("20240101", "00631L"); !errors.Is(err, ErrNoData) {
+		t.Fatalf("expected typed empty-month response, got %v", err)
 	}
 }
 

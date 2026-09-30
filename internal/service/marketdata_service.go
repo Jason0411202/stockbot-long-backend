@@ -9,6 +9,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 
+	"github.com/Jason0411202/stockbot-long-backend/internal/client/twse"
 	"github.com/Jason0411202/stockbot-long-backend/internal/config"
 )
 
@@ -164,6 +165,13 @@ func (s *MarketDataService) BackfillMonths(ctx context.Context, months int) erro
 func (s *MarketDataService) fetchAndInsertMonth(ctx context.Context, stockID, date, ym, currentMonth string) error {
 	bars, stockName, err := s.twse.FetchMonth(date, stockID)
 	if err != nil {
+		// Before the first published close (including a split suspension),
+		// this month legitimately has no bars. Prior-session freshness and
+		// complete-day validation still gate every decision; never mark the
+		// unfinished month complete or swallow transport/parse failures.
+		if ym == currentMonth && errors.Is(err, twse.ErrNoData) {
+			return nil
+		}
 		return fmt.Errorf("FetchMonth(%s, %s) 失敗: %w", stockID, date, err)
 	}
 

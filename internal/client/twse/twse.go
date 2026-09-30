@@ -11,6 +11,7 @@ package twse
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -20,6 +21,10 @@ import (
 	"github.com/Jason0411202/stockbot-long-backend/helper"
 	"github.com/Jason0411202/stockbot-long-backend/internal/entity"
 )
+
+// ErrNoData is an explicit successful exchange response with no monthly bars,
+// distinct from transport, malformed responses, and other exchange errors.
+var ErrNoData = errors.New("twse: no monthly data")
 
 // defaultBaseURL 為 TWSE STOCK_DAY API 端點 (正式預設指向真實端點)。
 const defaultBaseURL = "https://www.twse.com.tw/exchangeReport/STOCK_DAY"
@@ -119,6 +124,9 @@ func (c *Client) FetchMonth(date, stockID string) (bars []entity.Bar, stockName 
 	}
 
 	if stat, _ := payload["stat"].(string); stat != "OK" {
+		if strings.Contains(stat, "沒有符合條件的資料") {
+			return nil, "", fmt.Errorf("%w: %s", ErrNoData, stat)
+		}
 		return nil, "", fmt.Errorf("twse: stat=%v (該月可能尚未上市或無資料)", payload["stat"])
 	}
 

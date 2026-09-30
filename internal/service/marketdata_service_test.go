@@ -3,11 +3,27 @@ package service
 
 import (
 	"context"
+	"github.com/Jason0411202/stockbot-long-backend/internal/client/twse"
 	"testing"
 
 	"github.com/Jason0411202/stockbot-long-backend/internal/config"
 	"github.com/Jason0411202/stockbot-long-backend/internal/entity"
 )
+
+func TestEmptyCurrentMonthIsPendingButPastMonthStillFails(t *testing.T) {
+	store := newFakeStock()
+	backfill := newFakeBackfill()
+	svc := NewMarketDataService(&fakeFetcher{err: twse.ErrNoData}, store, backfill, &config.Config{}, newTestLogger())
+	if err := svc.fetchAndInsertMonth(context.Background(), "AAA", "20261001", "2026-10", "2026-10"); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.insertedBars) != 0 || len(backfill.marked) != 0 {
+		t.Fatal("unpublished month was fabricated/completed")
+	}
+	if err := svc.fetchAndInsertMonth(context.Background(), "AAA", "20260901", "2026-09", "2026-10"); err == nil {
+		t.Fatal("missing prior month swallowed")
+	}
+}
 
 // TestMonthlyBackfillDates 驗證 monthlyBackfillDates 依指定種子日期與月數產生正確的日期序列。
 func TestMonthlyBackfillDates(t *testing.T) {

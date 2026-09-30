@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"github.com/Jason0411202/stockbot-long-backend/internal/client/twse"
 	"math"
 	"testing"
 	"time"
@@ -10,6 +11,44 @@ import (
 	"github.com/Jason0411202/stockbot-long-backend/internal/service/backtest"
 	"github.com/Jason0411202/stockbot-long-backend/internal/service/trading"
 )
+
+type emptyMonthFetcher struct{ month string }
+
+func (f emptyMonthFetcher) FetchMonth(date, _ string) ([]entity.Bar, string, error) {
+	if date[:6] == f.month {
+		return nil, "", twse.ErrNoData
+	}
+	return nil, "AAA", nil
+}
+
+func TestOpeningWithoutCurrentMonthBarsStillRequiresFreshPriorSession(t *testing.T) {
+	for _, stale := range []bool{false, true} {
+		cfg := tradingTestCfg("AAA")
+		cfg.DecisionPriceBasis = "open"
+		cfg.MaxBackMonths = 0
+		s, _, state, _, ledger, _ := newTradingFixture(cfg)
+		day := taiwanDate(time.Now().In(time.FixedZone("Asia/Taipei", 8*3600)))
+		s.market.twse = emptyMonthFetcher{month: day.Format("200601")}
+		state.values[stateKeyWatermark] = day.AddDate(0, 0, -1).Format(dateLayout)
+		var rows []entity.StockHistory
+		for i := 60; i > 0; i-- {
+			if stale && i == 1 {
+				continue
+			}
+			rows = append(rows, entity.StockHistory{Date: day.AddDate(0, 0, -i).Format(dateLayout), OpenPrice: 100, ClosePrice: 100})
+		}
+		s.series = &fakeSeriesLoader{data: map[string][]entity.StockHistory{"AAA": rows}}
+		s.realtime.(*fakeRealtime).opens = map[string]float64{"AAA": 90}
+		err := s.runOneDayAtOpen(context.Background(), &tradingExecutor{svc: s}, day, false)
+		if stale {
+			if err == nil || len(ledger.lots) != 0 {
+				t.Fatal("stale prior session traded")
+			}
+		} else if err != nil || len(ledger.lots) == 0 {
+			t.Fatalf("first session blocked: %v", err)
+		}
+	}
+}
 
 func copyValues(src map[string]string) map[string]string {
 	out := map[string]string{}
