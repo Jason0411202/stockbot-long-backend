@@ -9,11 +9,13 @@ import (
 )
 
 // HistoricalTrade 保存永久記帳單位的當日真實成交；賣單以 BuyDate 指定原始買入批次。
+// Amount 為帳本實際現金流絕對值；零值沿用 Shares × Price，價格仍獨立用於條件及持倉成本。
 type HistoricalTrade struct {
 	StockID string
 	Buy     bool
 	Shares  int
 	Price   float64
+	Amount  float64
 	BuyDate time.Time
 }
 
@@ -81,6 +83,9 @@ func (e *Engine) validateHistoricalTrades(today time.Time, actual []HistoricalTr
 		if trade.Shares <= 0 || !historicalPositive(trade.Price) || !historicalPositive(float64(trade.Shares)*trade.Price) {
 			return nil, fmt.Errorf("historical trade %s has invalid shares or price", trade.StockID)
 		}
+		if trade.Amount < 0 || math.IsNaN(trade.Amount) || math.IsInf(trade.Amount, 0) {
+			return nil, fmt.Errorf("historical trade %s has invalid amount", trade.StockID)
+		}
 		if price, ok := prices[trade.StockID]; ok && price != trade.Price {
 			return nil, fmt.Errorf("historical trades %s have different decision prices", trade.StockID)
 		}
@@ -127,7 +132,7 @@ func (e *Engine) observeHistoricalStock(id string, today time.Time, s *StockSeri
 		if !trade.Buy {
 			continue
 		}
-		e.cash -= float64(trade.Shares) * trade.Price
+		e.cash -= historicalAmount(trade)
 		if err := e.checkHistoricalCash(); err != nil {
 			return err
 		}
@@ -215,7 +220,7 @@ func (e *Engine) applyHistoricalSell(today time.Time, trade HistoricalTrade) err
 
 	// 帳本賣出日作為重建的出場冷卻基準，全部出清時重設峰值。
 	e.positions[trade.StockID] = positions
-	e.cash += float64(trade.Shares) * trade.Price
+	e.cash += historicalAmount(trade)
 	if err := e.checkHistoricalCash(); err != nil {
 		return err
 	}
@@ -224,6 +229,14 @@ func (e *Engine) applyHistoricalSell(today time.Time, trade HistoricalTrade) err
 		e.peakSinceHold[trade.StockID] = 0
 	}
 	return nil
+}
+
+// historicalAmount 優先採用已驗證的帳本現金流，零值相容僅提供股數與價格的資料。
+func historicalAmount(trade HistoricalTrade) float64 {
+	if trade.Amount > 0 {
+		return trade.Amount
+	}
+	return float64(trade.Shares) * trade.Price
 }
 
 // checkHistoricalCash 接受日終現金分位取整的一分誤差，拒絕實質借款及非有限數值。

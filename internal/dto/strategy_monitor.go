@@ -5,21 +5,24 @@ import "encoding/json"
 
 // StrategyMonitor 保存整日決策圖表，並明確標示原始或歷史重建來源。
 type StrategyMonitor struct {
-	Source             string                 `json:"source"`
-	StrategyVersion    string                 `json:"strategy_version"`
-	Warnings           []string               `json:"warnings"`
-	ConfigHash         string                 `json:"config_hash,omitempty"`
-	StrategyConfig     json.RawMessage        `json:"strategy_config,omitempty"`
-	UnitBook           json.RawMessage        `json:"unit_book,omitempty"`
-	SchemaVersion      int                    `json:"schema_version"`
-	Availability       string                 `json:"availability"`
-	Message            string                 `json:"message"`
-	DecisionDate       string                 `json:"decision_date"`
-	RecordedAt         string                 `json:"recorded_at"`
-	DecisionPriceBasis string                 `json:"decision_price_basis"`
-	ExecutionMode      string                 `json:"execution_mode"`
-	IndicatorRule      string                 `json:"indicator_rule"`
-	Stocks             []StrategyMonitorStock `json:"stocks"`
+	Revision                  string                 `json:"revision,omitempty"`
+	SupersedesRevision        string                 `json:"supersedes_revision,omitempty"`
+	ReconstructionBaseVersion string                 `json:"reconstruction_base_version,omitempty"`
+	Source                    string                 `json:"source"`
+	StrategyVersion           string                 `json:"strategy_version"`
+	Warnings                  []string               `json:"warnings"`
+	ConfigHash                string                 `json:"config_hash,omitempty"`
+	StrategyConfig            json.RawMessage        `json:"strategy_config,omitempty"`
+	UnitBook                  json.RawMessage        `json:"unit_book,omitempty"`
+	SchemaVersion             int                    `json:"schema_version"`
+	Availability              string                 `json:"availability"`
+	Message                   string                 `json:"message"`
+	DecisionDate              string                 `json:"decision_date"`
+	RecordedAt                string                 `json:"recorded_at"`
+	DecisionPriceBasis        string                 `json:"decision_price_basis"`
+	ExecutionMode             string                 `json:"execution_mode"`
+	IndicatorRule             string                 `json:"indicator_rule"`
+	Stocks                    []StrategyMonitorStock `json:"stocks"`
 }
 
 // StrategyMonitorStock 保留單檔決策價格、市況、交易前後持倉與買賣條件。

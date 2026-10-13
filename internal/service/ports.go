@@ -87,6 +87,13 @@ type StrategyHistoryStore interface {
 	ListHistory(context.Context) ([]entity.StrategyHistoryRecord, error)
 }
 
+// StrategyRevisionStore 追加不可變修訂，初版表與原始決策均維持不變。
+type StrategyRevisionStore interface {
+	InsertRevision(context.Context, entity.StrategyHistoryRecord) error
+	GetRevision(context.Context, string, string) (entity.StrategyHistoryRecord, bool, error)
+	ListRevisions(context.Context, string) ([]entity.StrategyHistoryRecord, error)
+}
+
 // Notifier 是對外通知 port，TradingService 使用它發送開機通知與每筆成交通知，
 // 由 *notify.Fanout 實作 (聚合 Discord / LINE 等已設定管道;*client/discord.Client 亦直接滿足本介面)。
 //   - SendEmbed:單行描述通知 (開機 / 系統通知用)。

@@ -142,6 +142,78 @@ func TestHistoricalObservation_UsesConfiguredOrderAndSharedCash(t *testing.T) {
 	}
 }
 
+// TestHistoricalObservation_RecordedAmountsPreserveCash 驗證帳本價格取整不會改變真實成交流水。
+func TestHistoricalObservation_RecordedAmountsPreserveCash(t *testing.T) {
+	day := mustDate(t, "2026-10-13")
+	cfg := baseCfg("AAA", "BBB")
+	cfg.InitialCash, cfg.DecisionPriceBasis = 28.97, "open"
+	engine := NewEngine(cfg)
+	old := day.AddDate(0, 0, -20)
+	engine.SeedPosition("AAA", old, 40469, 5.65)
+	actual := []HistoricalTrade{
+		{StockID: "AAA", Shares: 40469, Price: 5.65, Amount: 228562.14, BuyDate: old},
+		{StockID: "BBB", Buy: true, Shares: 8000, Price: 5.71, Amount: 45725.88},
+	}
+	got, err := engine.ObserveHistoricalDay(day, historicalTestSeries(day, "AAA", "BBB"), actual)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if math.Abs(got[0].Sell.CashBefore-28.97) > 1e-8 || math.Abs(got[0].Sell.CashAfter-228591.11) > 1e-8 || math.Abs(got[1].Buy.CashBefore-228591.11) > 1e-8 || math.Abs(got[1].Buy.CashAfter-182865.23) > 1e-8 || math.Abs(engine.Cash()-182865.23) > 1e-8 {
+		t.Fatalf("rounded quote replaced actual cash flows: observations=%+v cash=%.8f", got, engine.Cash())
+	}
+	if *got[0].Price != 5.65 || *got[1].Price != 5.71 || engine.positions["BBB"][0].price != 5.71 || got[0].Sell.ExecutedShares != 40469 || got[1].Buy.ExecutedShares != 8000 {
+		t.Fatalf("cash-flow amount changed decision prices, cost or shares: %+v", got)
+	}
+}
+
+// TestHistoricalObservation_ZeroAmountFallsBackToPrice 驗證未提供現金流時維持股數乘價格的相容行為。
+func TestHistoricalObservation_ZeroAmountFallsBackToPrice(t *testing.T) {
+	day := mustDate(t, "2026-10-13")
+	cfg := baseCfg("AAA", "BBB")
+	cfg.InitialCash, cfg.DecisionPriceBasis = 10, "open"
+	engine := NewEngine(cfg)
+	old := day.AddDate(0, 0, -20)
+	engine.SeedPosition("AAA", old, 2, 5.5)
+	actual := []HistoricalTrade{
+		{StockID: "AAA", Shares: 2, Price: 5.5, Amount: 0, BuyDate: old},
+		{StockID: "BBB", Buy: true, Shares: 3, Price: 4, Amount: 0},
+	}
+	got, err := engine.ObserveHistoricalDay(day, historicalTestSeries(day, "AAA", "BBB"), actual)
+	if err != nil || engine.Cash() != 9 || got[0].Sell.CashAfter != 21 || got[1].Buy.CashAfter != 9 {
+		t.Fatalf("zero amount fallback failed: err=%v observations=%+v cash=%v", err, got, engine.Cash())
+	}
+}
+
+// TestHistoricalObservation_InvalidAmountsAreAtomic 驗證無效現金流不改變狀態或觸發外部回呼。
+func TestHistoricalObservation_InvalidAmountsAreAtomic(t *testing.T) {
+	day := mustDate(t, "2026-10-13")
+	for _, amount := range []float64{-1, math.NaN(), math.Inf(1), math.Inf(-1)} {
+		for _, buy := range []bool{true, false} {
+			cfg := baseCfg("AAA", "BBB")
+			cfg.InitialCash, cfg.DecisionPriceBasis = 1000, "open"
+			engine := NewEngine(cfg)
+			old := day.AddDate(0, 0, -20)
+			engine.SeedPosition("BBB", old, 10, 100)
+			engine.SeedRiskState("BBB", RiskState{LastBuy: old, Peak: 120})
+			callbacks := 0
+			engine.SetDecisionObserver(func(DecisionObservation) { callbacks++ })
+			engine.SetRecorder(&DayRecorder{OnCashflow: func(time.Time, float64) { callbacks++ }, OnEquity: func(time.Time, float64, float64, float64) { callbacks++ }})
+			before := engine.Clone()
+			actual := []HistoricalTrade{
+				{StockID: "AAA", Buy: true, Shares: 1, Price: 90, Amount: 89.99},
+				{StockID: "BBB", Buy: buy, Shares: 1, Price: 90, Amount: amount, BuyDate: old},
+			}
+			if buy {
+				actual[1].BuyDate = day
+			}
+			got, err := engine.ObserveHistoricalDay(day, historicalTestSeries(day, "AAA", "BBB"), actual)
+			if err == nil || got != nil || callbacks != 0 || !reflect.DeepEqual(engine.Clone(), before) {
+				t.Fatalf("invalid amount affected state: amount=%v buy=%v err=%v callbacks=%d", amount, buy, err, callbacks)
+			}
+		}
+	}
+}
+
 // TestHistoricalObservation_InvalidTradesAreAtomic 驗證資料錯誤與資金不足不留下部分狀態。
 func TestHistoricalObservation_InvalidTradesAreAtomic(t *testing.T) {
 	day := mustDate(t, "2026-10-13")

@@ -108,3 +108,16 @@ CREATE TABLE IF NOT EXISTS StrategyMonitorHistory (
     snapshot_json LONGTEXT NOT NULL,
     PRIMARY KEY (decision_date)
 );
+
+-- 修訂只追加至獨立資料表，初版快照維持原樣並永久可查。
+CREATE TABLE IF NOT EXISTS StrategyMonitorHistoryRevisions (
+    decision_date VARCHAR(10) NOT NULL,
+    revision VARCHAR(64) NOT NULL,
+    source VARCHAR(20) NOT NULL,
+    execution_mode VARCHAR(20) NOT NULL,
+    recorded_at VARCHAR(40) NOT NULL,
+    strategy_version VARCHAR(128) NOT NULL,
+    availability VARCHAR(20) NOT NULL,
+    snapshot_json LONGTEXT NOT NULL,
+    PRIMARY KEY (decision_date, revision)
+);

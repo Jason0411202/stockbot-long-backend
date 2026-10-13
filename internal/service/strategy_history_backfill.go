@@ -209,6 +209,10 @@ func (s *StrategyMonitorService) BackfillHistory(ctx context.Context) (err error
 	for _, row := range rows {
 		existing[row.DecisionDate] = true
 	}
+	revisions, err := s.prepareCashflowRevisions(ctx, rows, inputs)
+	if err != nil {
+		return err
+	}
 	// 缺少行情或帳本細節的日期仍保留可查看的不可用紀錄。
 	series, seriesErr := LoadTradingSeries(ctx, inputs.series, s.cfg.TrackStocks)
 	lots, trades, ledgerErr := historyLedger(inputs)
@@ -249,8 +253,13 @@ func (s *StrategyMonitorService) BackfillHistory(ctx context.Context) (err error
 				return err
 			}
 		}
+		if revision, ok := revisions[date]; ok {
+			if err = s.appendCashflowRevision(ctx, date, inputs, lots, trades, revision); err != nil {
+				return err
+			}
+		}
 		completed++
-		s.setBackfill("running", completed, total, "依帳本及歷史行情補齊缺少日期，既有紀錄保持不變。")
+		s.setBackfill("running", completed, total, "依帳本補齊缺少日期與現金精度修訂，初版紀錄保持不變。")
 	}
 	message := "已補齊有帳本或每日權益證據的決策日期；新決策將持續自動保存。"
 	if unavailable > 0 {
@@ -265,13 +274,19 @@ func historyLedger(in historyInputs) ([]historicalLot, map[string][]trading.Hist
 	lots := []historicalLot{}
 	trades := map[string][]trading.HistoricalTrade{}
 	buys := map[string]trading.HistoricalTrade{}
-	add := func(id, buyRaw, sellRaw string, shares int, price, sellPrice float64) error {
+	add := func(id, buyRaw, sellRaw string, shares int, price, sellPrice, buyAmount, sellAmount float64) error {
 		buy, err := parseLedgerDate(buyRaw)
 		if err != nil {
 			return fmt.Errorf("帳本買入日期無法解析")
 		}
 		if shares <= 0 || price <= 0 || math.IsNaN(price) || math.IsInf(price, 0) {
 			return fmt.Errorf("帳本缺少有效股數或成本，無法可靠還原持倉")
+		}
+		if buyAmount < 0 || sellAmount < 0 || math.IsNaN(buyAmount) || math.IsInf(buyAmount, 0) || math.IsNaN(sellAmount) || math.IsInf(sellAmount, 0) {
+			return fmt.Errorf("帳本成交金額不是有效非負數")
+		}
+		if buyAmount == 0 {
+			buyAmount = float64(shares) * price
 		}
 		lot := historicalLot{stock: id, buy: buy, shares: shares, price: price}
 		if sellRaw != "" {
@@ -281,7 +296,10 @@ func historyLedger(in historyInputs) ([]historicalLot, map[string][]trading.Hist
 			}
 			lot.sell = sell
 			date := sell.Format(dateLayout)
-			trades[date] = append(trades[date], trading.HistoricalTrade{StockID: id, Buy: false, Shares: shares, Price: sellPrice, BuyDate: buy})
+			if sellAmount == 0 {
+				sellAmount = float64(shares) * sellPrice
+			}
+			trades[date] = append(trades[date], trading.HistoricalTrade{StockID: id, Buy: false, Shares: shares, Price: sellPrice, BuyDate: buy, Amount: sellAmount})
 		}
 		key := id + "/" + buy.Format(dateLayout)
 		v := buys[key]
@@ -291,6 +309,7 @@ func historyLedger(in historyInputs) ([]historicalLot, map[string][]trading.Hist
 		v.StockID = id
 		v.Buy = true
 		v.Shares += shares
+		v.Amount += buyAmount
 		v.Price = price
 		v.BuyDate = buy
 		buys[key] = v
@@ -299,12 +318,12 @@ func historyLedger(in historyInputs) ([]historicalLot, map[string][]trading.Hist
 	}
 	// 帳本以永久會計單位儲存，此處不再次做股票分割換算。
 	for _, r := range in.lots {
-		if err := add(r.StockID, r.TransactionDate, "", r.Shares, r.TransactionPrice, 0); err != nil {
+		if err := add(r.StockID, r.TransactionDate, "", r.Shares, r.TransactionPrice, 0, r.InvestmentCost, 0); err != nil {
 			return nil, nil, err
 		}
 	}
 	for _, r := range in.realized {
-		if err := add(r.StockID, r.BuyDate, r.SellDate, r.Shares, r.PurchasePrice, r.SellPrice); err != nil {
+		if err := add(r.StockID, r.BuyDate, r.SellDate, r.Shares, r.PurchasePrice, r.SellPrice, r.InvestmentCost, r.Revenue); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -355,8 +374,12 @@ func (s *StrategyMonitorService) reconstructHistory(date string, in historyInput
 	if !found {
 		return unavailable("此日有交易或水位線紀錄，但缺少每日權益現金，無法可靠還原買賣階段。")
 	}
+	expectedCash := cash
 	for _, v := range trades[date] {
-		amount := float64(v.Shares) * v.Price
+		amount := v.Amount
+		if amount == 0 {
+			amount = float64(v.Shares) * v.Price
+		}
 		if v.Buy {
 			cash += amount
 		} else {
@@ -395,6 +418,9 @@ func (s *StrategyMonitorService) reconstructHistory(date string, in historyInput
 	observations, err := engine.ObserveHistoricalDay(day, series, trades[date])
 	if err != nil {
 		return unavailable("帳本與歷史行情無法一致還原此日買賣階段：" + err.Error())
+	}
+	if math.Abs(engine.Cash()-expectedCash) > 0.011 {
+		return unavailable("重建日終現金與每日權益紀錄不一致，無法可靠還原決策。")
 	}
 	// 顯示單位固定於歷史決策日，之後查閱不隨新公司行動重新換算。
 	observed := temporary.monitorSnapshot(day, observations, false)

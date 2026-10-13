@@ -20,6 +20,12 @@ import (
 // stateKeyStrategyMonitor 保存單一完整交易日的監控快照。
 const stateKeyStrategyMonitor = "strategy_monitor_v1"
 
+// StrategyInitialRevision 與 StrategyCashflowRevision 定義永久可查詢的歷史版號。
+const (
+	StrategyInitialRevision  = "initial"
+	StrategyCashflowRevision = "ledger-cashflow-v2"
+)
+
 // StrategyMonitorService 查詢永久決策，並以獨立記憶體引擎背景重建缺少的歷史圖表。
 type StrategyMonitorService struct {
 	state               StateStore
@@ -105,10 +111,31 @@ func (s *StrategyMonitorService) legacyMonitor(ctx context.Context) (dto.Strateg
 
 // StrategyMonitorDate 讀取不可變的指定日期快照，不觸發交易或重算條件。
 func (s *StrategyMonitorService) StrategyMonitorDate(ctx context.Context, date string) (dto.StrategyMonitor, error) {
+	return s.StrategyMonitorRevision(ctx, date, "")
+}
+
+// StrategyMonitorRevision 依指定版號讀取快照，省略版號時優先讀取已保存修订。
+func (s *StrategyMonitorService) StrategyMonitorRevision(ctx context.Context, date, revision string) (dto.StrategyMonitor, error) {
 	if s.history == nil {
 		return dto.StrategyMonitor{}, ErrStrategyHistoryNotFound
 	}
-	r, found, err := s.history.GetDate(ctx, date)
+	var r entity.StrategyHistoryRecord
+	var found bool
+	var err error
+	if revision != StrategyInitialRevision {
+		if revisions, ok := s.history.(StrategyRevisionStore); ok {
+			r, found, err = revisions.GetRevision(ctx, date, StrategyCashflowRevision)
+		}
+		if err != nil {
+			return dto.StrategyMonitor{}, err
+		}
+		if !found && revision == StrategyCashflowRevision {
+			return dto.StrategyMonitor{}, ErrStrategyHistoryNotFound
+		}
+	}
+	if !found {
+		r, found, err = s.history.GetDate(ctx, date)
+	}
 	if err != nil {
 		return dto.StrategyMonitor{}, err
 	}
@@ -121,6 +148,9 @@ func (s *StrategyMonitorService) StrategyMonitorDate(ctx context.Context, date s
 	}
 	if out.SchemaVersion != 1 || out.DecisionDate != date || out.Stocks == nil || (out.Availability != "available" && out.Availability != "unavailable") {
 		return out, fmt.Errorf("invalid strategy history schema")
+	}
+	if out.Revision == "" {
+		out.Revision = StrategyInitialRevision
 	}
 	return out, nil
 }
@@ -135,9 +165,26 @@ func (s *StrategyMonitorService) StrategyHistory(ctx context.Context) (dto.Strat
 	if err != nil {
 		return out, err
 	}
+	updated := map[string]entity.StrategyHistoryRecord{}
+	if revisions, ok := s.history.(StrategyRevisionStore); ok {
+		items, err := revisions.ListRevisions(ctx, StrategyCashflowRevision)
+		if err != nil {
+			return out, err
+		}
+		for _, r := range items {
+			updated[r.DecisionDate] = r
+		}
+	}
 	// 只回傳列表摘要，選取日期時才傳送完整條件圖資料。
 	for _, r := range rows {
-		out.Entries = append(out.Entries, dto.StrategyHistoryEntry{DecisionDate: r.DecisionDate, Source: r.Source, ExecutionMode: r.ExecutionMode, RecordedAt: r.RecordedAt, StrategyVersion: r.StrategyVersion, Availability: r.Availability})
+		revision := StrategyInitialRevision
+		hasInitial := false
+		if v, ok := updated[r.DecisionDate]; ok {
+			r = v
+			revision = StrategyCashflowRevision
+			hasInitial = true
+		}
+		out.Entries = append(out.Entries, dto.StrategyHistoryEntry{Revision: revision, HasInitialRevision: hasInitial, DecisionDate: r.DecisionDate, Source: r.Source, ExecutionMode: r.ExecutionMode, RecordedAt: r.RecordedAt, StrategyVersion: r.StrategyVersion, Availability: r.Availability})
 	}
 	if len(rows) > 0 {
 		out.NewestDate = rows[0].DecisionDate
@@ -155,12 +202,13 @@ func historyRecord(v dto.StrategyMonitor) (entity.StrategyHistoryRecord, error) 
 	if err != nil {
 		return entity.StrategyHistoryRecord{}, fmt.Errorf("encode strategy history: %w", err)
 	}
-	return entity.StrategyHistoryRecord{DecisionDate: v.DecisionDate, Source: v.Source, ExecutionMode: v.ExecutionMode, RecordedAt: v.RecordedAt, StrategyVersion: v.StrategyVersion, Availability: v.Availability, Snapshot: string(b)}, nil
+	return entity.StrategyHistoryRecord{Revision: v.Revision, DecisionDate: v.DecisionDate, Source: v.Source, ExecutionMode: v.ExecutionMode, RecordedAt: v.RecordedAt, StrategyVersion: v.StrategyVersion, Availability: v.Availability, Snapshot: string(b)}, nil
 }
 
 // stampMonitor 保存此次採用的設定、程式版本及公司行動單位依據。
 func stampMonitor(out *dto.StrategyMonitor, cfg *config.Config, loader SeriesLoader) {
 	out.Source, out.Warnings = "original", []string{}
+	out.Revision = StrategyInitialRevision
 	out.StrategyConfig, _ = json.Marshal(cfg)
 	hash := sha256.Sum256(out.StrategyConfig)
 	out.ConfigHash = fmt.Sprintf("%x", hash)

@@ -25,6 +25,11 @@ type StrategyHistoryReporter interface {
 	StrategyHistory(context.Context) (dto.StrategyMonitorHistory, error)
 }
 
+// StrategyRevisionReporter 提供明確版號的不可變快照查詢。
+type StrategyRevisionReporter interface {
+	StrategyMonitorRevision(context.Context, string, string) (dto.StrategyMonitor, error)
+}
+
 // WithStrategyMonitor 在啟動 HTTP 服務前注入唯讀監控服務，保留既有建構函式的相依介面。
 func (ctl *Controller) WithStrategyMonitor(monitor StrategyMonitorReporter) *Controller {
 	ctl.monitor = monitor
@@ -38,6 +43,11 @@ func (ctl *Controller) StrategyMonitor(c echo.Context) error {
 	if ctl.monitor == nil {
 		return c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "strategy_monitor_unavailable"})
 	}
+	_, hasRevision := c.QueryParams()["revision"]
+	revision := c.QueryParam("revision")
+	if hasRevision && (c.QueryParam("date") == "" || (revision != service.StrategyInitialRevision && revision != service.StrategyCashflowRevision)) {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "invalid_strategy_revision"})
+	}
 	// 指定日期僅讀取既有快照，無日期時維持最新紀錄入口。
 	if _, specified := c.QueryParams()["date"]; specified {
 		date := c.QueryParam("date")
@@ -49,7 +59,16 @@ func (ctl *Controller) StrategyMonitor(c echo.Context) error {
 		if !ok {
 			return c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "strategy_history_unavailable"})
 		}
-		monitor, err := reporter.StrategyMonitorDate(c.Request().Context(), date)
+		var monitor dto.StrategyMonitor
+		if hasRevision {
+			revisionReporter, ok := ctl.monitor.(StrategyRevisionReporter)
+			if !ok {
+				return c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "strategy_history_unavailable"})
+			}
+			monitor, err = revisionReporter.StrategyMonitorRevision(c.Request().Context(), date, revision)
+		} else {
+			monitor, err = reporter.StrategyMonitorDate(c.Request().Context(), date)
+		}
 		if errors.Is(err, service.ErrStrategyHistoryNotFound) {
 			return c.JSON(http.StatusNotFound, map[string]string{"error": "strategy_history_not_found"})
 		}

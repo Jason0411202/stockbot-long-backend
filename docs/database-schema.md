@@ -13,6 +13,7 @@
 | `BotState` | 保存線上交易跨重啟狀態 | `TradingService` |
 | `EquityHistory` | 保存每個交易日的真實帳戶權益快照（供歷史權益折線圖） | `TradingService` |
 | `StrategyMonitorHistory` | 永久保存原始或重建決策圖表，以日期為唯一鍵且既有紀錄不可覆寫 | `TradingService`／`StrategyMonitorService` |
+| `StrategyMonitorHistoryRevisions` | 以日期及版號追加不可變修訂，初版表維持原樣 | `StrategyMonitorService` |
 
 ## `StrategyMonitorHistory`
 
@@ -21,6 +22,10 @@
 新原始決策與帳本、現金、風險狀態、水位線同一資料庫交易提交。歷史寫入失敗會回滾整日，重試不會重複成交；同日重複寫入為 no-op，原始及重建紀錄均不可覆寫。`BotState.strategy_monitor_v1` 仍保留最新原始快照，升級時會先封存其既有內容。沒有歷史到期清理機制。
 
 背景回補只讀取一致的帳本、每日權益及行情快照，計算完成後只新增此表缺少的日期。來源為 `reconstructed`，其假設與版本保存在 JSON；交易執行器、通知、帳本及 BotState 不受回補修改。API 只查詢持久化資料，日期索引不載入 LONGTEXT。
+
+## `StrategyMonitorHistoryRevisions`
+
+以 `(decision_date, revision)` 為複合主鍵，摘要欄位與 `snapshot_json LONGTEXT` 採初版相同格式；只新增不存在的版次，重複寫入為 no-op。`ledger-cashflow-v2` 保存特定初版部署的帳本金額修訂，使用初版規則與單位簿，並留下初版版本號。API 預設選修訂，初版仍由 `revision=initial` 永久取回；新增此表不修改初版 schema 或資料列。
 
 ## `StockHistory`
 

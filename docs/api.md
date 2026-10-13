@@ -32,6 +32,7 @@
 
 - **快照資訊**：`schema_version`、`availability`、`message`、`decision_date`、`recorded_at`、`decision_price_basis`、`execution_mode`、`indicator_rule`。
 - **來源與版本**：`source` 為 `original` 或 `reconstructed`；`strategy_version`、`config_hash`、`strategy_config` 與 `unit_book` 凍結保存當次規則和價格／股數單位依據；`warnings` 說明回補限制。舊原始快照無版本證據時使用 `legacy-unknown`，不套用現在的設定。
+- **不可變版次**：`revision` 為 `initial` 或 `ledger-cashflow-v2`；修訂附 `supersedes_revision: "initial"` 及 `reconstruction_base_version`。初版與修訂均永久保留；省略版號優先讀取修訂，`?date=YYYY-MM-DD&revision=initial` 可取初版，指定 `revision=ledger-cashflow-v2` 可取修訂。未知版號、空版號或版號未搭配日期回 400 `invalid_strategy_revision`，指定修訂不存在回 404。
 - **各標的**：`stocks` 包含 `stock_id`、`status`、`decision_price`、`indicator_date`、市況判定與 `buy`／`sell`。
 - **買入／賣出階段**：`status`、`reasons`、`conditions`、補充 `metrics`、預計與實際成交股數，以及該階段執行前後的現金及持股。
 - **條件**：`id`、`label`、`status`、`value`、`threshold`、`operator`、`unit`、`description`；冷卻條件另含 `remaining_days` 與 `release_date`。
@@ -61,11 +62,17 @@
 
 回傳 `entries`（日期降冪，只有摘要，不包含條件本文）、`oldest_date`、`newest_date` 與 `backfill`。每筆摘要包含 `decision_date`、`source`、`execution_mode`、`recorded_at`、`strategy_version`、`availability`。全部日期一次提供，供日期選擇與前後日切換；選取日期才載入完整圖表。索引直接查詢資料庫，新增原始決策立即可見。
 
+每筆摘要另含預設 `revision` 及 `has_initial_revision`；後者為 true 時代表已有修訂，可隨時切回初版。摘要的來源、時間及可用狀態對應預設選取版次。
+
 `backfill` 含 `status`（`pending`、`running`、`complete`、`failed`）、`completed`、`total` 與 `message`。啟動後自動在背景補缺，成功後每五分鐘檢查新缺口，失敗三十秒後自動重試，既有紀錄仍可查看。
 
 回補範圍僅限機器人有交易帳本或每日權益紀錄且不超過已提交水位線的日期。以可重複讀取的唯讀交易取得一致輸入後，釋放交易再計算及保存；不呼叫真實交易 executor、不通知、不修改帳本、現金、風險狀態或水位線。日期有確定資料缺損時保留可查閱的 `unavailable` 紀錄；最新尚未結算交易日則等待權益資料後重試。
 
 `reconstructed` 的成交及持倉來自完整帳本，條件採回補時的策略設定與歷史行情。買入前、實際買入後的賣出前條件分別觀察；歷史多段賣出與未售股數會聚合還原原始買單。持倉峰值從最近一次全數出場後的連續持倉期間重建；有帳本成交日優先使用成交價，無成交日才用歷史行情。歷史策略版本、無成交日即時報價、股票處理順序及舊賣出原因不足以完整還原，因此圖表會明確列出假設，不宣稱為當時原始決策理由。既有紀錄即使設定或行情後續改變也保持不變。
+
+歷史現金以帳本 `investment_cost` 與 `revenue` 還原，條件使用 `transaction_price`／`sell_price`；兩者分開，避免舊價格欄位取位精度改變現金流。每個可用重建日都核對日終現金與 `EquityHistory.cash`，只容許一分內差距。
+
+`ledger-cashflow-v2` 只追加給部署 `228990cff58f5c8f0a7675ec5d877832f605b2b9` 生成的重建初版，原始快照與其他既有紀錄不參與此修訂。它沿用初版保存的完整策略設定、股票順序及單位簿，使用帳本實際金額計算現金；初版資料列與 JSON 本文不更新、不刪除。暫時資料不足而使可用初版無法生成可用修訂時，保留初版預設並等待重試。
 
 ## `/api/get_performance_summary`
 
