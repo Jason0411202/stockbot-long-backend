@@ -63,6 +63,7 @@ type Controller struct {
 	performance PerformanceReporter
 	equity      EquityHistoryReporter
 	perfHistory PerformanceHistoryReporter
+	monitor     StrategyMonitorReporter
 }
 
 // New constructs a Controller from its logger and the six business services.

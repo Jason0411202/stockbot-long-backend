@@ -22,6 +22,40 @@
 | `GET` | `/api/get_performance_summary` | 取得策略績效摘要（本金明細 + 實盤現況 + 回測指標 + 回測權益曲線） |
 | `GET` | `/api/get_equity_history` | 取得實盤每日權益歷史（真實帳戶總權益時間序列，供歷史權益折線圖） |
 | `GET` | `/api/get_performance_history` | 取得統一日期軸的逐日績效序列（回測 + 實盤兩組指標對齊同一時間軸） |
+| `GET` | `/api/get_strategy_monitor` | 取得最後一次實際交易決策的買入／賣出條件與執行結果快照 |
+
+## `/api/get_strategy_monitor`
+
+此唯讀端點回傳交易引擎最後一次完成並保存的實際決策快照，供前端的「策略監控」頁呈現買入與賣出兩個區塊。
+讀取 API 不會重新執行策略、下單、更新冷卻天數或改動帳本；頁面顯示的是 `decision_date` 當日的決策狀態，並非即時報價重新推算的訊號。
+
+- **快照資訊**：`schema_version`、`availability`、`message`、`decision_date`、`recorded_at`、`decision_price_basis`、`execution_mode`、`indicator_rule`。
+- **各標的**：`stocks` 包含 `stock_id`、`status`、`decision_price`、`indicator_date`、市況判定與 `buy`／`sell`。
+- **買入／賣出階段**：`status`、`reasons`、`conditions`、補充 `metrics`、預計與實際成交股數，以及該階段執行前後的現金及持股。
+- **條件**：`id`、`label`、`status`、`value`、`threshold`、`operator`、`unit`、`description`；冷卻條件另含 `remaining_days` 與 `release_date`。
+
+列舉值使用下列契約；前端應依各層級解讀，不能把所有 `status` 當作相同集合。
+
+| 欄位 | 合法值與意義 |
+| --- | --- |
+| `availability` | `available`：有已提交快照；`unavailable`：尚無快照 |
+| `stocks[].status` | `evaluated`：已評估；`inactive`：當日不適用，例如暫停交易；`unavailable`：決策資料不足 |
+| `buy.status`／`sell.status` | `executed`：已成交；`eligible`：條件通過但沒有成交；`blocked`：條件未通過；`inactive`：未啟用或不適用；`unavailable`：資料不足 |
+| `conditions[].status` | `passed`：通過；`blocked`：未通過；`inactive`：未啟用或不適用；`unavailable`：資料不足 |
+| `conditions[].operator` | `lt`：小於；`gt`：大於；`gte`：大於等於；`eq`：等於 |
+| `conditions[].unit`／`metrics[].unit` | `price`：股價；`currency`：金額；`percent`：百分比；`days`：日曆天；`shares`：股數；`ratio`：倍率；`regime`：市況數值（0 空頭、1 多頭） |
+
+百分比欄位採百分點表示（0～100 尺度）：例如 `value: 3` 代表 3%，`threshold: 10` 代表 10%，前端不應再乘以 100。
+無適用或無法取得的數值為 `null`。冷卻天數與解除日期以快照內的決策時點為準，不能依瀏覽器目前日期自行扣減。
+開盤執行模式的技術指標只使用截至前一交易日的已完成價格資料；請搭配 `indicator_date`、`decision_price_basis` 與 `indicator_rule` 顯示資料時點。
+
+舊部署尚未保存決策快照時，API 以 HTTP 200 回傳 `availability: "unavailable"` 及說明訊息，前端應顯示「尚無決策快照」，不可當成沒有策略觸發。
+儲存讀取失敗或未注入監控服務時，回傳 HTTP 503 與 `{"error":"strategy_monitor_unavailable"}`，不以空快照假裝查詢成功。
+升級後第一次實際決策完成並保存後才會出現有效快照。
+
+快照以 `strategy_monitor_v1` 為鍵保存於既有 `BotState.state_value`，每次成功提交覆寫為最新一筆，沒有新增歷史資料表或 schema migration。
+此欄位目前為 `TEXT`，單筆容量上限為 65,535 bytes（約 64 KB）；本次兩檔標的快照實測為 10,499 bytes。
+增加追蹤標的或條件前應檢查序列化後的位元組大小；需要更大容量時須先擴充儲存欄位，避免快照寫入失敗使整日交易提交回滾。
 
 ## `/api/get_performance_summary`
 
@@ -80,7 +114,9 @@ API 回應由 `internal/dto` 定義。`portfolio.go` 對應投資組合損益，
 `performance.go` 對應策略績效摘要（含 `JSONFloat`：NaN/±Inf 序列化為 `null`；以及回測 `equity_curve` 的 `EquityPoint`），
 `equity.go` 對應實盤每日權益歷史（`LiveEquityPoint`），
 `performance_history.go` 對應統一日期軸績效歷史（`PerformanceHistoryPoint`；實盤欄位為 `*float64`，nil → JSON `null`）。
+`strategy_monitor.go` 對應實際交易決策監控快照（`StrategyMonitor`）。
 
 ## 錯誤處理
 
 目前 controller 對部分查詢錯誤會回傳空陣列，維持前端既有行為。若未來要改成標準錯誤格式，需同步調整前端與測試。
+`/api/get_strategy_monitor` 明確區分尚無快照（200 + `availability: "unavailable"`）與查詢失敗（503 + `strategy_monitor_unavailable`）。

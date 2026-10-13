@@ -87,7 +87,7 @@ func (f *fakeState) WithTradingTransaction(ctx context.Context, fn func(context.
 }
 
 func TestAtomicDay_RollbackRetryAndNoPrematureNotification(t *testing.T) {
-	for _, failure := range []string{"current_cash", "last_processed_date", "commit"} {
+	for _, failure := range []string{"current_cash", "strategy_monitor_v1", "last_processed_date", "commit"} {
 		t.Run(failure, func(t *testing.T) {
 			cfg := tradingTestCfg("AAA")
 			cfg.DecisionPriceBasis = "open"
@@ -96,6 +96,10 @@ func TestAtomicDay_RollbackRetryAndNoPrematureNotification(t *testing.T) {
 			stock.names["AAA"] = "AAA"
 			day := time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC)
 			state.values[stateKeyWatermark] = "2024-02-29"
+			previousMonitor := storedMonitorFixture()
+			previousMonitor.DecisionDate = "2024-02-29"
+			previousSnapshot := encodeStoredMonitor(t, previousMonitor)
+			state.values[stateKeyStrategyMonitor] = previousSnapshot
 			ss := flatSeries(day.AddDate(0, 0, -60), 60, 100)
 			series := map[string]*trading.StockSeries{"AAA": ss}
 			before := s.engine.Cash()
@@ -113,6 +117,9 @@ func TestAtomicDay_RollbackRetryAndNoPrematureNotification(t *testing.T) {
 			if _, ok := state.values[stateKeyTotalContributed]; ok {
 				t.Fatal("failed contribution persisted")
 			}
+			if state.values[stateKeyStrategyMonitor] != previousSnapshot {
+				t.Fatal("failed day leaked an uncommitted strategy snapshot")
+			}
 			state.commitErr = nil
 			state.failKey = ""
 			if err := s.reloadIfNeeded(context.Background(), series); err != nil {
@@ -125,11 +132,19 @@ func TestAtomicDay_RollbackRetryAndNoPrematureNotification(t *testing.T) {
 			if len(ledger.lots) != 1 || len(notify.tradeSent) != 1 || state.values[stateKeyTotalContributed] != "2500" {
 				t.Fatal("retry did not commit exactly once")
 			}
+			monitor, err := NewStrategyMonitorService(state).StrategyMonitor(context.Background())
+			if err != nil || monitor.DecisionDate != "2024-03-01" || monitor.Availability != "available" {
+				t.Fatalf("retry did not commit the strategy snapshot: %+v, err %v", monitor, err)
+			}
+			committedSnapshot := state.values[stateKeyStrategyMonitor]
 			if err := s.commitDay(context.Background(), day, series, map[string]float64{"AAA": 90}, true); err != nil {
 				t.Fatal(err)
 			}
 			if s.engine.Cash() != cash || len(ledger.lots) != 1 || len(notify.tradeSent) != 1 {
 				t.Fatal("duplicate day was applied")
+			}
+			if state.values[stateKeyStrategyMonitor] != committedSnapshot {
+				t.Fatal("duplicate day overwrote its committed strategy snapshot")
 			}
 		})
 	}

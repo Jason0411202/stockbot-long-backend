@@ -10,6 +10,7 @@ import (
 func (e *Engine) Clone() *Engine {
 	c := *e
 	c.rec = nil
+	c.observer = nil
 	c.positions = make(map[string][]lot, len(e.positions))
 	for k, v := range e.positions {
 		c.positions[k] = append([]lot(nil), v...)

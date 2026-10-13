@@ -70,6 +70,10 @@ func (s *TradingService) commitDay(ctx context.Context, day time.Time, series ma
 	}
 	candidate := *s
 	candidate.engine = s.engine.Clone()
+	observations := make([]trading.DecisionObservation, 0, len(s.cfg.TrackStocks))
+	candidate.engine.SetDecisionObserver(func(observation trading.DecisionObservation) {
+		observations = append(observations, observation)
+	})
 	exec := &tradingExecutor{svc: &candidate, notify: notify, deferred: true}
 	err = uow.WithTradingTransaction(ctx, func(txctx context.Context) error {
 		exec.ctx = txctx
@@ -120,6 +124,14 @@ func (s *TradingService) commitDay(ctx context.Context, day time.Time, series ma
 				return err
 			}
 		}
+		// 決策快照與帳本、現金及水位線屬於同一筆交易。
+		snapshot, err := json.Marshal(candidate.monitorSnapshot(day, observations, opens != nil))
+		if err != nil {
+			return fmt.Errorf("encode strategy monitor: %w", err)
+		}
+		if err = s.state.Set(txctx, stateKeyStrategyMonitor, string(snapshot)); err != nil {
+			return fmt.Errorf("save strategy monitor: %w", err)
+		}
 		return s.saveWatermark(txctx, day)
 	})
 	if err != nil {
@@ -128,6 +140,7 @@ func (s *TradingService) commitDay(ctx context.Context, day time.Time, series ma
 		s.needsReload = true
 		return err
 	}
+	candidate.engine.SetDecisionObserver(nil)
 	s.engine = candidate.engine
 	s.engineDate = day
 	s.seeded = true

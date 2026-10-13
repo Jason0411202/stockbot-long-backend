@@ -133,7 +133,8 @@ func main() {
 	}
 
 	// --- controller + echo (HTTP transport) ---
-	ctrl := controller.New(log, portfolioSvc, statSvc, histSvc, perfSvc, equitySvc, perfHistSvc)
+	ctrl := controller.New(log, portfolioSvc, statSvc, histSvc, perfSvc, equitySvc, perfHistSvc).
+		WithStrategyMonitor(service.NewStrategyMonitorService(stateRepo))
 	go server.Run(log, db, ctrl)
 
 	// --- 上線交易 loop (阻塞,取代舊 kernals.DailyCheck) ---

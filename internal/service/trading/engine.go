@@ -65,7 +65,8 @@ type Engine struct {
 
 	trailSells int // 移動停利觸發的賣出次數
 
-	rec *DayRecorder // 選用觀測者;nil 表示不收集 (上線模式)。
+	rec      *DayRecorder     // 選用觀測者;nil 表示不收集 (上線模式)。
+	observer DecisionObserver // 決策監控僅收集已處理輸入，由外層與交易一併提交。
 }
 
 // EngineStats 為引擎自啟動以來的累計事件數。
@@ -251,13 +252,16 @@ func (e *Engine) ProcessDay(today time.Time, series map[string]*StockSeries, exe
 	for _, stockID := range e.cfg.TrackStocks {
 		s, ok := series[stockID]
 		if !ok {
+			e.observeSkipped(stockID, "unavailable", "缺少股票歷史資料。")
+			continue
+		}
+		if s.Suspended(today) {
+			e.observeSkipped(stockID, "inactive", "該股票於此決策日暫停交易。")
 			continue
 		}
 		idx, ok := s.DateIndex[todayStr]
 		if !ok {
-			continue
-		}
-		if s.Suspended(today) {
+			e.observeSkipped(stockID, "unavailable", "當日尚無價格資料。")
 			continue
 		}
 
@@ -266,6 +270,7 @@ func (e *Engine) ProcessDay(today time.Time, series map[string]*StockSeries, exe
 		asOfIdx := idx
 		if openBasis {
 			if idx == 0 {
+				e.observeSkipped(stockID, "unavailable", "尚無前一交易日收盤資料。")
 				continue // 無前一交易日收盤,無法在不偷看當日收盤下決策
 			}
 			decisionPrice = s.OpenAt(idx)
@@ -300,11 +305,17 @@ func (e *Engine) ProcessOpenDecision(today time.Time, opens map[string]float64, 
 	}
 	for _, stockID := range e.cfg.TrackStocks {
 		s, ok := series[stockID]
-		if !ok || len(s.Dates) == 0 || s.Suspended(today) {
+		if !ok || len(s.Dates) == 0 {
+			e.observeSkipped(stockID, "unavailable", "缺少股票歷史資料。")
+			continue
+		}
+		if s.Suspended(today) {
+			e.observeSkipped(stockID, "inactive", "該股票於此決策日暫停交易。")
 			continue
 		}
 		openPx, ok := opens[stockID]
 		if !ok || openPx <= 0 {
+			e.observeSkipped(stockID, "unavailable", "尚未取得當日有效開盤價。")
 			continue
 		}
 		asOfIdx := sort.Search(len(s.Dates), func(i int) bool { return !s.Dates[i].Before(today) }) - 1
@@ -329,6 +340,7 @@ func (e *Engine) ProcessOpenDecision(today time.Time, opens map[string]float64, 
 func (e *Engine) processStock(stockID string, today time.Time, decisionPrice float64, asOfIdx int, s *StockSeries, exec Executor, eqToday float64, needEquity bool) error {
 	// 成交價無效或無可見收盤 (尚未上市 / 第一天) 直接略過。
 	if decisionPrice <= 0 || asOfIdx < 0 || asOfIdx >= len(s.ClosePrices) {
+		e.observeSkipped(stockID, "unavailable", "決策價格或可見指標資料不足。")
 		return nil
 	}
 
@@ -355,6 +367,7 @@ func (e *Engine) processStock(stockID string, today time.Time, decisionPrice flo
 	if needEquity {
 		snap.Equity = eqToday
 	}
+	observation := e.observeStock(eff, snap, s, asOfIdx)
 	// 移動停利出場後的「暫停買入」閘:避免空頭中「停損→隔日又逢低買→再停損」的 whipsaw 循環 (zero-value 不暫停)。
 	reentryBlocked := false
 	if eff.TrailReentryCooldownDays > 0 {
@@ -370,6 +383,9 @@ func (e *Engine) processStock(stockID string, today time.Time, decisionPrice flo
 			}
 		}
 	}
+	if observation != nil {
+		e.finishPhase(stockID, &observation.Buy, true)
+	}
 
 	// 更新持倉峰值 (移動停利用):有持倉才追蹤,含今日成交價與剛買進的部位。
 	if len(e.positions[stockID]) > 0 && decisionPrice > e.peakSinceHold[stockID] {
@@ -380,10 +396,17 @@ func (e *Engine) processStock(stockID string, today time.Time, decisionPrice flo
 	snap = e.buildSnapshot(stockID, today, decisionPrice, entryMA)
 	e.applyGateInputs(&snap, s, asOfIdx)
 	snap.IsBull = isBullToday
+	if observation != nil {
+		observation.Sell = observeSell(eff, snap, e.cash)
+	}
 	if sell := DecideSell(eff, snap); sell.Should {
 		if err := e.applySell(stockID, today, sell, exec); err != nil {
 			return err
 		}
+	}
+	if observation != nil {
+		e.finishPhase(stockID, &observation.Sell, false)
+		e.observer(*observation)
 	}
 	return nil
 }
