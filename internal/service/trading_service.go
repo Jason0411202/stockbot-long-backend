@@ -37,10 +37,17 @@ type TradingService struct {
 	ledger      LedgerSeedStore
 	state       StateStore
 	equity      EquityStore
+	history     StrategyHistoryStore
 	notify      Notifier
 	realtime    RealtimeFetcher
 	cfg         *config.Config
 	log         *logrus.Entry
+}
+
+// WithStrategyHistory 注入與帳本共同提交的永久決策儲存器。
+func (s *TradingService) WithStrategyHistory(history StrategyHistoryStore) *TradingService {
+	s.history = history
+	return s
 }
 
 // BotState 鍵值常數，對應跨重啟持久化的水位線、現金與累計注資欄位。

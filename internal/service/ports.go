@@ -80,6 +80,13 @@ type EquityStore interface {
 	ListEquityAsc(ctx context.Context) ([]entity.EquitySnapshot, error)
 }
 
+// StrategyHistoryStore 永久保存每日決策，重複寫入同日不修改既有內容。
+type StrategyHistoryStore interface {
+	InsertMissing(context.Context, entity.StrategyHistoryRecord) error
+	GetDate(context.Context, string) (entity.StrategyHistoryRecord, bool, error)
+	ListHistory(context.Context) ([]entity.StrategyHistoryRecord, error)
+}
+
 // Notifier 是對外通知 port，TradingService 使用它發送開機通知與每筆成交通知，
 // 由 *notify.Fanout 實作 (聚合 Discord / LINE 等已設定管道;*client/discord.Client 亦直接滿足本介面)。
 //   - SendEmbed:單行描述通知 (開機 / 系統通知用)。

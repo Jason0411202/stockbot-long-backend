@@ -13,6 +13,23 @@ type sqlRunner interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
+// WithReadSnapshot 在短暫的可重複讀取交易中取得一致帳本，不鎖定上線交易列。
+func (r *BotStateRepository) WithReadSnapshot(ctx context.Context, fn func(context.Context) error) error {
+	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	if err != nil {
+		return fmt.Errorf("begin history read snapshot: %w", err)
+	}
+	defer tx.Rollback()
+	// 所有讀取共用同一資料庫快照，計算與歷史寫入留在交易之外。
+	if err = fn(context.WithValue(ctx, transactionKey{}, tx)); err != nil {
+		return err
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("complete history read snapshot: %w", err)
+	}
+	return nil
+}
+
 func runner(ctx context.Context, db *sql.DB) sqlRunner {
 	if tx, ok := ctx.Value(transactionKey{}).(*sql.Tx); ok {
 		return tx

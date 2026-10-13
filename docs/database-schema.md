@@ -12,6 +12,15 @@
 | `BackfillStatus` | 記錄某檔股票某月份是否已完整回補 | `MarketDataService` |
 | `BotState` | 保存線上交易跨重啟狀態 | `TradingService` |
 | `EquityHistory` | 保存每個交易日的真實帳戶權益快照（供歷史權益折線圖） | `TradingService` |
+| `StrategyMonitorHistory` | 永久保存原始或重建決策圖表，以日期為唯一鍵且既有紀錄不可覆寫 | `TradingService`／`StrategyMonitorService` |
+
+## `StrategyMonitorHistory`
+
+`decision_date VARCHAR(10)` 為主鍵；`source`、`execution_mode`、`recorded_at`、`strategy_version`、`availability` 提供精簡日期索引，`snapshot_json LONGTEXT` 保存完整條件、成交前後狀態、策略設定與單位簿。`InitSchema` 以冪等 `CREATE TABLE IF NOT EXISTS` 建表，不刪除或改寫既有帳本。
+
+新原始決策與帳本、現金、風險狀態、水位線同一資料庫交易提交。歷史寫入失敗會回滾整日，重試不會重複成交；同日重複寫入為 no-op，原始及重建紀錄均不可覆寫。`BotState.strategy_monitor_v1` 仍保留最新原始快照，升級時會先封存其既有內容。沒有歷史到期清理機制。
+
+背景回補只讀取一致的帳本、每日權益及行情快照，計算完成後只新增此表缺少的日期。來源為 `reconstructed`，其假設與版本保存在 JSON；交易執行器、通知、帳本及 BotState 不受回補修改。API 只查詢持久化資料，日期索引不載入 LONGTEXT。
 
 ## `StockHistory`
 

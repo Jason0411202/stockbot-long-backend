@@ -3,33 +3,86 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
+	"sync"
 	"time"
 
+	"github.com/Jason0411202/stockbot-long-backend/internal/config"
 	"github.com/Jason0411202/stockbot-long-backend/internal/dto"
+	"github.com/Jason0411202/stockbot-long-backend/internal/entity"
 	"github.com/Jason0411202/stockbot-long-backend/internal/service/trading"
 )
 
 // stateKeyStrategyMonitor 保存單一完整交易日的監控快照。
 const stateKeyStrategyMonitor = "strategy_monitor_v1"
 
-// StrategyMonitorService 僅讀取持久化快照，不持有或操作交易引擎。
-type StrategyMonitorService struct{ state StateStore }
+// StrategyMonitorService 查詢永久決策，並以獨立記憶體引擎背景重建缺少的歷史圖表。
+type StrategyMonitorService struct {
+	state               StateStore
+	history             StrategyHistoryStore
+	ledger              LedgerStore
+	equity              EquityStore
+	series              SeriesLoader
+	cfg                 *config.Config
+	mu                  sync.RWMutex
+	backfill            dto.StrategyBackfillStatus
+	runMu               sync.Mutex
+	startOnce           sync.Once
+	reportBackfillError func(error)
+}
+
+// WithBackfillErrorReporter 注入背景錯誤紀錄器，HTTP 回應維持不包含內部錯誤細節。
+func (s *StrategyMonitorService) WithBackfillErrorReporter(report func(error)) *StrategyMonitorService {
+	s.reportBackfillError = report
+	return s
+}
+
+// ErrStrategyHistoryNotFound 表示指定日期尚無保存紀錄。
+var ErrStrategyHistoryNotFound = errors.New("strategy history not found")
 
 // NewStrategyMonitorService 建立只讀的策略監控查詢服務。
 func NewStrategyMonitorService(state StateStore) *StrategyMonitorService {
-	return &StrategyMonitorService{state: state}
+	return &StrategyMonitorService{state: state, backfill: dto.StrategyBackfillStatus{Status: "pending", Message: "等待自動檢查歷史決策。"}}
 }
 
-// StrategyMonitor 回傳最後一次成功提交的真實決策；舊資料缺失時明確標記不可用。
+// WithHistory 注入只讀重建來源與獨立歷史儲存器。
+func (s *StrategyMonitorService) WithHistory(history StrategyHistoryStore, ledger LedgerStore, equity EquityStore, series SeriesLoader, cfg *config.Config) *StrategyMonitorService {
+	s.history, s.ledger, s.equity, s.series, s.cfg = history, ledger, equity, series, cfg
+	return s
+}
+
+// StrategyMonitor 回傳最新保存的原始或重建決策，無資料時明確標記不可用。
 func (s *StrategyMonitorService) StrategyMonitor(ctx context.Context) (dto.StrategyMonitor, error) {
+	// 日期索引直接來自儲存器，最新已保存重建紀錄同樣可以開啟。
+	if s.history != nil {
+		entries, err := s.history.ListHistory(ctx)
+		if err != nil {
+			return dto.StrategyMonitor{}, err
+		}
+		if len(entries) > 0 {
+			// 舊部署的最後原始快照可在背景封存完成前立即查看。
+			legacy, legacyErr := s.legacyMonitor(ctx)
+			if legacyErr == nil && legacy.DecisionDate > entries[0].DecisionDate {
+				return legacy, nil
+			}
+			return s.StrategyMonitorDate(ctx, entries[0].DecisionDate)
+		}
+	}
+	return s.legacyMonitor(ctx)
+}
+
+// legacyMonitor 讀取尚未移入歷史表的原始單筆決策。
+func (s *StrategyMonitorService) legacyMonitor(ctx context.Context) (dto.StrategyMonitor, error) {
 	raw, ok, err := s.state.Get(ctx, stateKeyStrategyMonitor)
 	if err != nil {
 		return dto.StrategyMonitor{}, fmt.Errorf("read strategy monitor: %w", err)
 	}
 	if !ok {
-		return dto.StrategyMonitor{SchemaVersion: 1, Availability: "unavailable", Message: "尚未保存實際決策快照；下一次交易日決策提交後即可顯示。", Stocks: []dto.StrategyMonitorStock{}}, nil
+		return dto.StrategyMonitor{SchemaVersion: 1, Source: "original", Warnings: []string{}, Availability: "unavailable", Message: "尚未保存決策快照；系統將自動回補可還原的歷史日期。", Stocks: []dto.StrategyMonitorStock{}}, nil
 	}
 
 	// 只接受目前版型，缺損資料不會轉成看似正常的空交易訊號。
@@ -48,6 +101,75 @@ func (s *StrategyMonitorService) StrategyMonitor(ctx context.Context) (dto.Strat
 		return dto.StrategyMonitor{}, fmt.Errorf("missing strategy monitor decision date")
 	}
 	return snapshot, nil
+}
+
+// StrategyMonitorDate 讀取不可變的指定日期快照，不觸發交易或重算條件。
+func (s *StrategyMonitorService) StrategyMonitorDate(ctx context.Context, date string) (dto.StrategyMonitor, error) {
+	if s.history == nil {
+		return dto.StrategyMonitor{}, ErrStrategyHistoryNotFound
+	}
+	r, found, err := s.history.GetDate(ctx, date)
+	if err != nil {
+		return dto.StrategyMonitor{}, err
+	}
+	if !found {
+		return dto.StrategyMonitor{}, ErrStrategyHistoryNotFound
+	}
+	var out dto.StrategyMonitor
+	if err := json.Unmarshal([]byte(r.Snapshot), &out); err != nil {
+		return out, fmt.Errorf("decode strategy history: %w", err)
+	}
+	if out.SchemaVersion != 1 || out.DecisionDate != date || out.Stocks == nil || (out.Availability != "available" && out.Availability != "unavailable") {
+		return out, fmt.Errorf("invalid strategy history schema")
+	}
+	return out, nil
+}
+
+// StrategyHistory 讀取最新日期索引與背景回補進度。
+func (s *StrategyMonitorService) StrategyHistory(ctx context.Context) (dto.StrategyMonitorHistory, error) {
+	out := dto.StrategyMonitorHistory{Entries: []dto.StrategyHistoryEntry{}}
+	if s.history == nil {
+		return out, fmt.Errorf("strategy history not configured")
+	}
+	rows, err := s.history.ListHistory(ctx)
+	if err != nil {
+		return out, err
+	}
+	// 只回傳列表摘要，選取日期時才傳送完整條件圖資料。
+	for _, r := range rows {
+		out.Entries = append(out.Entries, dto.StrategyHistoryEntry{DecisionDate: r.DecisionDate, Source: r.Source, ExecutionMode: r.ExecutionMode, RecordedAt: r.RecordedAt, StrategyVersion: r.StrategyVersion, Availability: r.Availability})
+	}
+	if len(rows) > 0 {
+		out.NewestDate = rows[0].DecisionDate
+		out.OldestDate = rows[len(rows)-1].DecisionDate
+	}
+	s.mu.RLock()
+	out.Backfill = s.backfill
+	s.mu.RUnlock()
+	return out, nil
+}
+
+// historyRecord 將整日快照編碼並建立永久索引欄位。
+func historyRecord(v dto.StrategyMonitor) (entity.StrategyHistoryRecord, error) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return entity.StrategyHistoryRecord{}, fmt.Errorf("encode strategy history: %w", err)
+	}
+	return entity.StrategyHistoryRecord{DecisionDate: v.DecisionDate, Source: v.Source, ExecutionMode: v.ExecutionMode, RecordedAt: v.RecordedAt, StrategyVersion: v.StrategyVersion, Availability: v.Availability, Snapshot: string(b)}, nil
+}
+
+// stampMonitor 保存此次採用的設定、程式版本及公司行動單位依據。
+func stampMonitor(out *dto.StrategyMonitor, cfg *config.Config, loader SeriesLoader) {
+	out.Source, out.Warnings = "original", []string{}
+	out.StrategyConfig, _ = json.Marshal(cfg)
+	hash := sha256.Sum256(out.StrategyConfig)
+	out.ConfigHash = fmt.Sprintf("%x", hash)
+	version := os.Getenv("APP_COMMIT")
+	if version == "" {
+		version = "dev"
+	}
+	out.StrategyVersion = version + ":" + out.ConfigHash[:12]
+	out.UnitBook, _ = json.Marshal(bookFor(loader))
 }
 
 // monitorNumber 轉換價格及股數，金額與百分比保持不變。
@@ -87,6 +209,7 @@ func (s *TradingService) monitorSnapshot(day time.Time, observations []trading.D
 		rule = "以當日開盤價決策；指標只使用前一交易日及之前的收盤資料。"
 	}
 	out := dto.StrategyMonitor{SchemaVersion: 1, Availability: "available", Message: "最後一次已提交的實際決策快照；各條件及冷卻天數固定於該決策日。", DecisionDate: day.Format(dateLayout), RecordedAt: time.Now().UTC().Format(time.RFC3339), DecisionPriceBasis: s.cfg.DecisionPriceBasis, ExecutionMode: mode, IndicatorRule: rule, Stocks: []dto.StrategyMonitorStock{}}
+	stampMonitor(&out, s.cfg, s.series)
 	for _, o := range observations {
 		factor := displayFactor(s.series, o.StockID, day.Format(dateLayout))
 		indicatorDate := ""

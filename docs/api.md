@@ -22,14 +22,16 @@
 | `GET` | `/api/get_performance_summary` | 取得策略績效摘要（本金明細 + 實盤現況 + 回測指標 + 回測權益曲線） |
 | `GET` | `/api/get_equity_history` | 取得實盤每日權益歷史（真實帳戶總權益時間序列，供歷史權益折線圖） |
 | `GET` | `/api/get_performance_history` | 取得統一日期軸的逐日績效序列（回測 + 實盤兩組指標對齊同一時間軸） |
-| `GET` | `/api/get_strategy_monitor` | 取得最後一次實際交易決策的買入／賣出條件與執行結果快照 |
+| `GET` | `/api/get_strategy_monitor?date=YYYY-MM-DD` | 取得指定日決策圖表；省略日期時取得最新保存紀錄 |
+| `GET` | `/api/get_strategy_monitor_history` | 取得全部決策日期的精簡索引、來源與自動回補進度 |
 
 ## `/api/get_strategy_monitor`
 
-此唯讀端點回傳交易引擎最後一次完成並保存的實際決策快照，供前端的「策略監控」頁呈現買入與賣出兩個區塊。
+此唯讀端點回傳最新或指定日期的已保存決策快照，供前端的「策略監控」頁呈現買入與賣出兩個區塊。
 讀取 API 不會重新執行策略、下單、更新冷卻天數或改動帳本；頁面顯示的是 `decision_date` 當日的決策狀態，並非即時報價重新推算的訊號。
 
 - **快照資訊**：`schema_version`、`availability`、`message`、`decision_date`、`recorded_at`、`decision_price_basis`、`execution_mode`、`indicator_rule`。
+- **來源與版本**：`source` 為 `original` 或 `reconstructed`；`strategy_version`、`config_hash`、`strategy_config` 與 `unit_book` 凍結保存當次規則和價格／股數單位依據；`warnings` 說明回補限制。舊原始快照無版本證據時使用 `legacy-unknown`，不套用現在的設定。
 - **各標的**：`stocks` 包含 `stock_id`、`status`、`decision_price`、`indicator_date`、市況判定與 `buy`／`sell`。
 - **買入／賣出階段**：`status`、`reasons`、`conditions`、補充 `metrics`、預計與實際成交股數，以及該階段執行前後的現金及持股。
 - **條件**：`id`、`label`、`status`、`value`、`threshold`、`operator`、`unit`、`description`；冷卻條件另含 `remaining_days` 與 `release_date`。
@@ -38,7 +40,7 @@
 
 | 欄位 | 合法值與意義 |
 | --- | --- |
-| `availability` | `available`：有已提交快照；`unavailable`：尚無快照 |
+| `availability` | `available`：有可查看圖表；`unavailable`：尚無快照，或該歷史日有紀錄但資料不足以可靠重建 |
 | `stocks[].status` | `evaluated`：已評估；`inactive`：當日不適用，例如暫停交易；`unavailable`：決策資料不足 |
 | `buy.status`／`sell.status` | `executed`：已成交；`eligible`：條件通過但沒有成交；`blocked`：條件未通過；`inactive`：未啟用或不適用；`unavailable`：資料不足 |
 | `conditions[].status` | `passed`：通過；`blocked`：未通過；`inactive`：未啟用或不適用；`unavailable`：資料不足 |
@@ -49,13 +51,21 @@
 無適用或無法取得的數值為 `null`。冷卻天數與解除日期以快照內的決策時點為準，不能依瀏覽器目前日期自行扣減。
 開盤執行模式的技術指標只使用截至前一交易日的已完成價格資料；請搭配 `indicator_date`、`decision_price_basis` 與 `indicator_rule` 顯示資料時點。
 
-舊部署尚未保存決策快照時，API 以 HTTP 200 回傳 `availability: "unavailable"` 及說明訊息，前端應顯示「尚無決策快照」，不可當成沒有策略觸發。
+尚未保存決策快照時，API 以 HTTP 200 回傳 `availability: "unavailable"` 及說明訊息，不可當成沒有策略觸發。指定日期若已保存資料不足的紀錄，同樣回傳 200，並保留日期與 `warnings`。
 儲存讀取失敗或未注入監控服務時，回傳 HTTP 503 與 `{"error":"strategy_monitor_unavailable"}`，不以空快照假裝查詢成功。
-升級後第一次實際決策完成並保存後才會出現有效快照。
+`date` 必須是有效的 `YYYY-MM-DD`，空值或格式錯誤回傳 400 `invalid_decision_date`；不存在的日期回傳 404 `strategy_history_not_found`；指定日期讀取失敗為 503 `strategy_history_unavailable`。
 
-快照以 `strategy_monitor_v1` 為鍵保存於既有 `BotState.state_value`，每次成功提交覆寫為最新一筆，沒有新增歷史資料表或 schema migration。
-此欄位目前為 `TEXT`，單筆容量上限為 65,535 bytes（約 64 KB）；本次兩檔標的快照實測為 10,499 bytes。
-增加追蹤標的或條件前應檢查序列化後的位元組大小；需要更大容量時須先擴充儲存欄位，避免快照寫入失敗使整日交易提交回滾。
+每次成功決策會在帳本、現金、水位線同一資料庫交易內新增 `StrategyMonitorHistory`，包含無成交日。歷史以日期為鍵永久保留，不覆寫已保存的原始或重建紀錄；`BotState.strategy_monitor_v1` 保留最新原始快照供相容。舊部署尚存的最後原始快照會先封存，條件數值保持不變。
+
+### `/api/get_strategy_monitor_history`
+
+回傳 `entries`（日期降冪，只有摘要，不包含條件本文）、`oldest_date`、`newest_date` 與 `backfill`。每筆摘要包含 `decision_date`、`source`、`execution_mode`、`recorded_at`、`strategy_version`、`availability`。全部日期一次提供，供日期選擇與前後日切換；選取日期才載入完整圖表。索引直接查詢資料庫，新增原始決策立即可見。
+
+`backfill` 含 `status`（`pending`、`running`、`complete`、`failed`）、`completed`、`total` 與 `message`。啟動後自動在背景補缺，成功後每五分鐘檢查新缺口，失敗三十秒後自動重試，既有紀錄仍可查看。
+
+回補範圍僅限機器人有交易帳本或每日權益紀錄且不超過已提交水位線的日期。以可重複讀取的唯讀交易取得一致輸入後，釋放交易再計算及保存；不呼叫真實交易 executor、不通知、不修改帳本、現金、風險狀態或水位線。日期有確定資料缺損時保留可查閱的 `unavailable` 紀錄；最新尚未結算交易日則等待權益資料後重試。
+
+`reconstructed` 的成交及持倉來自完整帳本，條件採回補時的策略設定與歷史行情。買入前、實際買入後的賣出前條件分別觀察；歷史多段賣出與未售股數會聚合還原原始買單。持倉峰值從最近一次全數出場後的連續持倉期間重建；有帳本成交日優先使用成交價，無成交日才用歷史行情。歷史策略版本、無成交日即時報價、股票處理順序及舊賣出原因不足以完整還原，因此圖表會明確列出假設，不宣稱為當時原始決策理由。既有紀錄即使設定或行情後續改變也保持不變。
 
 ## `/api/get_performance_summary`
 

@@ -96,3 +96,15 @@ CREATE TABLE IF NOT EXISTS EquityHistory (
 
 -- 向後相容:既有 EquityHistory 表補上 cost_basis 欄位 (舊列以 0 計,下次 catch-up 覆寫即修正)。
 ALTER TABLE EquityHistory ADD COLUMN IF NOT EXISTS cost_basis DECIMAL(14, 2) NOT NULL DEFAULT 0;
+
+-- 每日決策永久保留，既有原始與重建紀錄均不可覆寫。
+CREATE TABLE IF NOT EXISTS StrategyMonitorHistory (
+    decision_date VARCHAR(10) NOT NULL,
+    source VARCHAR(20) NOT NULL,
+    execution_mode VARCHAR(20) NOT NULL,
+    recorded_at VARCHAR(40) NOT NULL,
+    strategy_version VARCHAR(128) NOT NULL,
+    availability VARCHAR(20) NOT NULL,
+    snapshot_json LONGTEXT NOT NULL,
+    PRIMARY KEY (decision_date)
+);

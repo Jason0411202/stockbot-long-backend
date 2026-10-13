@@ -1,8 +1,16 @@
-// internal/dto/strategy_monitor.go 定義最後一次實際交易決策的監控快照。
+// internal/dto/strategy_monitor.go 定義原始與歷史重建決策的監控快照。
 package dto
 
-// StrategyMonitor 是已提交的整日決策快照；缺少舊資料時不推測決策。
+import "encoding/json"
+
+// StrategyMonitor 保存整日決策圖表，並明確標示原始或歷史重建來源。
 type StrategyMonitor struct {
+	Source             string                 `json:"source"`
+	StrategyVersion    string                 `json:"strategy_version"`
+	Warnings           []string               `json:"warnings"`
+	ConfigHash         string                 `json:"config_hash,omitempty"`
+	StrategyConfig     json.RawMessage        `json:"strategy_config,omitempty"`
+	UnitBook           json.RawMessage        `json:"unit_book,omitempty"`
 	SchemaVersion      int                    `json:"schema_version"`
 	Availability       string                 `json:"availability"`
 	Message            string                 `json:"message"`

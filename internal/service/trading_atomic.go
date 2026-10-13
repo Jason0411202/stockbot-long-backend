@@ -125,7 +125,21 @@ func (s *TradingService) commitDay(ctx context.Context, day time.Time, series ma
 			}
 		}
 		// 決策快照與帳本、現金及水位線屬於同一筆交易。
-		snapshot, err := json.Marshal(candidate.monitorSnapshot(day, observations, opens != nil))
+		decision := candidate.monitorSnapshot(day, observations, opens != nil)
+		if s.history != nil {
+			// 舊版最後一筆快照先保存；下一個決策不會使升級前的原始資料遺失。
+			if err := archiveLegacyMonitor(txctx, s.state, s.history); err != nil {
+				return err
+			}
+			record, err := historyRecord(decision)
+			if err != nil {
+				return err
+			}
+			if err := s.history.InsertMissing(txctx, record); err != nil {
+				return fmt.Errorf("save permanent strategy history: %w", err)
+			}
+		}
+		snapshot, err := json.Marshal(decision)
 		if err != nil {
 			return fmt.Errorf("encode strategy monitor: %w", err)
 		}

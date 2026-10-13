@@ -69,6 +69,7 @@ func main() {
 	stateRepo := repository.NewBotStateRepository(db)
 	backfillRepo := repository.NewBackfillRepository(db)
 	equityRepo := repository.NewEquityHistoryRepository(db)
+	strategyHistoryRepo := repository.NewStrategyHistoryRepository(db)
 	units, err := service.NewMarketUnits(ctx, stateRepo, twse.NewSplitClient())
 	if err != nil {
 		log.WithError(err).Fatal("restore market unit book")
@@ -113,6 +114,11 @@ func main() {
 	perfHistSvc := service.NewPerformanceHistoryService(cfg, stockRepo, closedEquity, log)
 	engine := trading.NewEngine(cfg)
 	tradingSvc := service.NewTradingService(engine, portfolioSvc, marketSvc, stockRepo, ledgerRepo, stateRepo, equityRepo, notifier, realtimeClient, cfg, log)
+	tradingSvc.WithStrategyHistory(strategyHistoryRepo)
+	monitorSvc := service.NewStrategyMonitorService(stateRepo).WithHistory(strategyHistoryRepo, ledgerRepo, equityRepo, stockRepo, cfg)
+	monitorSvc.WithBackfillErrorReporter(func(err error) {
+		log.WithError(err).WithField("component", "strategy_history").Warn("策略歷史回補失敗，等待自動重試")
+	})
 
 	tradingSvc.SetCalendar(twse.NewCalendar())
 
@@ -133,8 +139,9 @@ func main() {
 	}
 
 	// --- controller + echo (HTTP transport) ---
+	monitorSvc.StartBackfill(ctx)
 	ctrl := controller.New(log, portfolioSvc, statSvc, histSvc, perfSvc, equitySvc, perfHistSvc).
-		WithStrategyMonitor(service.NewStrategyMonitorService(stateRepo))
+		WithStrategyMonitor(monitorSvc)
 	go server.Run(log, db, ctrl)
 
 	// --- 上線交易 loop (阻塞,取代舊 kernals.DailyCheck) ---
