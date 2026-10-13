@@ -153,6 +153,8 @@ common issuance 起 catch-up，其現金軌跡與帳本與回測全期完全一�
 
 策略監控歷史保存在 `StrategyMonitorHistory`：原始快照與整日交易原子提交；背景回補只新增有帳本／每日權益證據的缺漏日期，透過純記憶體 `ObserveHistoricalDay` 使用帳本成交推進。所有既有原始／重建紀錄均不可覆寫；回補不得呼叫真實交易 executor、通知或改動帳本、cash、risk、水位線。重建資料標記 `source=reconstructed` 並保存當次設定、版本、單位簿與假設，不能宣稱為原始決策理由。
 
+歷史現金必須使用帳本 `InvestmentCost`／`Revenue`，不能用已截位價格乘股數取代金額；可用重建日需與日終權益現金核對。`StrategyMonitorHistoryRevisions` 以日期＋版號永久追加修訂，初版 JSON 不更新；`ledger-cashflow-v2` 只針對指定初版部署生成的重建資料，沿用其保存設定及單位簿，初版與修訂皆可明確指定查詢。
+
 詳見 [docs/development.md](docs/development.md)。要點：
 
 - **gofmt/goimports 為強制**；多個小檔優於少數大檔（200–400 行常見，800 上限）。
