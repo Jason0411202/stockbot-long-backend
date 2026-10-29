@@ -88,7 +88,9 @@ cmd/*            程式進入點（server 與各 CLI 工具）
 上線 loop 於台灣時間**開盤時段 09:10–09:30** 抓 TWSE MIS 即時開盤價、以開盤價即時決策
 （`Engine.ProcessOpenDecision`），水位線去重、09:29 起逾時 fallback；啟動時 catch-up 用 DB 歷史
 `open_price` 同基準回放。即時報價來源為 `internal/client/twse.RealtimeClient`（MIS getStockInfo.jsp，
-經 `RealtimeFetcher` port 注入）。
+經 `RealtimeFetcher` port 注入）。交易日由 `twse.Calendar` 判定：公告休市表（`holidaySchedule`）＋每月市場成交資訊
+（`FMTQIK`，識別颱風等未列於公告表的臨時休市）；開盤決策與 catch-up 都拒絕越過「日曆判定開市但缺 K 棒」的日期，
+日曆誤判開市會讓水位線永久卡住（2026-10-23 颱風停市即因此停擺一週）。
 
 **資金模型：期初一次性本金、不再外部注資（lump-sum 封閉資金池）**。`monthly_contribution` 定版為 **0**，
 回測與上線都只動用期初 `initial_cash`（$100,000）。`monthly_contribution > 0` 仍是支援的選項（每月第一個交易日
