@@ -184,7 +184,9 @@ common issuance 起 catch-up，其現金軌跡與帳本與回測全期完全一�
 - `config.yaml`：非機密策略與回補參數，可 commit。
 - `.env`：機密（`DB_DSN`、`DISCORD_BOT_TOKEN`、`DISCORD_BOT_CHANNELID`、`LINE_CHANNEL_ACCESS_TOKEN`），
   不可 commit；範本見 `.env.example`。正式機 `.env` 的單一來源是 GitHub secret
-  `STOCKBOT_LONG_ENV_FILE`（部署時整份覆寫）。LINE 通知為 broadcast（群發給所有加官方帳號好友的人）。
+  `STOCKBOT_LONG_ENV_FILE`（部署時整份覆寫）；唯一例外是 repo variable `STOCKBOT_LONG_SITE_ADDRESS`
+  有值時會覆寫其中的 `SITE_ADDRESS`（部署主機網域）。LINE 通知為 broadcast（群發給所有加官方帳號好友的人）。
+- app image 為 amd64 + arm64 多架構（Dockerfile 以 `$BUILDPLATFORM` 交叉編譯），正式機可為 ARM VM。
 - 不得硬編任何密鑰；啟動時驗證必要設定存在。
 
 ## 主要相依套件

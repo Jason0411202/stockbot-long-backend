@@ -111,6 +111,10 @@ echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
 
 自動 CD（`deploy-ssh`）的 bootstrap 已內建這一步（無 swap 時自動建立，idempotent）。所有容器已設定 log rotation（每檔 10MB × 3 檔），不會因容器 log 吃滿磁碟。
 
+app image 為 `linux/amd64` + `linux/arm64` 多架構（其餘服務的官方 image 亦皆支援 arm64），ARM 主機（如 Azure B2pts v2）可直接部署。
+
+> ⚠️ **Azure for Students 額度**：免費服務（B1s / B2pts v2 / B2ats v2 每月 750 小時等）只有前 12 個月；之後 VM、公開 IP 與 Standard SSD 的交易次數都會從每年 $100 的額度扣款，本棧約每月 US$17–19，額度約半年就會用完。額度歸零時訂用帳戶會被停用、VM 被自動釋放（對外所有 port 逾時，DNS 仍解析得到），且停用期間無法開機或匯出磁碟。請定期在 Azure 入口網站查看剩餘額度與免費服務到期日。
+
 ## 正式機 HTTPS
 
 1. 將 DNS A/AAAA record 指向主機。
@@ -145,7 +149,7 @@ docker compose up -d
 
 不想每次手動部署的話，可啟用 `deploy-ssh` job 讓 main 更新**全自動**部署：CI 會 SSH 進 server，一次完成「裝 Docker → 建 swap（無 swap 時）→ 取得 `docker-compose.yml` + `monitoring/` → 寫 `.env` → `pull && up -d`」。可直接對一台**全新未架過環境的 server** 跑，對已架好的 server 則自動略過安裝走滾動更新。
 
-只需在 backend repo 設 `vars.STOCKBOT_LONG_DEPLOY_ENABLED=true`、secrets `STOCKBOT_LONG_DEPLOY_HOST` / `_DEPLOY_USER` / `_DEPLOY_PASSWORD`（一律密碼登入），以及把整份 `.env` 貼進 secret `STOCKBOT_LONG_ENV_FILE`（不貼則 `.env` 為空、compose 用內建預設值，僅適合測試）。登入帳號需能執行免密碼 sudo。完整說明見 [cicd-k8s.md](cicd-k8s.md)。此機制對 fork 者同樣適用，填自己的值即可，不需改任何檔案。
+只需在 backend repo 設 `vars.STOCKBOT_LONG_DEPLOY_ENABLED=true`、secrets `STOCKBOT_LONG_DEPLOY_HOST` / `_DEPLOY_USER` / `_DEPLOY_PASSWORD`（一律密碼登入），以及把整份 `.env` 貼進 secret `STOCKBOT_LONG_ENV_FILE`（不貼則 `.env` 為空、compose 用內建預設值，僅適合測試）。換部署主機時可另設 `vars.STOCKBOT_LONG_SITE_ADDRESS` 覆寫 `.env` 的 `SITE_ADDRESS`。全新 server 首次部署會先回補 TWSE 全期歷史（約 15 分鐘）才 ready，CD 會等待最多 45 分鐘。登入帳號需能執行免密碼 sudo。完整說明見 [cicd-k8s.md](cicd-k8s.md)。此機制對 fork 者同樣適用，填自己的值即可，不需改任何檔案。
 
 ## 維運命令
 

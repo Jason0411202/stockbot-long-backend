@@ -51,9 +51,13 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # 多架構 image (amd64 + arm64)：Go 於原生平台交叉編譯，QEMU 只負責 runtime stage 的 apk 安裝
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v5
         with:
           context: .
+          platforms: linux/amd64,linux/arm64
           push: true
           build-args: |
             GIT_SHA=${{ github.sha }}
@@ -112,12 +116,16 @@ jobs:
         env:
           # .env 全文以單一 secret 帶入（單一事實來源）；未提供則寫入空 .env，由 compose 用內建預設值
           DEPLOY_ENV_FILE: ${{ secrets.STOCKBOT_LONG_ENV_FILE }}
+          # 部署主機的對外網域（選填）；有值時覆寫 .env 的 SITE_ADDRESS，換機時不必重貼整份 .env
+          SITE_ADDRESS_OVERRIDE: ${{ vars.STOCKBOT_LONG_SITE_ADDRESS }}
         with:
           host: ${{ secrets.STOCKBOT_LONG_DEPLOY_HOST }}
           username: ${{ secrets.STOCKBOT_LONG_DEPLOY_USER }}
           # 一律以密碼登入
           password: ${{ secrets.STOCKBOT_LONG_DEPLOY_PASSWORD }}
-          envs: DEPLOY_ENV_FILE
+          envs: DEPLOY_ENV_FILE,SITE_ADDRESS_OVERRIDE
+          # 全新 server 首次啟動需先回補 TWSE 全期歷史（約 15 分鐘）才會 ready，整段腳本最長允許 60 分鐘
+          command_timeout: 60m
           script: |
             set -e
 
@@ -170,15 +178,28 @@ jobs:
               chmod 600 .env
             fi
 
+            # vars.STOCKBOT_LONG_SITE_ADDRESS 有值時，以它取代 .env 內的 SITE_ADDRESS（Caddy 依此申請 HTTPS 憑證）
+            if [ -n "$SITE_ADDRESS_OVERRIDE" ]; then
+              sed -i '/^SITE_ADDRESS=/d' .env
+              printf 'SITE_ADDRESS=%s\n' "$SITE_ADDRESS_OVERRIDE" >> .env
+            fi
+
             # 部署 image：直接取用 build job 推出的不可變 :sha image
             # （compose 代換 ${APP_IMAGE} 時 shell 環境變數優先於 .env，不需寫入 .env）
             IMAGE="${{ needs.build.outputs.image }}"
 
             # Keep existing images, containers' named volumes and release backups.
             sudo APP_IMAGE="$IMAGE" docker compose pull app
+            # 補建尚未存在的服務（全新 server 由此建起 MariaDB/Caddy/監控棧）；既有容器一律不重建
+            sudo APP_IMAGE="$IMAGE" docker compose up -d --no-recreate
             sudo APP_IMAGE="$IMAGE" docker compose up -d --no-deps app
+            # 既有部署 5 分鐘內應 ready；全新 server（無前一版 image）需先完成歷史回補，最多等 45 分鐘
+            ready_attempts=60
+            if [ ! -s "$RELEASE/previous/image.txt" ]; then
+              ready_attempts=540
+            fi
             healthy=false
-            for attempt in $(seq 1 60); do
+            for attempt in $(seq 1 "$ready_attempts"); do
               if sudo docker exec stockbot-app wget -qO- http://127.0.0.1:8080/ready >/dev/null; then
                 healthy=true
                 break
