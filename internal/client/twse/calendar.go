@@ -31,6 +31,7 @@ const (
 
 // Calendar 依 TWSE 公告休市表判定休市日;颱風等臨時休市不會列於公告休市表,
 // 已過公布時點的平日另以官方每月市場成交資訊 (FMTQIK) 確認是否實際開市。
+// TWSE 未提供公告休市表的早期年度 (2020 年以前),已公布的日期僅依市場成交資訊判定。
 // 官方資料無法確認時一律回傳錯誤:不能只憑星期推算就放行交易。
 type Calendar struct {
 	client      *http.Client
@@ -44,10 +45,11 @@ type Calendar struct {
 	lastFetch   time.Time
 }
 
-// calendarYear 為單一年度公告休市日集合與抓取時間。
+// calendarYear 為單一年度公告休市日集合與抓取時間;published 為 false 代表 TWSE 未提供該年度休市表。
 type calendarYear struct {
-	closed  map[string]bool
-	fetched time.Time
+	closed    map[string]bool
+	published bool
+	fetched   time.Time
 }
 
 // sessionMonth 為單月市場成交資訊所列的實際開市日集合、該月最晚交易日與抓取時間。
@@ -87,9 +89,14 @@ func (c *Calendar) IsTradingDay(ctx context.Context, day time.Time) (bool, error
 	defer c.mu.Unlock()
 
 	// 先查公告休市表,再以市場成交資訊排除臨時休市。
-	closed, err := c.scheduledClosure(ctx, day)
+	closed, covered, err := c.scheduledClosure(ctx, day)
 	if err != nil || closed {
 		return false, err
+	}
+
+	// 未公布休市表的年度只能依已公布的市場成交資訊判定;該日成交資訊尚未公布時無法確認。
+	if !covered && c.now().Before(sessionPublishedAt(day)) {
+		return false, fmt.Errorf("TWSE calendar unavailable for %d", day.Year())
 	}
 	closed, err = c.unscheduledClosure(ctx, day)
 	if err != nil {
@@ -98,20 +105,21 @@ func (c *Calendar) IsTradingDay(ctx context.Context, day time.Time) (bool, error
 	return !closed, nil
 }
 
-// scheduledClosure 回傳 day 是否列於 TWSE 公告休市表;各年度休市表逾 calendarTTL 即重新抓取。
-func (c *Calendar) scheduledClosure(ctx context.Context, day time.Time) (bool, error) {
+// scheduledClosure 回傳 day 是否列於 TWSE 公告休市表,以及該年度休市表是否已公布;
+// 各年度休市表 (含未公布的查詢結果) 逾 calendarTTL 即重新抓取。
+func (c *Calendar) scheduledClosure(ctx context.Context, day time.Time) (closed, covered bool, err error) {
 	y, ok := c.years[day.Year()]
 	if !ok || c.now().Sub(y.fetched) > calendarTTL {
-		var err error
 		if y, err = c.fetchSchedule(ctx, day.Year()); err != nil {
-			return false, err
+			return false, false, err
 		}
 		c.years[day.Year()] = y
 	}
-	return y.closed[day.Format("2006-01-02")], nil
+	return y.closed[day.Format("2006-01-02")], y.published, nil
 }
 
-// fetchSchedule 抓取 year 的 TWSE 公告休市表,回傳休市日集合 (開始/最後交易日註記不算休市)。
+// fetchSchedule 抓取 year 的 TWSE 公告休市表,回傳休市日集合 (開始/最後交易日註記不算休市);
+// 回應成功但無任何列代表 TWSE 未提供該年度休市表,回傳 published 為 false 的空集合。
 func (c *Calendar) fetchSchedule(ctx context.Context, year int) (calendarYear, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s?response=json&date=%d0101", c.url, year), nil)
 	if err != nil {
@@ -135,12 +143,12 @@ func (c *Calendar) fetchSchedule(ctx context.Context, year int) (calendarYear, e
 	if err = json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		return calendarYear{}, fmt.Errorf("decode TWSE calendar %d: %w", year, err)
 	}
-	if body.Stat != "ok" || body.QueryYear != year || len(body.Data) == 0 {
+	if body.Stat != "ok" || body.QueryYear != year {
 		return calendarYear{}, fmt.Errorf("TWSE calendar unavailable for %d", year)
 	}
 
 	// 收集休市日;同一張表也列出開始/最後交易日,這些日期照常開市。
-	y := calendarYear{closed: map[string]bool{}, fetched: c.now()}
+	y := calendarYear{closed: map[string]bool{}, published: len(body.Data) > 0, fetched: c.now()}
 	for _, row := range body.Data {
 		if len(row) < 2 {
 			return calendarYear{}, fmt.Errorf("invalid TWSE calendar row")
@@ -159,7 +167,7 @@ func (c *Calendar) fetchSchedule(ctx context.Context, year int) (calendarYear, e
 // unscheduledClosure 回傳 day 是否為未列於公告休市表的臨時休市 (如颱風停止交易)。
 // day 隔日 08:00 (台灣時間) 前成交資訊尚未確定公布,一律回傳 false,由呼叫端要求該日資料存在。
 func (c *Calendar) unscheduledClosure(ctx context.Context, day time.Time) (bool, error) {
-	published := time.Date(day.Year(), day.Month(), day.Day()+1, sessionPublishedHour, 0, 0, 0, taipeiZone)
+	published := sessionPublishedAt(day)
 	now := c.now()
 	if now.Before(published) {
 		return false, nil
@@ -177,6 +185,11 @@ func (c *Calendar) unscheduledClosure(ctx context.Context, day time.Time) (bool,
 		c.months[month] = m
 	}
 	return !m.open[date], nil
+}
+
+// sessionPublishedAt 回傳 day 的市場成交資訊確定可取得的時點 (隔日 08:00 台灣時間)。
+func sessionPublishedAt(day time.Time) time.Time {
+	return time.Date(day.Year(), day.Month(), day.Day()+1, sessionPublishedHour, 0, 0, 0, taipeiZone)
 }
 
 // fetchSessions 抓取 month ("YYYYMM") 的官方市場成交資訊,回傳該月實際開市日集合。
