@@ -1,16 +1,19 @@
 # Dockerfile 建立可部署的 stockbot-long-backend server image。
 
 # ─── Build Stage ───
-FROM golang:1.22-alpine AS builder
+# builder 固定跑在建置機原生平台，以 Go 交叉編譯產出目標平台 (amd64 / arm64) 的 binary。
+FROM --platform=$BUILDPLATFORM golang:1.22-alpine AS builder
+ARG TARGETOS
+ARG TARGETARCH
 WORKDIR /app
 
 # 先複製 go.mod/go.sum 並下載依賴，讓 Docker layer cache 可重用依賴層。
 COPY go.mod go.sum ./
 RUN go mod download
 
-# 複製所有程式碼並編譯正式 server 入口。
+# 複製所有程式碼並依 buildx 傳入的目標平台編譯正式 server 入口 (未指定時為建置機平台)。
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o server ./cmd/server
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -ldflags="-s -w" -o server ./cmd/server
 
 # ─── Runtime Stage ───
 FROM alpine:3.19

@@ -41,14 +41,15 @@ main 更新 → CI build 新 image → SSH 進 server **一次完成**「裝 Doc
 
 1. **裝 Docker**：偵測 `docker` 是否存在，沒有就跑官方 `get.docker.com` 安裝（含 compose plugin）。
 2. **取得部署檔**：到 `~/stockbot-long-backend`，從 repo main 下載最新 `docker-compose.yml`。
-3. **寫 `.env`**：以 secret `STOCKBOT_LONG_ENV_FILE` 全文為單一來源，每次**覆蓋**寫入 `.env`。部署的 image **不寫進 `.env`**，而是在 `docker compose` 呼叫時以環境變數帶入——直接取用 `build` job 推出的不可變 `:<sha>` image（compose 代換 `${APP_IMAGE}` 時 shell 環境變數優先於 `.env`；fork 自動指向自己帳號）。
-4. **拉 image 並啟動**：`docker compose pull && up -d`，並清掉舊 image。
+3. **寫 `.env`**：以 secret `STOCKBOT_LONG_ENV_FILE` 全文為單一來源，每次**覆蓋**寫入 `.env`；若有設 variable `STOCKBOT_LONG_SITE_ADDRESS`，再以它取代 `.env` 的 `SITE_ADDRESS`（換部署主機時只改這個 variable，不必重貼整份 `.env`）。部署的 image **不寫進 `.env`**，而是在 `docker compose` 呼叫時以環境變數帶入——直接取用 `build` job 推出的不可變 `:<sha>` image（compose 代換 `${APP_IMAGE}` 時 shell 環境變數優先於 `.env`；fork 自動指向自己帳號）。image 為 `linux/amd64` + `linux/arm64` 多架構，ARM 主機（如 Azure B2pts v2）同樣適用。
+4. **拉 image 並啟動**：先以 `docker compose up -d --no-recreate` 補建尚未存在的服務（全新 server 由此建起 MariaDB、Caddy 與監控棧；既有容器一律不重建），再以新 image 滾動更新 `app`，並等待 `/ready`：既有部署最多等 5 分鐘、全新 server（首次需回補 TWSE 全期歷史，約 15 分鐘）最多等 45 分鐘；逾時則回復前一版 image 並讓 job 失敗。舊 image 與 `releases/` 備份一律保留。
 
 ### 要設定的 Variables
 
 | 名稱 | 值 | 必填 |
 | --- | --- | --- |
 | `STOCKBOT_LONG_DEPLOY_ENABLED` | `true` | 選填（預設 false）；要啟用才設 |
+| `STOCKBOT_LONG_SITE_ADDRESS` | 部署主機對外網域，如 `your-vm.eastasia.cloudapp.azure.com` | 選填；有值時覆寫 `.env` 的 `SITE_ADDRESS`（Caddy 依此申請 HTTPS 憑證） |
 
 ### 要設定的 Secrets
 
