@@ -147,7 +147,7 @@ func (e *Engine) observeBuy(cfg *config.Config, snap Snapshot) DecisionPhase {
 		condition("available_cash", "可用現金", snap.Cash, snap.TodayPrice, "gte", "currency", affordable > 0, "可用現金須足以支付最小可成交數量所需金額；買入不借款。"),
 	)
 	p.IntendedShares = DecideBuy(cfg, snap).Shares
-	if cfg.TrailReentryCooldownDays > 0 && hasSell && snap.Today.Sub(lastSell) < time.Duration(cfg.TrailReentryCooldownDays)*24*time.Hour {
+	if e.reentryBlocked(cfg, snap.StockID, snap.Today) {
 		p.IntendedShares = 0
 	}
 
@@ -192,6 +192,14 @@ func (e *Engine) observeBuy(cfg *config.Config, snap Snapshot) DecisionPhase {
 	return p
 }
 
+// markTriggeringBuySkipped 標記當日逢低買入因買入價會拉低最低成本、使移動停利同日觸發而不成交 (改以原持倉於同價出場)。
+func markTriggeringBuySkipped(p *DecisionPhase, price, stopPrice float64) {
+	p.Conditions = append(p.Conditions, condition("same_day_trail_exit", "同日停利出場", price, stopPrice, "gt", "price", false,
+		"此筆買入價會拉低最低持倉成本而使移動停利同日觸發；改為不買，直接以原持倉於同價全數出場。"))
+	p.IntendedShares = 0
+	phaseStatus(p)
+}
+
 // observeSell 在買入完成且持倉峰值更新後觀察唯一的熊市移動停利。
 func observeSell(cfg *config.Config, snap Snapshot, cash float64) DecisionPhase {
 	p := DecisionPhase{CashBefore: cash, CashAfter: cash, HeldSharesBefore: snap.HeldShares, HeldSharesAfter: snap.HeldShares}
@@ -230,7 +238,7 @@ func observeSell(cfg *config.Config, snap Snapshot, cash float64) DecisionPhase 
 	}
 	p.Metrics = []DecisionMetric{
 		metric("holding_peak", "持倉期間峰值", peak, "price", "含本次決策價的持倉期間最高決策價，並非盤中最高價。"),
-		metric("lowest_cost", "最低持倉成本", lowest, "price", "賣出判斷當下的最低買入成本；包含本次剛買入的部位。"),
+		metric("lowest_cost", "最低持倉成本", lowest, "price", "賣出判斷當下的最低買入成本；包含本次剛買入的部位，買入因同日停利而略過時以其買入價計。"),
 		metric("trailing_price", "移動停利觸發價", stopPrice, "price", "只有其他賣出條件也滿足時才會全數出場。"),
 	}
 	p.IntendedShares = DecideSell(cfg, snap).TargetShares

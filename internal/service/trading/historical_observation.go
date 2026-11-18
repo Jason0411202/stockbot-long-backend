@@ -125,7 +125,19 @@ func (e *Engine) observeHistoricalStock(id string, today time.Time, s *StockSeri
 		snap.Cash, snap.Equity = e.cash, equity
 		return snap
 	}
-	observation := e.observeStock(eff, build(), s, index)
+	pre := build()
+	observation := e.observeStock(eff, pre, s, index)
+
+	// 帳本當日只有賣出時，比照上線規則判定是否為會觸發同日停利而略過的買入，其買入價納入賣出判定的最低成本。
+	signalPrice := 0.0
+	if historicalSellOnly(trades) && !e.reentryBlocked(eff, id, today) {
+		if buy := DecideBuy(eff, pre); buy.Should {
+			if stop, ok := e.buyTriggersTrail(eff, pre, buy); ok {
+				signalPrice = buy.Price
+				markTriggeringBuySkipped(&observation.Buy, buy.Price, stop)
+			}
+		}
+	}
 
 	// 真實買單更新現金、持倉及買入日期，不使用現行規則的買入意圖。
 	for _, trade := range trades {
@@ -144,8 +156,10 @@ func (e *Engine) observeHistoricalStock(id string, today time.Time, s *StockSeri
 		e.peakSinceHold[id] = price
 	}
 
-	// 賣出條件包含當日剛買入的真實 lot，再依帳本指定批次扣除股數。
-	observation.Sell = observeSell(eff, build(), e.cash)
+	// 賣出條件包含當日剛買入的真實 lot (或略過買入的買入價)，再依帳本指定批次扣除股數。
+	sellSnap := build()
+	sellSnap.LowestHeldPrice = withSignalCost(sellSnap.LowestHeldPrice, signalPrice)
+	observation.Sell = observeSell(eff, sellSnap, e.cash)
 	for _, trade := range trades {
 		if trade.Buy {
 			continue
@@ -157,6 +171,18 @@ func (e *Engine) observeHistoricalStock(id string, today time.Time, s *StockSeri
 	e.finishPhase(id, &observation.Sell, false)
 	e.observer(*observation)
 	return nil
+}
+
+// historicalSellOnly 回傳當日帳本成交是否只有賣出而無任何買入。
+func historicalSellOnly(trades []HistoricalTrade) bool {
+	sell := false
+	for _, trade := range trades {
+		if trade.Buy {
+			return false
+		}
+		sell = true
+	}
+	return sell
 }
 
 // historicalInputs 選取帳本決策價或當日行情，開盤基準的指標固定截止前一交易日。

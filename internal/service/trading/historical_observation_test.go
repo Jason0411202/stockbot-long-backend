@@ -315,3 +315,31 @@ func TestHistoricalObservation_EquityUsesPreviousClose(t *testing.T) {
 	}
 	t.Fatal("missing equity budget metric")
 }
+
+// TestHistoricalObservation_SellOnlyDayRecognizesSkippedTriggeringBuy 驗證帳本當日只有出場時,若現行規則的逢低買入
+// 會使移動停利同日觸發,重建的買入階段標示略過原因,賣出階段以該買入價為最低成本 (與上線決策一致)。
+func TestHistoricalObservation_SellOnlyDayRecognizesSkippedTriggeringBuy(t *testing.T) {
+	day := mustDate(t, "2026-10-13")
+	cfg := baseCfg("AAA")
+	cfg.InitialCash, cfg.DecisionPriceBasis = 10000, "open"
+	engine := NewEngine(cfg)
+	engine.SeedPosition("AAA", day.AddDate(0, 0, -20), 10, 100)
+	engine.SeedRiskState("AAA", RiskState{LastBuy: day.AddDate(0, 0, -20), Peak: 120})
+	series := historicalTestSeries(day, "AAA")
+	series["AAA"].OpenPrices[60] = 90
+	actual := []HistoricalTrade{{StockID: "AAA", Shares: 10, Price: 90, BuyDate: day.AddDate(0, 0, -20)}}
+	got, err := engine.ObserveHistoricalDay(day, series, actual)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("observations=%+v err=%v", got, err)
+	}
+	o := got[0]
+	if c := observedCondition(t, o.Buy, "same_day_trail_exit"); c.Status != "blocked" || o.Buy.IntendedShares != 0 || o.Buy.ExecutedShares != 0 {
+		t.Fatalf("skipped triggering buy not recognised: %+v", o.Buy)
+	}
+	if c := observedCondition(t, o.Sell, "peak_gain"); c.Status != "passed" || c.Value == nil || math.Abs(*c.Value-(120.0/90-1)*100) > 1e-9 {
+		t.Fatalf("sell did not count the skipped buy price as lowest cost: %+v", c)
+	}
+	if o.Sell.Status != "executed" || o.Sell.ExecutedShares != 10 || engine.PositionCount("AAA") != 0 || engine.Cash() != 10900 {
+		t.Fatalf("recorded exit not replayed: %+v cash=%v", o.Sell, engine.Cash())
+	}
+}
