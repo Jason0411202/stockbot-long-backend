@@ -219,3 +219,68 @@ func TestEngine_SeedLastTrailSell_BlocksReentry(t *testing.T) {
 		t.Fatalf("expired reentry cooldown should allow buy, got %+v", allowed.Stats())
 	}
 }
+
+// TestEngine_SkipsBuyThatTriggersSameDayTrail 驗證逢低買入價會拉低最低成本而使移動停利同日觸發時,
+// 該筆買入不成交,原持倉於同價全數出場,且最後買入日與買入次數不變 (不重啟買進冷卻)。
+func TestEngine_SkipsBuyThatTriggersSameDayTrail(t *testing.T) {
+	// Arrange — 持有 10 股 @100、峰值 120;開盤 90 為空頭逢低買點 (90 < 均線 100)。
+	cfg := baseCfg("AAA")
+	cfg.DecisionPriceBasis = "open"
+	cfg.InitialCash = 10000
+	day := mustDate(t, "2026-10-13")
+	lastBuy := day.AddDate(0, 0, -30)
+	series := map[string]*StockSeries{"AAA": seriesFrom(day.AddDate(0, 0, -60), constPrices(60, 100))}
+	engine := NewEngine(cfg)
+	engine.SeedPosition("AAA", lastBuy, 10, 100)
+	engine.SeedRiskState("AAA", RiskState{Peak: 120, LastBuy: lastBuy})
+	rec := &recordingExec{}
+
+	// Act
+	if err := engine.ProcessOpenDecision(day, map[string]float64{"AAA": 90}, series, rec); err != nil {
+		t.Fatal(err)
+	}
+
+	// Assert — 只有一筆賣出 (原 10 股 @90),沒有買入;現金 = 10000 + 900。
+	if len(rec.trades) != 1 || rec.trades[0].side != "sell" || rec.trades[0].shares != 10 || rec.trades[0].price != 90 {
+		t.Fatalf("trades = %+v, want a single sell of 10 @90", rec.trades)
+	}
+	if engine.Cash() != 10900 || engine.PositionCount("AAA") != 0 {
+		t.Fatalf("cash=%.2f lots=%d, want 10900 and flat", engine.Cash(), engine.PositionCount("AAA"))
+	}
+	if got, ok := engine.LastBuy("AAA"); !ok || !got.Equal(lastBuy) {
+		t.Fatalf("last buy = %v, want unchanged %v", got, lastBuy)
+	}
+	if st := engine.Stats(); st.TotalBuys != 0 || st.TrailSells != 1 {
+		t.Fatalf("stats = %+v, want 0 buys and 1 trail exit", st)
+	}
+	if got, ok := engine.LastTrailSell("AAA"); !ok || !got.Equal(day) {
+		t.Fatalf("last trail sell = %v, want %v", got, day)
+	}
+}
+
+// TestEngine_BuyThatDoesNotTriggerTrailExecutes 驗證買入價不足以武裝移動停利時照常成交且不出場。
+func TestEngine_BuyThatDoesNotTriggerTrailExecutes(t *testing.T) {
+	// Arrange — 峰值 105 / 買入價 99 僅 +6%,未達 10% 武裝門檻。
+	cfg := baseCfg("AAA")
+	cfg.DecisionPriceBasis = "open"
+	cfg.InitialCash = 10000
+	day := mustDate(t, "2026-10-13")
+	series := map[string]*StockSeries{"AAA": seriesFrom(day.AddDate(0, 0, -60), constPrices(60, 100))}
+	engine := NewEngine(cfg)
+	engine.SeedPosition("AAA", day.AddDate(0, 0, -30), 10, 100)
+	engine.SeedRiskState("AAA", RiskState{Peak: 105, LastBuy: day.AddDate(0, 0, -30)})
+	rec := &recordingExec{}
+
+	// Act
+	if err := engine.ProcessOpenDecision(day, map[string]float64{"AAA": 99}, series, rec); err != nil {
+		t.Fatal(err)
+	}
+
+	// Assert — 只有一筆買入 @99,持倉增加,最後買入日更新為今日。
+	if len(rec.trades) != 1 || rec.trades[0].side != "buy" || rec.trades[0].price != 99 {
+		t.Fatalf("trades = %+v, want a single buy @99", rec.trades)
+	}
+	if got, ok := engine.LastBuy("AAA"); !ok || !got.Equal(day) || engine.PositionCount("AAA") != 2 {
+		t.Fatalf("last buy=%v lots=%d, want today and 2 lots", got, engine.PositionCount("AAA"))
+	}
+}

@@ -117,7 +117,7 @@ common issuance 起 catch-up，其現金軌跡與帳本與回測全期完全一�
   帳本成交價由引擎決策價寫入（`PortfolioService.BuyShares/SellShares` 收 `price` 參數），**不可**改回
   `GetPriceAsOf` 查 DB（開盤決策當下 DB 尚無當日 K 棒，會誤拿 T-1 收盤）。現行參數為**開盤基準 + lump-sum 專調**
   （`regime_ma_window 85`、`trail_stop_bear 0.08`、`bull_buy_band 0.08`，
-  00631L override `regime_ma_window 60` + `trail_reentry_cooldown_days 42`）；改回收盤基準、改決策基準、
+  00631L override `regime_ma_window 60` + `trail_reentry_cooldown_days 42`、00830 override `trail_reentry_cooldown_days 14`）；改回收盤基準、改決策基準、
   或重新開啟外部注資（`monthly_contribution > 0`）都需重新以 `cmd/eval_csv` 跑 walk-forward / IS-OOS 調參並重釘指紋。
 - **API wire keys 不可變。** `internal/dto` 的 JSON tag 是前端既有契約（含唯一的 camelCase
   `todayClosePrice`），不得更名。新增端點 `/api/get_performance_summary`（`dto/performance.go`）的欄位為
@@ -135,8 +135,12 @@ common issuance 起 catch-up，其現金軌跡與帳本與回測全期完全一�
   移除「打破冷卻額度」與「多頭獲利了結」（消融實驗證實貢獻在雜訊內、屬過擬合旋鈕），**唯一賣出路徑為熊市移動停利**，
   多頭持股續抱。所有可調參數集中在 `config.yaml`，不要在程式碼硬編策略數字。
 - **per-stock override 採用準則。** `config.yaml` 的 `stock_overrides` 僅採用通過 IS/OOS 樣本內外
-  驗證、樣本外不退化的覆寫（現行 `00631L: regime_ma_window 60` + `trail_reentry_cooldown_days 42`；後者僅套 2x 槓桿股，
+  驗證、樣本外不退化的覆寫（現行 `00631L: regime_ma_window 60` + `trail_reentry_cooldown_days 42`、`00830: trail_reentry_cooldown_days 14`；42 日僅套 2x 槓桿股，
   全股套用會過擬合）。
+- **移動停利武裝語意是崩盤煞車，不可「修正」。** 武裝看「持倉峰值 ÷ 最低持倉成本 − 1 ≥ trail_min_gain」，熊市逢低買入價
+  （≤ 峰值的 ~91%）會拉低最低成本而武裝並同價觸發全數出場——實際作用為「熊市自持倉峰值回落約 9% 即出場」。
+  改成需真實獲利才武裝，回測最大回撤 −24%→−46%。會觸發同日停利的買入由 `processStock` 略過（`buyTriggersTrail`），
+  只把買入價計入當日賣出判定的最低成本（`withSignalCost`），不新增 lot、不更新 lastBuy；歷史重建路徑同此規則。
 - **引擎記憶體狀態於啟動時完整還原。** `peakSinceHold`、`lastTrailSell`（移動停利再進場冷卻用）不另存 DB，
   但 `TradingService.SeedFromDB` 會從帳本重建：`lastTrailSell` 取 `RealizedGainsLosses` 最後 `sell_date`
   （移動停利為唯一賣出路徑，故最後賣出日即最後停利出場日）；`peakSinceHold` 由 `Engine.RebuildPeakSinceHold`
