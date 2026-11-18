@@ -20,11 +20,13 @@ const holidays2026 = `{"stat":"ok","queryYear":2026,"data":[["2026-02-11","農�
 // noSessionData 為 TWSE 查無成交資訊時的回應。
 const noSessionData = `{"stat":"很抱歉，沒有符合條件的資料!"}`
 
-// fakeExchange 模擬 TWSE 公告休市表與每月市場成交資訊端點,並記錄成交資訊查詢次數。
+// fakeExchange 模擬 TWSE 公告休市表與每月市場成交資訊端點,並記錄兩者的查詢次數。
 type fakeExchange struct {
-	mu       sync.Mutex
-	sessions map[string]string // "YYYYMM" → FMTQIK 回應內容
-	calls    atomic.Int32
+	mu            sync.Mutex
+	sessions      map[string]string // "YYYYMM" → FMTQIK 回應內容
+	schedules     map[string]string // "YYYY" → 公告休市表回應內容 (未設定時回 holidays2026)
+	calls         atomic.Int32
+	scheduleCalls atomic.Int32
 }
 
 // setSessions 設定 month ("YYYYMM") 的市場成交資訊回應。
@@ -32,6 +34,16 @@ func (f *fakeExchange) setSessions(month, body string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.sessions[month] = body
+}
+
+// setSchedule 設定 year ("YYYY") 的公告休市表回應。
+func (f *fakeExchange) setSchedule(year, body string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.schedules == nil {
+		f.schedules = map[string]string{}
+	}
+	f.schedules[year] = body
 }
 
 // sessionsJSON 以西元日期清單組出 FMTQIK 成功回應 (日期轉為民國格式)。
@@ -58,7 +70,14 @@ func newTestCalendar(t *testing.T, ex *fakeExchange, now *time.Time) *Calendar {
 			if !strings.HasSuffix(date, "0101") {
 				t.Errorf("TWSE year must use date=YYYY0101, got %q", date)
 			}
-			w.Write([]byte(holidays2026))
+			ex.scheduleCalls.Add(1)
+			ex.mu.Lock()
+			body, ok := ex.schedules[date[:4]]
+			ex.mu.Unlock()
+			if !ok {
+				body = holidays2026
+			}
+			w.Write([]byte(body))
 		case "/FMTQIK":
 			ex.calls.Add(1)
 			if len(date) != 8 || !strings.HasSuffix(date, "01") {
@@ -360,5 +379,61 @@ func TestCalendar_PreviousTradingDayErrors(t *testing.T) {
 	c = newTestCalendar(t, ex, &now)
 	if _, err := c.PreviousTradingDay(context.Background(), day(2026, 10, 30)); err == nil {
 		t.Fatal("40-day search without any session accepted")
+	}
+}
+
+// TestCalendar_YearWithoutScheduleUsesMarketSessions 重現首次啟動自 2019 年起 catch-up:TWSE 未提供 2019 年
+// 公告休市表 (回應成功但無任何列),已公布的日期改依市場成交資訊判定,端午節 2019-06-07 為休市,且休市表只查詢一次。
+func TestCalendar_YearWithoutScheduleUsesMarketSessions(t *testing.T) {
+	ex := &fakeExchange{sessions: map[string]string{}}
+	ex.setSchedule("2019", `{"stat":"ok","queryYear":2019,"data":[]}`)
+	ex.setSessions("201906", sessionsJSON("201906", "2019-06-03", "2019-06-04", "2019-06-05", "2019-06-06", "2019-06-10"))
+	now := taipei(2026, 11, 18, 21, 0)
+	c := newTestCalendar(t, ex, &now)
+
+	mustTradingDay(t, c, day(2019, 6, 7), false)
+	mustTradingDay(t, c, day(2019, 6, 6), true)
+	prev, err := c.PreviousTradingDay(context.Background(), day(2019, 6, 10))
+	if err != nil || prev.Format("2006-01-02") != "2019-06-06" {
+		t.Fatalf("previous=%v err=%v", prev, err)
+	}
+	mustCalls(t, ex, 1)
+	if got := ex.scheduleCalls.Load(); got != 1 {
+		t.Fatalf("calendar fetched %d times, want 1", got)
+	}
+}
+
+// TestCalendar_YearWithoutScheduleUnpublishedDayFails 驗證年度公告休市表未公布且該日成交資訊尚未公布時回傳錯誤,
+// 不只憑星期推定開市,也不查詢成交資訊。
+func TestCalendar_YearWithoutScheduleUnpublishedDayFails(t *testing.T) {
+	ex := &fakeExchange{sessions: map[string]string{}}
+	ex.setSchedule("2026", `{"stat":"ok","queryYear":2026,"data":[]}`)
+	now := taipei(2026, 11, 18, 9, 10)
+	c := newTestCalendar(t, ex, &now)
+
+	if open, err := c.IsTradingDay(context.Background(), day(2026, 11, 18)); err == nil {
+		t.Fatalf("unverifiable day accepted: open=%v", open)
+	}
+	mustCalls(t, ex, 0)
+}
+
+// TestCalendar_ScheduleFailuresRejected 驗證公告休市表狀態非 ok 或年度不符時回傳錯誤,不視為未公布年度。
+func TestCalendar_ScheduleFailuresRejected(t *testing.T) {
+	for name, body := range map[string]string{
+		"stat not ok":   `{"stat":"error","queryYear":2019,"data":[]}`,
+		"year mismatch": `{"stat":"ok","queryYear":2020,"data":[]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			ex := &fakeExchange{sessions: map[string]string{}}
+			ex.setSchedule("2019", body)
+			ex.setSessions("201906", sessionsJSON("201906", "2019-06-06"))
+			now := taipei(2026, 11, 18, 21, 0)
+			c := newTestCalendar(t, ex, &now)
+
+			if open, err := c.IsTradingDay(context.Background(), day(2019, 6, 6)); err == nil {
+				t.Fatalf("invalid calendar response accepted: open=%v", open)
+			}
+			mustCalls(t, ex, 0)
+		})
 	}
 }
