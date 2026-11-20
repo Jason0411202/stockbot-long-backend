@@ -126,7 +126,7 @@ per-stock 覆寫採用準則：
 - 只接受 IS 表現良好且 OOS 不退化的覆寫。
 - `00830` 使用 `trail_reentry_cooldown_days: 14`：會觸發同日停利的逢低買入不再成交後，以此明文化原本由該買入重啟的 14 日買進冷卻；只拿掉買入不補此覆寫時，全期 Calmar 1.35→1.07、回撤 −24.1%→−27.8%，補上後為 1.34 / −24.1%、OOS 保留 117%。
 - `00631L` 使用 `regime_ma_window: 60` 與 `trail_reentry_cooldown_days: 42`。後者為「移動停利出場後暫停逢低買入 ≈42 日」，打斷 2× 槓桿空頭的「停損→又接刀→再停損」whipsaw 循環；lump-sum 重掃確認 cd0（不暫停）全期 Calmar 掉到 1.26、cd30 OOS 保留掉到 83%、cd60 掉關卡，唯 cd42 維持四關全過 + OOS 保留 156%。`regime_ma_window 60` 全期 Calmar 1.80，改回共用 85 則 OOS 保留掉到約 53%（過擬合）。
-- `00830` 維持全部共用值。更長 regime 與 reentry cooldown 套到 1× 的 `00830` 在 OOS 退化或拖累報酬，故不採用。
+- `00830` 除上述 `trail_reentry_cooldown_days: 14` 外維持全部共用值。更長 regime 與 reentry cooldown 套到 1× 的 `00830` 在 OOS 退化或拖累報酬，故不採用。
 
 ## 注意事項
 
