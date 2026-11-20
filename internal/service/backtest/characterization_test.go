@@ -46,6 +46,7 @@ func liveStrategyCfg() *config.Config {
 		TrailMinGain:  0.10,
 		StockOverrides: map[string]config.StockParams{
 			"00631L": {RegimeMAWindow: iptr(60), TrailReentryCooldownDays: iptr(42)},
+			"00830":  {TrailReentryCooldownDays: iptr(14)},
 		},
 	}
 }
@@ -181,11 +182,17 @@ func TestCharacterization_LiveStrategyFingerprint(t *testing.T) {
 // 屬過擬合) 與「多頭獲利了結 (翻倍賣 33%)」(7 年僅觸發 12 次,關掉後回撤不變、MWR 差 0.6pp)。
 // 唯一賣出路徑為熊市移動停利,多頭持股續抱。實測 (真實 CSV,全期起點對齊 common issuance 2019-05-03):full Calmar 1.80、MWR +43.3%、回撤 -24.1%、wf 四關全過、OOS 保留 115%、最差折 2.11。
 // 合成資料指紋隨之重釘;後續任何非刻意改動都應維持此數字。
+//
+// 2026-11 第五次刻意變更 (經使用者核可):會讓移動停利同日觸發的逢低買入不再成交 (買入價拉低最低成本而武裝停利,
+// 原本會買進後立刻以同價全數賣出),改為不買、以原持倉於同價出場,不新增 lot、不重啟買進冷卻;並把該買入原本隱含的
+// 「停損後暫停 14 日」明文化為 00830 trail_reentry_cooldown_days=14。實測 (真實 CSV 至 2026-11-18):
+// 出場日期與價格不變,full Calmar 1.35→1.34、回撤 -24.1% 不變、wf24 中位 Calmar 1.84→1.88、OOS 保留 115%→117%、最差折 2.11→2.12。
+// 合成資料指紋隨之重釘 (同日買入消失:buys 73→69、sells 53→49;trail 9 不變)。
 const (
-	goldenBuys       = 73
-	goldenSells      = 53
+	goldenBuys       = 69
+	goldenSells      = 49
 	goldenSkipped    = 0
 	goldenTrail      = 9
-	goldenFinalCash  = 45
-	goldenFinalTotal = 291149
+	goldenFinalCash  = 44
+	goldenFinalTotal = 287612
 )

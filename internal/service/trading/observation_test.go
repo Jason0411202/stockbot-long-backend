@@ -76,8 +76,9 @@ func TestObservation_SellBoundaries(t *testing.T) {
 	}
 }
 
-// TestObservation_PreservesBuyThenSellPhases 驗證同日先買再賣不會覆蓋成交前條件。
-func TestObservation_PreservesBuyThenSellPhases(t *testing.T) {
+// TestObservation_SkipsBuyThatTriggersSameDayTrail 驗證會讓移動停利同日觸發的買入不成交、以原持倉出場,
+// 且買入階段標示原因、賣出階段以該買入價為最低成本,並不重啟買進冷卻。
+func TestObservation_SkipsBuyThatTriggersSameDayTrail(t *testing.T) {
 	cfg := baseCfg("AAA")
 	cfg.DecisionPriceBasis = "open"
 	cfg.InitialCash = 10000
@@ -95,17 +96,26 @@ func TestObservation_PreservesBuyThenSellPhases(t *testing.T) {
 		t.Fatalf("observations = %d", len(got))
 	}
 	o := got[0]
-	if o.Buy.Status != "executed" || o.Sell.Status != "executed" || o.Buy.HeldSharesBefore != 10 || o.Buy.HeldSharesAfter <= 10 || o.Sell.HeldSharesBefore != o.Buy.HeldSharesAfter || o.Sell.HeldSharesAfter != 0 {
-		t.Fatalf("phase holdings are not frozen correctly: %+v", o)
+	if o.Buy.Status != "blocked" || o.Buy.ExecutedShares != 0 || o.Buy.HeldSharesBefore != 10 || o.Buy.HeldSharesAfter != 10 {
+		t.Fatalf("triggering buy was not skipped: %+v", o.Buy)
 	}
-	if o.Buy.CashAfter != o.Sell.CashBefore || o.Sell.CashAfter != engine.Cash() || o.Buy.CashBefore != 10000 {
+	if c := observedCondition(t, o.Buy, "same_day_trail_exit"); c.Status != "blocked" || c.Value == nil || *c.Value != 90 || c.Threshold == nil || math.Abs(*c.Threshold-120*(1-cfg.TrailStopBear)) > 1e-9 {
+		t.Fatalf("same-day trail condition missing: %+v", c)
+	}
+	if o.Sell.Status != "executed" || o.Sell.HeldSharesBefore != 10 || o.Sell.HeldSharesAfter != 0 || o.Sell.ExecutedShares != 10 {
+		t.Fatalf("existing position did not exit: %+v", o.Sell)
+	}
+	if o.Buy.CashAfter != 10000 || o.Sell.CashBefore != 10000 || o.Sell.CashAfter != 10900 || engine.Cash() != 10900 {
 		t.Fatalf("phase cash mismatch: %+v", o)
 	}
 	if c := observedCondition(t, o.Buy, "buy_cooldown"); c.Value != nil || c.Status != "passed" {
-		t.Fatalf("post-buy cooldown leaked into pre-buy decision: %+v", c)
+		t.Fatalf("buy cooldown should be evaluated without any prior buy: %+v", c)
 	}
 	if c := observedCondition(t, o.Sell, "peak_gain"); c.Value == nil || math.Abs(*c.Value-(120.0/90-1)*100) > 1e-9 {
-		t.Fatalf("sell phase failed to include newly bought lowest-cost lot: %+v", c)
+		t.Fatalf("sell phase failed to count the skipped buy price as lowest cost: %+v", c)
+	}
+	if _, ok := engine.LastBuy("AAA"); ok {
+		t.Fatal("skipped buy must not restart the buy cooldown")
 	}
 	if engine.PeakSinceHold("AAA") != 0 || o.Sell.Metrics[0].Value == nil || *o.Sell.Metrics[0].Value != 120 {
 		t.Fatal("sell reset mutated frozen peak")

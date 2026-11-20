@@ -368,17 +368,18 @@ func (e *Engine) processStock(stockID string, today time.Time, decisionPrice flo
 		snap.Equity = eqToday
 	}
 	observation := e.observeStock(eff, snap, s, asOfIdx)
-	// 移動停利出場後的「暫停買入」閘:避免空頭中「停損→隔日又逢低買→再停損」的 whipsaw 循環 (zero-value 不暫停)。
-	reentryBlocked := false
-	if eff.TrailReentryCooldownDays > 0 {
-		if ts, ok := e.lastTrailSell[stockID]; ok &&
-			today.Sub(ts) < time.Duration(eff.TrailReentryCooldownDays)*24*time.Hour {
-			reentryBlocked = true
-		}
-	}
-	if !reentryBlocked {
+
+	// 移動停利出場後的「暫停買入」閘通過後才評估買入;會讓移動停利同日觸發的買入不成交,
+	// 只把買入價記為當日賣出判定的最低成本 (以原持倉於同價出場,不新增 lot、不重啟買進冷卻)。
+	signalPrice := 0.0
+	if !e.reentryBlocked(eff, stockID, today) {
 		if buy := DecideBuy(eff, snap); buy.Should {
-			if err := e.applyBuy(stockID, today, buy, exec); err != nil {
+			if stop, ok := e.buyTriggersTrail(eff, snap, buy); ok {
+				signalPrice = buy.Price
+				if observation != nil {
+					markTriggeringBuySkipped(&observation.Buy, buy.Price, stop)
+				}
+			} else if err := e.applyBuy(stockID, today, buy, exec); err != nil {
 				return err
 			}
 		}
@@ -392,10 +393,11 @@ func (e *Engine) processStock(stockID string, today time.Time, decisionPrice flo
 		e.peakSinceHold[stockID] = decisionPrice
 	}
 
-	// === 賣出 (重新組 Snapshot:剛買的 lot 也可能影響 lowest / highest) ===
+	// === 賣出 (重新組 Snapshot:剛買的 lot 或略過買入的訊號價也可能影響 lowest / highest) ===
 	snap = e.buildSnapshot(stockID, today, decisionPrice, entryMA)
 	e.applyGateInputs(&snap, s, asOfIdx)
 	snap.IsBull = isBullToday
+	snap.LowestHeldPrice = withSignalCost(snap.LowestHeldPrice, signalPrice)
 	if observation != nil {
 		observation.Sell = observeSell(eff, snap, e.cash)
 	}
@@ -409,6 +411,38 @@ func (e *Engine) processStock(stockID string, today time.Time, decisionPrice flo
 		e.observer(*observation)
 	}
 	return nil
+}
+
+// reentryBlocked 回傳 stockID 是否仍在移動停利出場後的暫停買入期間 (TrailReentryCooldownDays <= 0 時不暫停)。
+func (e *Engine) reentryBlocked(cfg *config.Config, stockID string, today time.Time) bool {
+	if cfg.TrailReentryCooldownDays <= 0 {
+		return false
+	}
+	ts, ok := e.lastTrailSell[stockID]
+	return ok && today.Sub(ts) < time.Duration(cfg.TrailReentryCooldownDays)*24*time.Hour
+}
+
+// buyTriggersTrail 以「買入成交後」的持倉 (最低成本與峰值納入買入價) 模擬移動停利,回傳此筆買入是否會使其同日觸發
+// 與當日停利觸發價。無持倉或現金連最小成交單位都買不起 (買入不會成交) 時回傳 false。
+func (e *Engine) buyTriggersTrail(cfg *config.Config, pre Snapshot, buy BuyIntent) (float64, bool) {
+	if pre.HeldShares <= 0 || pre.LowestHeldPrice <= 0 || buy.Price <= 0 || math.Floor(e.cash/buy.Price) < 1 {
+		return 0, false
+	}
+	hyp := pre
+	hyp.LowestHeldPrice = math.Min(pre.LowestHeldPrice, buy.Price)
+	hyp.PeakSinceHold = math.Max(pre.PeakSinceHold, buy.Price)
+	if !DecideSell(cfg, hyp).Should {
+		return 0, false
+	}
+	return hyp.PeakSinceHold * (1 - cfg.TrailStopBear), true
+}
+
+// withSignalCost 回傳納入「略過的觸發型買入價」後的最低持倉成本;無訊號 (<=0) 或無持倉時維持原值。
+func withSignalCost(lowest, signalPrice float64) float64 {
+	if signalPrice > 0 && lowest > 0 && signalPrice < lowest {
+		return signalPrice
+	}
+	return lowest
 }
 
 // ProcessDates 對升冪日期序列連續呼叫 ProcessDay。
